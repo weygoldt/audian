@@ -278,6 +278,15 @@ DARK_TOKENS: dict[str, str] = {
     # buttons, the open button).  Light in BOTH themes: primary.dim is dark
     # in the daylight theme, so $fg there would be black on navy.
     "on.primary": FG,
+    # the selected lane's ground.  NOT bg.surface: that is a *chrome* value,
+    # and using it inside the canvas made the selected lane the same colour
+    # as the toolbar it sits under, so the two merged at the top edge.
+    "bg.lane": "#151C28",
+    # the rule that separates a chrome band from the canvas.  Heavier than
+    # `border`, which is for hairlines *within* a band: at ~2.5:1 against
+    # both grounds it reads as structure without shouting, where BORDER_HI
+    # managed only 1.7:1 and simply disappeared.
+    "edge": "#47566E",
 }
 
 #: The light token table -- a **daylight** theme, not a polite inversion.
@@ -315,6 +324,8 @@ LIGHT_TOKENS: dict[str, str] = {
     "trace.envelope": "#8E1A5C",
     "trace.zero": "#AAB4C0",
     "on.primary": "#FFFFFF",
+    "bg.lane": "#E8ECF3",
+    "edge": "#7C8A9B",
 }
 
 #: All selectable themes, by name.
@@ -1080,6 +1091,38 @@ def frame(widget: Any) -> Any:
     return widget
 
 
+#: Dynamic property recording that a widget is a chrome band.
+BAND_PROPERTY = "audianBandEdge"
+
+
+def band(
+    widget: Any,
+    top: bool = False,
+    bottom: bool = False,
+    ground: str = "bg.surface",
+) -> Any:
+    """Style a widget as a chrome band: chrome ground plus a boundary rule.
+
+    The application has three grounds -- ``bg.surface`` for chrome bands,
+    ``bg.base`` for the canvas they sit around, and ``bg.plot`` inside the
+    plots.  What was missing was a *stated* boundary: with the tab strip
+    gone from the top, the tool bar and the channel stack met on a hairline
+    that neither ground was far enough from to make visible.  The ``edge``
+    token is that boundary, and it belongs to every chrome/canvas seam so
+    they all read the same way.
+    """
+    widget.setProperty(BAND_PROPERTY, f"{int(bool(top))}{int(bool(bottom))}|{ground}")
+    name = widget.objectName() or "audianBand"
+    widget.setObjectName(name)
+    rules = [f"background-color: {token(ground)}"]
+    if top:
+        rules.append(f"border-top: {HAIRLINE}px solid {token('edge')}")
+    if bottom:
+        rules.append(f"border-bottom: {HAIRLINE}px solid {token('edge')}")
+    widget.setStyleSheet("#%s { %s; }" % (name, "; ".join(rules)))
+    return widget
+
+
 def restyle_tree(root: Any) -> int:
     """Re-apply every tagged colour under *root*.  Returns how many changed.
 
@@ -1100,6 +1143,17 @@ def restyle_tree(root: Any) -> int:
             elif widget.property(FRAME_PROPERTY):
                 frame(widget)
                 count += 1
+            else:
+                spec = widget.property(BAND_PROPERTY)
+                if spec:
+                    edges, _, ground = str(spec).partition("|")
+                    band(
+                        widget,
+                        top=edges[0] == "1",
+                        bottom=edges[1] == "1",
+                        ground=ground or "bg.surface",
+                    )
+                    count += 1
         except RuntimeError:
             continue
     return count
@@ -1704,7 +1758,7 @@ QTabWidget::pane {
 QStatusBar {
     background-color: $bg_surface;
     color: $fg_muted;
-    border-top: ${hairline}px solid $border;
+    border-top: ${hairline}px solid $edge;
 }
 QStatusBar::item { border: 0px; }
 QStatusBar QLabel { color: $fg_muted; }
@@ -1813,12 +1867,21 @@ QTableCornerButton::section {
 
 /* --- splitters ------------------------------------------------------ */
 
+/* A divider inside the canvas, not a chrome seam: the handle keeps the
+   canvas ground and carries a single rule, so it reads as a line with grab
+   room around it rather than as a 4 px slab of border colour. */
 QSplitter::handle {
-    background-color: $border;
+    background-color: $bg_base;
 }
-QSplitter::handle:horizontal { width: ${s4}px; }
-QSplitter::handle:vertical { height: ${s4}px; }
-QSplitter::handle:hover { background-color: $border_hi; }
+QSplitter::handle:horizontal {
+    width: ${s6}px;
+    border-left: ${hairline}px solid $border;
+}
+QSplitter::handle:vertical {
+    height: ${s6}px;
+    border-top: ${hairline}px solid $border;
+}
+QSplitter::handle:hover { border-color: $edge; }
 
 /* --- scrollbars ----------------------------------------------------- */
 
@@ -1892,6 +1955,8 @@ def stylesheet() -> str:
             primary=token("primary"),
             primary_dim=token("primary.dim"),
             on_primary=token("on.primary"),
+            edge=token("edge"),
+            bg_lane=token("bg.lane"),
             accent=token("accent"),
             success=token("success"),
             danger=token("danger"),

@@ -1323,8 +1323,13 @@ class DataBrowser(QWidget):
         tool tips.
         """
         self.parambar = QWidget(self)
+        # A chrome band, not canvas: it gets the chrome ground and a rule
+        # along its leading edge, so the boundary between the controls and
+        # the data above them is stated rather than implied by a gap.
+        self.parambar.setObjectName("audianParamBar")
+        theme.band(self.parambar, top=True)
         grid = QGridLayout(self.parambar)
-        grid.setContentsMargins(theme.S8, theme.S6, theme.S8, theme.S6)
+        grid.setContentsMargins(theme.S8, theme.S8, theme.S8, theme.S6)
         grid.setHorizontalSpacing(theme.S16)
         grid.setVerticalSpacing(0)
         groups = []
@@ -1714,7 +1719,7 @@ class DataBrowser(QWidget):
 
         Three cues, none of them colour alone: the view box interior of the
         selected lane is lifted one step off the plot ground
-        (`bg.surface` instead of `bg.plot`), its caption goes bold and
+        (`bg.lane` instead of `bg.plot`), its caption goes bold and
         primary, and the channel rail runs a 2 px rule down its row.  In a
         sixteen lane stack the raised ground is the one that works at a
         glance, because it is the whole lane rather than a glyph in it.
@@ -1727,7 +1732,7 @@ class DataBrowser(QWidget):
                 view = ax.getViewBox() if hasattr(ax, "getViewBox") else None
                 if view is not None:
                     view.setBackgroundColor(
-                        theme.qcolor("bg.surface" if current else "bg.plot")
+                        theme.qcolor("bg.lane" if current else "bg.plot")
                     )
         self.update_y_readout()
         # the navigator draws one channel in single mode - keep it on the

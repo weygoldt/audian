@@ -1355,6 +1355,12 @@ class Audian(QMainWindow):
         self.stack = QStackedWidget(self)
         self.stack.addWidget(self.startup)
         self.stack.addWidget(self.tabs)
+        # The chrome/canvas seam lives on the CANVAS, not on the tool bar.
+        # A border on the bar is laid over by its own buttons -- a 36 px
+        # button in a 37 px bar covers all but the gaps -- and padding it
+        # clear costs 5 px of the height the tab strip was moved sideways to
+        # save.  One pixel on the canvas edge buys the same line for nothing.
+        theme.band(self.stack, top=True, ground="bg.base")
         self.setCentralWidget(self.stack)
         self.startup_active = True
 
