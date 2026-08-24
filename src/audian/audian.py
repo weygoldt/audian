@@ -280,51 +280,24 @@ def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
 
 
 class VerticalTabBar(QTabBar):
-    """Tabs stacked down the side, with labels that stay horizontal.
+    """A narrow spine of upright tabs down the left edge.
 
-    Vertical space is the scarce axis: a waveform stack wants every pixel of
-    height it can get, and a horizontal tab strip spends ~30 px of it on
-    something that is usually one or two entries long.  Moving the strip to
-    the side spends horizontal space instead, which there is more of.
+    Two axes are being bought here.  Vertical space is what a stacked
+    waveform view is short of, so the tab strip comes off the top; and the
+    tabs themselves are turned upright so the strip costs about 30 px of
+    width rather than the ~180 px a column of horizontal tabs needs for its
+    labels.  A sixteen channel stack gets both back.
 
-    Qt's ``West`` tab position does this but rotates the label ninety
-    degrees, which is unreadable at a glance and makes file names -- the
-    whole point of the tab -- useless.  This bar keeps Qt's vertical
-    geometry and paints the text horizontally into it.
+    The label is rotated to read bottom-to-top, the usual direction for a
+    left-hand spine, and each tab carries the same flat close mark the rest
+    of the design system uses.
     """
 
-    MIN_WIDTH = 132
-    MAX_WIDTH = 260
+    #: Width of the spine: the label's line height plus breathing room.
+    SPINE_PAD = 10
 
-    def tabSizeHint(self, index: int) -> QSize:
-        """Size a tab from its own content, in bar coordinates.
-
-        Not derived from ``super().tabSizeHint()``: Qt reports a vertical
-        bar's hint already oriented for the bar, and transposing it again
-        collapsed every tab to the minimum width, which elided file names
-        that had room to spare.
-        """
-        font = self.font()
-        font.setBold(True)  # the selected tab is bold; size for the worst case
-        metrics = QFontMetrics(font)
-        width = (
-            theme.S8
-            + metrics.horizontalAdvance(self.tabText(index))
-            + theme.S4
-            + self.CLOSE_SIZE
-            + theme.S6
-            # slack: the style sheet's own tab padding is applied on top of
-            # this hint, so an exact fit still elides by a few pixels
-            + theme.S16
-        )
-        height = metrics.height() + 2 * theme.S6
-        return QSize(
-            min(max(width, self.MIN_WIDTH), self.MAX_WIDTH),
-            max(height, theme.CONTROL_HEIGHT),
-        )
-
-    def minimumTabSizeHint(self, index: int) -> QSize:
-        return QSize(self.MIN_WIDTH, self.tabSizeHint(index).height())
+    #: Longest a tab may get before its label is elided.
+    MAX_LENGTH = 320
 
     CLOSE_SIZE = 14
 
@@ -333,57 +306,106 @@ class VerticalTabBar(QTabBar):
         self.setMouseTracking(True)
         self._hover_close = -1
 
-    def close_rect(self, index: int) -> QRect:
-        """Where the close mark for `index` sits, in bar coordinates.
+    # -- geometry ---------------------------------------------------------
 
-        Computed here rather than handed to ``setTabButton``: Qt lays a tab
-        button out with the *horizontal* bar's geometry in mind and drops it
-        into the middle of the label on a vertical bar.
+    def _label_font(self, bold: bool = True):
+        font = self.font()
+        font.setBold(bold)
+        return font
+
+    def tabSizeHint(self, index: int) -> QSize:
+        """Size an upright tab: narrow across, as long as its label needs.
+
+        Computed rather than taken from ``super()``: Qt reports a vertical
+        bar's hint already oriented for the bar, and transposing it again
+        collapsed every tab to the minimum.
+        """
+        metrics = QFontMetrics(self._label_font())
+        width = metrics.height() + self.SPINE_PAD
+        length = (
+            theme.S12
+            + metrics.horizontalAdvance(self.tabText(index))
+            + theme.S8
+            + self.CLOSE_SIZE
+            + theme.S8
+        )
+        return QSize(width, min(length, self.MAX_LENGTH))
+
+    def minimumTabSizeHint(self, index: int) -> QSize:
+        metrics = QFontMetrics(self._label_font())
+        return QSize(
+            metrics.height() + self.SPINE_PAD,
+            theme.S12 + self.CLOSE_SIZE + theme.S8,
+        )
+
+    def close_rect(self, index: int) -> QRect:
+        """Where the close mark sits: the top of the tab.
+
+        The label reads bottom-to-top, so the top of the tab is where the
+        text *ends* -- the same place the mark sits on a horizontal tab.
+        Computed here rather than handed to ``setTabButton``, which lays a
+        button out with a horizontal bar in mind and drops it into the
+        middle of the label on a vertical one.
         """
         rect = self.tabRect(index)
         size = self.CLOSE_SIZE
         return QRect(
-            rect.right() - size - theme.S6,
-            rect.top() + (rect.height() - size) // 2,
+            rect.left() + (rect.width() - size) // 2,
+            rect.top() + theme.S6,
             size,
             size,
         )
+
+    # -- painting ---------------------------------------------------------
 
     def paintEvent(self, event) -> None:
         painter = QStylePainter(self)
         option = QStyleOptionTab()
         for index in range(self.count()):
             self.initStyleOption(option, index)
-            # shape only: drawing the label here would rotate it
+            # shape only: letting the style draw the label would rotate it
+            # its own way and ignore the space the close mark needs
             painter.drawControl(QStyle.CE_TabBarTabShape, option)
-            rect = self.tabRect(index)
-            current = index == self.currentIndex()
-            close = self.close_rect(index)
-            text_rect = QRect(
-                rect.left() + theme.S8,
-                rect.top(),
-                close.left() - rect.left() - theme.S8 - theme.S4,
-                rect.height(),
-            )
-            painter.save()
-            painter.setPen(theme.qcolor("fg" if current else "fg.muted"))
-            font = painter.font()
-            font.setBold(current)
-            painter.setFont(font)
-            label = QFontMetrics(font).elidedText(
-                self.tabText(index), Qt.ElideMiddle, max(0, text_rect.width())
-            )
-            painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, label)
-            painter.restore()
+            self._paint_label(painter, index)
+            self._paint_close(painter, index)
 
-            token = (
-                "fg"
-                if index == self._hover_close
-                else ("fg.muted" if current else "fg.faint")
-            )
-            painter.drawPixmap(
-                close, glyph_pixmap("close", self.CLOSE_SIZE, token, None)
-            )
+    def _paint_label(self, painter, index: int) -> None:
+        rect = self.tabRect(index)
+        current = index == self.currentIndex()
+        font = self._label_font(current)
+        metrics = QFontMetrics(font)
+        # room left once the close mark and its margins are taken off the top
+        length = rect.height() - (theme.S6 + self.CLOSE_SIZE + theme.S8) - theme.S8
+        if length <= 0:
+            return
+        label = metrics.elidedText(self.tabText(index), Qt.ElideMiddle, length)
+        painter.save()
+        # bottom-left of the tab becomes the origin; +x now runs up the
+        # screen and +y runs across the spine
+        painter.translate(rect.left(), rect.bottom())
+        painter.rotate(-90)
+        painter.setFont(font)
+        painter.setPen(theme.qcolor("fg" if current else "fg.muted"))
+        painter.drawText(
+            QRect(theme.S8, 0, length, rect.width()),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            label,
+        )
+        painter.restore()
+
+    def _paint_close(self, painter, index: int) -> None:
+        current = index == self.currentIndex()
+        token = (
+            "fg"
+            if index == self._hover_close
+            else ("fg.muted" if current else "fg.faint")
+        )
+        painter.drawPixmap(
+            self.close_rect(index),
+            glyph_pixmap("close", self.CLOSE_SIZE, token, None),
+        )
+
+    # -- close mark hit testing -------------------------------------------
 
     def _close_at(self, pos) -> int:
         for index in range(self.count()):

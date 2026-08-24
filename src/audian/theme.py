@@ -1682,7 +1682,10 @@ QTabBar::tab {
     border: ${hairline}px solid $border;
     border-right: 0px;
     border-left: ${focus_width}px solid transparent;
-    padding: ${s6}px ${s8}px;
+    /* no padding: VerticalTabBar sizes and places its own upright label and
+       close mark, and style sheet padding would shrink the rect underneath
+       them without the bar knowing */
+    padding: 0px;
     margin-bottom: ${s2}px;
 }
 QTabBar::tab:hover { color: $fg; background-color: $bg_surface; }

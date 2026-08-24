@@ -128,12 +128,14 @@ colormaps and the toolbar icons. Nothing needs restarting.
 
 ## Tabs
 
-Open files are listed down the **left** edge, not across the top. Vertical
-space is the scarce axis for a stacked waveform view; a horizontal strip
-spends about 30 px of height on what is usually one or two entries, and there
-is more width to give. Labels stay horizontal — Qt's own vertical tabs rotate
-them ninety degrees, which makes the file name, the entire point of the tab,
-unreadable at a glance.
+Open files are listed down the **left** edge as a narrow upright spine, not
+across the top. Two axes are bought this way: the strip comes off the top,
+where a stacked waveform view is short of room, and turning the tabs upright
+costs about 28 px of width instead of the ~180 px a column of horizontal tabs
+needs for its labels. On a sixteen-channel file that is worth two extra pixels
+of lane height per channel and the full window width for the data.
+
+Labels read bottom-to-top, the usual direction for a left-hand spine.
 
 With a single file open the strip hides itself entirely.
 
