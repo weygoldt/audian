@@ -283,6 +283,9 @@ class TimePlot(RangePlot):
             self._show_tick_values = show
             self.getAxis("left").setStyle(showValues=show)
             self.update_axis_label()
+            # the caption states what the axis cannot, so it has to be
+            # rebuilt whenever the axis appears or disappears
+            self._update_caption()
             # Below the threshold the caption has nowhere to sit except on
             # top of the waveform.  Sixteen channels at 34 px is exactly
             # that case, and the channel rail already names every row, so

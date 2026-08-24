@@ -66,30 +66,50 @@ def test_non_si_units_are_never_prefixed():
         assert not si_prefixable(unit), unit
 
 
-def test_spectrogram_does_not_label_its_frequency_axis_as_amplitude():
+def test_spectrogram_labels_its_axis_frequency_not_amplitude():
     """A spectrogram's y axis is frequency; its amplitude is the colour bar.
 
     SpectrogramPlot inherits TimePlot, so the amplitude label leaked onto
-    the frequency axis and read "amplitude (a.u.)".  The override must also
-    be a genuine no-op: clearing the label with setLabel(None) drops the
-    axis's labelUnits, which is what pyqtgraph's auto SI prefixing keys off,
-    and the frequency axis then printed 20000 instead of 20.
+    the frequency axis and read "amplitude (a.u.)".
     """
     from audian.spectrogramplot import SpectrogramPlot
     from audian.timeplot import TimePlot
 
     assert SpectrogramPlot.update_axis_label is not TimePlot.update_axis_label
 
-    touched = []
+    calls = []
 
     class _Axis:
         def setLabel(self, *args, **kwargs):
-            touched.append(("setLabel", args, kwargs))
+            calls.append(args)
 
-        def enableAutoSIPrefix(self, *args):
-            touched.append(("enableAutoSIPrefix", args))
-
-    SpectrogramPlot.update_axis_label(
-        SimpleNamespace(getAxis=lambda name: _Axis(), data_items=[])
+    plot = SimpleNamespace(
+        getAxis=lambda name: _Axis(), data_items=[], _show_tick_values=True
     )
-    assert touched == [], touched
+    SpectrogramPlot.update_axis_label(plot)
+    assert len(calls) == 1
+    text, unit = calls[0][0], calls[0][1]
+    assert "frequency" in text and "amplitude" not in text
+    assert unit == "Hz"
+
+
+def test_spectrogram_never_clears_its_axis_label():
+    """Clearing it would break the kHz scaling.
+
+    setLabel(None) drops the axis's labelUnits, which is what pyqtgraph's
+    auto SI prefixing keys off, and the frequency axis then printed 20000
+    where it had printed 20.  In the dense case the label is simply not set.
+    """
+    from audian.spectrogramplot import SpectrogramPlot
+
+    calls = []
+
+    class _Axis:
+        def setLabel(self, *args, **kwargs):
+            calls.append(args)
+
+    plot = SimpleNamespace(
+        getAxis=lambda name: _Axis(), data_items=[], _show_tick_values=False
+    )
+    SpectrogramPlot.update_axis_label(plot)
+    assert calls == [], calls

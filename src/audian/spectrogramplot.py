@@ -200,30 +200,37 @@ class SpectrogramPlot(TimePlot):
     # --- axis label -------------------------------------------------------
 
     def update_axis_label(self) -> None:
-        """Never label this axis with an amplitude.
+        """Label the left axis "frequency", the way the trace panel says
+        "amplitude".
 
-        TimePlot puts the trace's amplitude unit on the left axis, but here
-        the left axis is *frequency*: inherited unchanged it labelled the
-        frequency axis "amplitude (a.u.)".  The amplitude of a spectrogram
-        is its colour, so that unit belongs on the colour bar -- which
-        carries it already, in dB.
+        Not the trace's amplitude unit, which is what this inherited from
+        TimePlot: the y axis here is frequency, and a spectrogram's amplitude
+        is its colour, carried by the colour bar in dB.
 
-        The frequency unit is deliberately not put here either.  A rotated
-        axis label runs straight through the tick values at sixteen
-        channels, which is why it lives in the corner caption instead; see
-        :meth:`caption_text`.
+        Only when the axis is showing tick values.  In a dense stack it is
+        collapsed to zero width and a rotated label would run straight
+        through the ticks of a 34 px lane -- which is why the unit lives in
+        the corner caption there; see :meth:`caption_text`.
 
-        So this does nothing at all -- and it must not "clear" the label to
-        achieve that.  ``setLabel(None)`` drops the axis's ``labelUnits``,
-        which is exactly what pyqtgraph's auto SI prefixing keys off, so the
-        frequency axis lost its kHz scaling and started printing 20000 and
-        40000 instead of 20 and 40.
+        ``Hz`` is handed over as a real unit so pyqtgraph does the prefixing
+        and the label tracks the zoom: "frequency (kHz)" over ticks of 20 and
+        40, "frequency (Hz)" when zoomed into a narrow band.
         """
+        axis = self.getAxis("left")
+        if self._show_tick_values:
+            axis.setLabel("frequency", "Hz", color=theme.token("fg.muted"))
+        # No else: clearing it would drop the axis's labelUnits, and that is
+        # what pyqtgraph's auto SI prefixing keys off.  The dense path never
+        # sets a label in the first place, and YAxisItem.set_si_unit() keeps
+        # the ticks scaled there without one.
 
     # --- caption ----------------------------------------------------------
 
     def caption_text(self) -> str:
         text = f"CH {self.channel:02d}"
+        if self._show_tick_values:
+            # the axis says it; saying it twice is clutter
+            return text
         unit = self.getAxis("left").si_unit_label()
         if unit:
             text += f"   frequency ({unit})"

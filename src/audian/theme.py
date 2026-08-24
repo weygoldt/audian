@@ -2075,24 +2075,28 @@ def apply(app: QApplication, theme_name: str | None = None) -> None:
 #: default.  Verified to resolve with ``pg.colormap.get`` in pyqtgraph 0.14.0.
 #: ``CET-L20`` does not exist in this build -- do not add it.
 SPECTROGRAM_MAPS: list[str] = [
-    "CET-L17",
+    # CET-CBL2 leads: colour-blind safe, and its low end is near-black, so
+    # the noise floor -- most of a spectrogram -- disappears into the page
+    # instead of filling it.  CET-L17 used to lead here and, reversed for a
+    # dark floor, painted the whole panel saturated blue.
+    "CET-CBL2",
     "viridis",
     "magma",
     "inferno",
     "CET-L16",
-    "CET-CBL2",
+    "CET-L17",
     "CET-L1",
     "CET-R4",
 ]
 
 #: Human labels for a swatch combo, index-aligned with SPECTROGRAM_MAPS.
 SPECTROGRAM_MAP_LABELS: list[str] = [
-    "CET-L17 (uniform)",
+    "CET-CBL2 (colour-blind safe)",
     "viridis (uniform)",
     "magma (uniform)",
     "inferno (uniform)",
     "CET-L16 (uniform)",
-    "CET-CBL2 (colour-blind safe)",
+    "CET-L17 (uniform, blue)",
     "CET-L1 (greyscale)",
     "jet (legacy - non-uniform)",
 ]

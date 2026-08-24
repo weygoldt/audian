@@ -168,9 +168,13 @@ metadata — `amplitude (mV)`, `amplitude (a.u.)` and so on. A wav with no unit
 metadata reads as `a.u.`, which is a real statement about the recording rather
 than a missing value, so it is shown.
 
+A spectrogram's y axis is labelled `frequency (kHz)` the same way, rescaled by
+pyqtgraph as you zoom. Its *amplitude* is its colour, so that scale lives on
+the colour bar, in dB.
+
 In a dense stack the per-lane axis is collapsed to reclaim its width, and the
 unit rides on the stack's single amplitude readout in the bottom-left corner
-instead.
+instead — or, for a spectrogram, in its corner caption.
 
 Note that only genuine SI units are rescaled and prefixed (`V` → `mV`).
 Anything else is shown verbatim: pyqtgraph will happily prefix any string it
