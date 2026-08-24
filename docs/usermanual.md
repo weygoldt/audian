@@ -188,3 +188,14 @@ Note that only genuine SI units are rescaled and prefixed (`V` → `mV`).
 Anything else is shown verbatim: pyqtgraph will happily prefix any string it
 is handed, which turned `a.u.` into `ma.u.` with every tick multiplied by a
 thousand.
+
+
+## Showing a channel that `-c` left out
+
+`-c 0,8,15` sets which channels are *shown*, not which exist. Every channel
+in the file is still there, listed in the channel menu behind the **ch**
+button at the right of the tool bar, and `Alt+0` … `Alt+9` toggle the first
+ten directly.
+
+When some channels are hidden the button says so — `ch 0  3/16` — so the
+other thirteen are not invisible in both senses at once.

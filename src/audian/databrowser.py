@@ -118,12 +118,19 @@ class ParameterGroup(QWidget):
         vbox.addWidget(self.body)
         self.rows = 0
 
-    def add_row(self, label: str, shortcut: str, *widgets: QWidget) -> None:
-        """Add a labelled row of widgets to the group."""
-        self.grid.addWidget(caption_label(label, shortcut), self.rows, 0)
+    def add_row(self, label: str, shortcut: str, *widgets: QWidget) -> list:
+        """Add a labelled row of widgets, and return everything it placed.
+
+        The caption comes back with the fields so a caller can hide a whole
+        row: hiding only the field leaves its label beside nothing, which
+        reads as a control that failed to load.
+        """
+        caption = caption_label(label, shortcut)
+        self.grid.addWidget(caption, self.rows, 0)
         for i, w in enumerate(widgets):
             self.grid.addWidget(w, self.rows, 1 + i)
         self.rows += 1
+        return [caption, *widgets]
 
     @staticmethod
     def equalize(groups: "list[ParameterGroup]") -> None:
@@ -247,7 +254,7 @@ class LevelMeter(QWidget):
     channel, to the status bar.
     """
 
-    HEIGHT = 4
+    HEIGHT = 3
     #: dB full scale at the bottom of the bar.
     FLOOR_DB = -60.0
 
@@ -325,7 +332,7 @@ class ChannelRailRow(QWidget):
         # top margin = the figure's own top margin (theme.style_figure uses
         # S4), so the badge sits on the top edge of the plot beside it
         # rather than floating in the middle of the lane:
-        vbox.setContentsMargins(0, theme.S4, 0, 0)
+        vbox.setContentsMargins(0, theme.S2, 0, 0)
         vbox.setSpacing(0)
         # The selection highlight belongs to the *controls*, not to the
         # lane's worth of rail below them: a 290 px raised block with 65 px
@@ -335,12 +342,18 @@ class ChannelRailRow(QWidget):
         self.card.setObjectName("railCard")
         self.card.setAttribute(Qt.WA_StyledBackground, True)
         card = QVBoxLayout(self.card)
-        card.setContentsMargins(theme.S4, theme.S2, theme.S4, theme.S2)
-        card.setSpacing(theme.S2)
+        card.setContentsMargins(theme.S4, 0, theme.S4, 0)
+        card.setSpacing(0)
 
-        top = QHBoxLayout()
+        # Number on its own line, the two toggles side by side beneath it.
+        # A single row of number + solo + mute is as wide as all three
+        # together; stacking them makes the rail as wide as the widest one,
+        # which is what a column of sixteen of them should cost.  Fully
+        # vertical -- number, then solo, then mute -- does not fit: a lane is
+        # 38 px at sixteen channels and three stacked items need more.
+        top = QVBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(theme.S4)
+        top.setSpacing(theme.S2)
         # just the number: "CH" repeated down sixteen rows is sixteen copies
         # of a word the plot caption beside it already says
         self.number = QLabel(f"{channel:02d}")
@@ -348,14 +361,23 @@ class ChannelRailRow(QWidget):
         self.number.setMinimumWidth(
             theme.mono_metrics(theme.SIZE_SMALL_PT).horizontalAdvance("00")
         )
+        self.number.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        # A stacked row has to fit inside a dense lane.  Whatever this row
+        # asks for, the grid gives it, so an unconstrained stack simply made
+        # every lane taller: at 54 px the sixteen channel stack no longer fit
+        # the window and five of them went below the scroll.
+        self.number.setFixedHeight(theme.RAIL_NUMBER_HEIGHT)
         top.addWidget(self.number)
+        toggles = QHBoxLayout()
+        toggles.setContentsMargins(0, 0, 0, 0)
+        toggles.setSpacing(theme.S2)
         self.solo_button = self._button("S", "Solo this channel")
         self.solo_button.clicked.connect(lambda: self.browser.toggle_solo(self.channel))
-        top.addWidget(self.solo_button)
+        toggles.addWidget(self.solo_button)
         self.mute_button = self._button("M", "Hide this channel")
         self.mute_button.clicked.connect(lambda: self.browser.toggle_mute(self.channel))
-        top.addWidget(self.mute_button)
-        top.addStretch(1)
+        toggles.addWidget(self.mute_button)
+        top.addLayout(toggles)
         card.addLayout(top)
         self.level = LevelMeter(self.card)
         card.addWidget(self.level)
@@ -396,14 +418,16 @@ class ChannelRailRow(QWidget):
 
     def _button(self, text: str, tip: str) -> QToolButton:
         button = QToolButton(self)
+        button.setObjectName("railToggle")
         button.setText(text)
         button.setCheckable(True)
         button.setToolTip(tip)
         button.setFont(theme.font_mono(theme.SIZE_SMALL_PT, bold=True))
         button.setFocusPolicy(Qt.NoFocus)
-        # a one glyph toggle does not need the 45 px the generic tool
-        # button padding gives it - that width belongs to the level readout
-        button.setFixedSize(theme.S24, theme.CONTROL_HEIGHT - theme.S4)
+        # a one glyph toggle does not need the 45 px the generic tool button
+        # padding gives it, and in a stacked rail two of them side by side
+        # are what sets the column's width
+        button.setFixedSize(theme.S16 + theme.S2, theme.RAIL_TOGGLE_HEIGHT)
         return button
 
     def rename(self) -> None:
@@ -536,10 +560,12 @@ class DataBrowser(QWidget):
     # string it can ever hold and so set the width of the whole column on its
     # own.  The level is a slim bar now (LevelMeter) with the number in the
     # tooltip, which reads better across sixteen channels anyway and costs a
-    # third of the space.  The floor is not the row -- '00 S M' fits in far
-    # less -- but the amplitude scale in the corner beneath it, which has to
-    # print a signed number and a unit.
-    RAIL_WIDTH = 100
+    # third of the space.  Then the row itself was stacked -- number over
+    # solo+mute -- so the column is as wide as its widest line rather than as
+    # wide as all three side by side, and the corner readout that used to set
+    # the floor moved into the status bar, which was already printing the
+    # same range.
+    RAIL_WIDTH = 48
     MAX_SPECTROGRAM_CHANNELS = 4
 
     # y-range policies of the trace panels:
@@ -1028,9 +1054,6 @@ class DataBrowser(QWidget):
                     axt.polish()
                     if hasattr(axt, "sigHoverValue"):
                         axt.sigHoverValue.connect(self.show_hover_value)
-                    axt.getViewBox().sigRangeChanged.connect(
-                        lambda *a, c=c: self.update_y_readout(c)
-                    )
                     # the view box resizes when the y gutter is reclaimed or
                     # given back, which is exactly when the shared time axis
                     # below the stack has to be re-aligned - and it is the
@@ -1359,12 +1382,13 @@ class DataBrowser(QWidget):
         # the corner between the rail and the time axis: the one place in
         # the stack that is not a lane, an axis or a control, which is
         # exactly what the shared amplitude scale needs.
-        self.y_readout = QLabel()
-        self.y_readout.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-        theme.tint(self.y_readout, "fg.muted")
-        self.y_readout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.y_readout.setContentsMargins(theme.S4, theme.S4, theme.S4, 0)
-        self.y_readout.setToolTip("Amplitude range shown by every lane")
+        # A spacer, not a readout.  The amplitude range used to be printed
+        # here because a dense stack hides the per-lane axis -- but the
+        # status bar's own 'A' field already reports the same range
+        # persistently, so this was a second copy that also set the floor on
+        # how narrow the rail could get.  The corner still has to reserve the
+        # rail's width, or the time axis stops lining up with the plots.
+        self.y_readout = QWidget()
         self.y_readout.setFixedWidth(DataBrowser.RAIL_WIDTH)
 
         self.taxis_strip = QWidget(self.stack_pane)
@@ -1627,8 +1651,8 @@ class DataBrowser(QWidget):
                 self.audioleftw = combo
             else:
                 self.audiorightw = combo
-        self.audiopairw.setVisible(self.audio_source == DataBrowser.AUDIO_PAIR)
-        group.add_row("Pair", "", self.audiopairw)
+        self.audiopairrow = group.add_row("Pair", "", self.audiopairw)
+        self.set_pair_row_visible(self.audio_source == DataBrowser.AUDIO_PAIR)
         self.audiofacw = QComboBox(self.parambar)
         self.audiofacw.setToolTip("Audio time expansion factor")
         self.audiofacw.addItems(
@@ -1875,7 +1899,6 @@ class DataBrowser(QWidget):
                     view.setBackgroundColor(
                         theme.qcolor("bg.lane" if current else "bg.plot")
                     )
-        self.update_y_readout()
         # the navigator draws one channel in single mode - keep it on the
         # channel the user is actually looking at:
         if self.datafig is not None and hasattr(self.datafig, "set_channel"):
@@ -2002,9 +2025,14 @@ class DataBrowser(QWidget):
         # Ambient information: the pointer readout owns this field whenever
         # it has something to say, so the y range is shown greyed out and
         # at three significant digits, which is what the field is sized for.
+        plot = self.trace_plot(channel)
+        unit = (
+            plot.data_unit() if plot is not None and hasattr(plot, "data_unit") else ""
+        )
+        suffix = f" {unit}" if unit else ""
         self.set_readout(
             "a",
-            f"A {arange.r0[channel]:.3g}…{arange.r1[channel]:.3g}",
+            f"A {arange.r0[channel]:.3g}…{arange.r1[channel]:.3g}{suffix}",
             active=False,
         )
 
@@ -2470,51 +2498,6 @@ class DataBrowser(QWidget):
             # where a y tick belongs as long as it is labelled.
             axis.setStyle(showValues=values, tickLength=-theme.S4 if values else 0)
 
-    def update_y_readout(self, channel: int = -1) -> None:
-        """Write the stack's one amplitude scale into the rail corner.
-
-        Every lane is the same height and, under a shared y range, shows
-        the same span, so one scale describes the whole stack.  Sixteen
-        copies of it say nothing more - which is what the sixteen ladders
-        of *unlabelled* y ticks were, at 56 px of every lane.
-
-        It goes in the corner the rail and the time axis row make between
-        them, where the axis label of a plot belongs and where nothing was
-        drawn before, rather than over a trace: at 34 px a lane has no
-        room to spare for two numbers on top of the data.
-        """
-        if self.y_readout is None:
-            return
-        if channel >= 0 and channel != self.current_channel:
-            return
-        plot = self.trace_plot(self.current_channel)
-        if plot is None:
-            return
-        y0, y1 = plot.getViewBox().viewRange()[1]
-        # the unit rides here because a dense stack collapses the per-lane
-        # left axis to zero width, so this is the only place it can be read
-        unit = plot.data_unit() if hasattr(plot, "data_unit") else ""
-        suffix = f" {unit}" if unit else ""
-        # A half-span, not the full range.  The rail is 82 px wide and
-        # "Y -0.533 … +0.621 a.u." needs about twice that, so it was being
-        # clipped to "0.621 a.u." -- a number with no sign and no meaning.
-        # What this corner is for is the *scale* of every lane, and +-max
-        # says that in a third of the characters.  The exact range is one
-        # hover away.
-        span = max(abs(y0), abs(y1))
-        text = f"\u00b1{span:.3g}{suffix}"
-        # Elide rather than clip.  A QLabel too narrow for its text simply
-        # cuts it, and a cut number reads as a different number -- which is
-        # exactly what happened when this said "0.621 a.u." with the sign
-        # and the leading digit chopped off.
-        metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
-        self.y_readout.setText(
-            metrics.elidedText(text, Qt.ElideRight, self.y_readout.width() - theme.S8)
-        )
-        self.y_readout.setToolTip(
-            f"Amplitude range shown by every lane: {y0:+.4g} to {y1:+.4g}{suffix}"
-        )
-
     def trace_plot(self, channel: int) -> Optional[TimePlot]:
         """The channel's first visible trace plot, or None."""
         for panel in self.panels.values():
@@ -2787,7 +2770,6 @@ class DataBrowser(QWidget):
         self.update_stretches(height)
         self.link_time_axis()
         self.align_time_axis()
-        self.update_y_readout()
         # fix full data plot:
         if self.datafig is not None:
             data_height = 5 * xheight // 2 if nrows <= 1 else 3 * xheight // 2
@@ -3619,6 +3601,18 @@ class DataBrowser(QWidget):
             return [shown[0]]
         return shown
 
+    def set_pair_row_visible(self, visible: bool) -> None:
+        """Show or hide the L/R row *and its caption*.
+
+        Hiding only the field left the word "Pair" floating beside nothing,
+        which reads as a control that failed to load.
+        """
+        if self.audiopairw is None:
+            return
+        self.audiopairw.setVisible(visible)
+        for widget in getattr(self, "audiopairrow", None) or []:
+            widget.setVisible(visible)
+
     def set_audio_pair(self, left=None, right=None, dispatch: bool = True) -> None:
         """Choose the channel in each ear for `AUDIO_PAIR` playback."""
         last = max(0, self.data.channels - 1)
@@ -3654,8 +3648,7 @@ class DataBrowser(QWidget):
                 self.audiosrcw.blockSignals(blocked)
         # progressive disclosure: the two channel pickers only exist as a
         # question once the pair mode is what is being asked about
-        if self.audiopairw is not None:
-            self.audiopairw.setVisible(source == DataBrowser.AUDIO_PAIR)
+        self.set_pair_row_visible(source == DataBrowser.AUDIO_PAIR)
         if dispatch:
             self.sigAudioSourceChanged.emit(source)
 

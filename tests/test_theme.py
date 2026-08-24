@@ -428,3 +428,30 @@ def test_on_primary_is_legible_in_both_themes():
             assert ratio >= 4.5, (name, ratio)
     finally:
         theme.set_theme(theme.THEME_DARK)
+
+
+def test_stacked_rail_row_fits_a_dense_lane():
+    """The rail row's height becomes the lane's height.
+
+    The stack grid grants a row whatever it asks for, so a rail row taller
+    than CHANNEL_DENSE_HEIGHT does not get clipped -- it makes every lane
+    taller.  When the stacked row first went in at its natural size it
+    wanted 54 px against a 38 px lane and pushed five of sixteen channels
+    below the scroll.
+    """
+    from audian.databrowser import LevelMeter
+
+    budget = (
+        theme.S2  # outer top margin
+        + theme.RAIL_NUMBER_HEIGHT
+        + theme.RAIL_TOGGLE_HEIGHT
+        + LevelMeter.HEIGHT
+    )
+    assert budget <= theme.CHANNEL_DENSE_HEIGHT, budget
+
+
+def test_rail_toggles_have_room_for_their_glyph():
+    """An 18x14 button with the generic S4/S8 padding renders empty."""
+    qss = theme.stylesheet()
+    assert "QToolButton#railToggle" in qss
+    assert theme.RAIL_TOGGLE_HEIGHT >= theme.SIZE_SMALL_PT

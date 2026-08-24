@@ -1524,7 +1524,7 @@ class Audian(QMainWindow):
     READOUT_TEMPLATES = {
         "t": "t=-00:00:12.480",
         "dt": "Δt=-00:12.480 (1.234mHz)",
-        "a": "A -1.23e-05…-1.23e-05",
+        "a": "A -1.23e-05…-1.23e-05 a.u.",
         "f": "Δf=-1.234e+05mHz",
         "p": "ΔP=-100.0dB",
         "ch": "ch 15",
@@ -2057,7 +2057,11 @@ class Audian(QMainWindow):
         self.channel_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.channel_button.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         self.channel_button.setAutoRaise(True)
-        self.channel_button.setToolTip("Channels")
+        self.channel_button.setToolTip(
+            "Show or hide channels (Alt+0 … Alt+9).\n"
+            "Every channel in the file is listed here, including ones hidden "
+            "by -c."
+        )
         self.channel_button.setText("ch --")
         self.channel_menu = QMenu(self.channel_button)
         self.channel_menu.aboutToShow.connect(self.build_channel_menu)
@@ -2137,7 +2141,20 @@ class Audian(QMainWindow):
             act.setChecked(state)
             act.blockSignals(blocked)
         self.update_amplitude_button()
-        self.channel_button.setText(f"ch {browser.current_channel:d}")
+        # Say how many channels are *hidden*, not just which one is current.
+        # With `-c 0,8,15` the rail shows three rows and nothing anywhere
+        # says the other thirteen exist, so the way to bring one back is
+        # unfindable -- even though it is one Alt+N away.
+        # show_channels is None until the browser has opened its file, and
+        # sync_toolbar runs before that
+        shown = len(browser.show_channels or ())
+        total = browser.data.channels
+        if shown and shown < total:
+            self.channel_button.setText(
+                f"ch {browser.current_channel:d}  {shown}/{total}"
+            )
+        else:
+            self.channel_button.setText(f"ch {browser.current_channel:d}")
         self.set_readout("ch", f"ch {browser.current_channel:02d}", False)
         self.set_mode_chip(self.MODE_NAMES.get(browser.region_mode, ""))
 
@@ -3200,6 +3217,10 @@ class Audian(QMainWindow):
 
     def toggle_channel(self, channel):
         self.browser().toggle_channel(channel)
+        # the tool bar reports how many channels are shown, so it has to be
+        # refreshed whenever that changes -- otherwise the count goes stale
+        # and says 3/16 while four lanes are on screen
+        self.sync_toolbar()
         if self.link_channels and not self.browser().setting:
             for b in self.browsers:
                 if b is not self.browser():
@@ -3211,6 +3232,7 @@ class Audian(QMainWindow):
 
     def show_channel(self, channel):
         self.browser().show_channel(channel)
+        self.sync_toolbar()
         if self.link_channels and not self.browser().setting:
             for b in self.browsers:
                 if b is not self.browser():
@@ -3230,6 +3252,7 @@ class Audian(QMainWindow):
                         self.browser().selected_channels,
                         self.browser().current_channel,
                     )
+        self.sync_toolbar()
 
     def hide_deselected_channels(self):
         self.browser().hide_deselected_channels()

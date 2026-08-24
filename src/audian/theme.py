@@ -838,6 +838,19 @@ def border_pen(selected: bool = False) -> QPen:
 # are sixteen equally loud claims on the eye, which is the same as none.
 # ---------------------------------------------------------------------------
 
+RAIL_NUMBER_HEIGHT = 14
+"""Height of the channel number in the rail, in px.
+
+The rail row is stacked -- number over the two toggles -- and whatever it
+asks for the stack grid grants, so the row's height sets the *lane* height.
+Left to its natural 18 px line box, plus 20 px toggles and their margins, a
+row wanted 54 px against a 38 px lane and pushed five of sixteen channels
+below the scroll.
+"""
+
+RAIL_TOGGLE_HEIGHT = 14
+"""Height of a solo/mute toggle in the rail, in px.  See RAIL_NUMBER_HEIGHT."""
+
 TOOLBAR_BUTTON_BOX = 30
 """Outer height of a tool bar button, in px, borders included.
 
@@ -1716,6 +1729,15 @@ QToolButton:disabled, QPushButton:disabled {
     background-color: $bg_base;
 }
 QToolButton::menu-indicator { image: none; }
+
+/* The channel rail's solo and mute toggles are one glyph in an 18 px
+   square.  The generic QToolButton padding above is S4/S8, which at that
+   size leaves no room for the glyph at all and the buttons rendered as
+   empty rounded boxes. */
+QToolButton#railToggle {
+    padding: 0px;
+    margin: 0px;
+}
 
 /* --- menus ---------------------------------------------------------- */
 
