@@ -380,3 +380,51 @@ def test_on_primary_is_legible_on_a_checked_button():
             assert ratio >= 4.5, (name, ratio)
     finally:
         theme.set_theme(theme.THEME_DARK)
+
+
+def test_every_selection_fill_states_a_legible_foreground():
+    """A primary.dim fill must never leave its text to inherit $fg.
+
+    In the daylight theme primary.dim is a dark navy and fg is black: menu
+    items, pressed buttons and list selections all rendered black on navy at
+    1.68:1.  The dark theme hid it, because there fg and on.primary happen to
+    be the same colour.
+    """
+    import re
+
+    try:
+        for name in (theme.THEME_DARK, theme.THEME_LIGHT):
+            theme.set_theme(name)
+            qss = theme.stylesheet()
+            dim = theme.token("primary.dim").lower()
+            on_primary = theme.token("on.primary").lower()
+            for selector, body in re.findall(r"([^{}]*)\{([^{}]*)\}", qss):
+                selector = selector.strip().splitlines()[-1].strip()
+                low = body.lower()
+                if f"selection-background-color: {dim}" in low:
+                    found = re.search(r"selection-color:\s*([^;]+);", body)
+                    prop = "selection-color"
+                elif f"background-color: {dim}" in low:
+                    if "slider" in selector.lower():
+                        continue  # a progress fill, it carries no text
+                    found = re.search(r"(?<!-)color:\s*([^;]+);", body)
+                    prop = "color"
+                else:
+                    continue
+                assert found, f"{name}: {selector} sets no {prop}"
+                got = found.group(1).strip().lower()
+                assert got == on_primary, f"{name}: {selector} {prop}={got}"
+    finally:
+        theme.set_theme(theme.THEME_DARK)
+
+
+def test_on_primary_is_legible_in_both_themes():
+    try:
+        for name in (theme.THEME_DARK, theme.THEME_LIGHT):
+            theme.set_theme(name)
+            ratio = theme.contrast_ratio(
+                theme.token("on.primary"), theme.token("primary.dim")
+            )
+            assert ratio >= 4.5, (name, ratio)
+    finally:
+        theme.set_theme(theme.THEME_DARK)

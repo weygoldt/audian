@@ -1703,6 +1703,7 @@ QToolButton:hover, QPushButton:hover {
 QToolButton:pressed, QPushButton:pressed {
     background-color: $primary_dim;
     border-color: $primary_dim;
+    color: $on_primary;
 }
 QToolButton:checked, QPushButton:checked {
     background-color: $primary_dim;
@@ -1729,8 +1730,12 @@ QMenuBar::item {
     padding: ${s4}px ${s8}px;
     border-radius: ${radius_control}px;
 }
-QMenuBar::item:selected { background-color: $primary_dim; }
-QMenuBar::item:pressed  { background-color: $primary_dim; }
+/* Every one of these fills with primary.dim, so every one of them has to
+   state its foreground.  Inheriting $fg measured 1.68:1 in the daylight
+   theme -- unreadable.  It looked fine in the dark theme only because $fg
+   and $on_primary happen to coincide there. */
+QMenuBar::item:selected { background-color: $primary_dim; color: $on_primary; }
+QMenuBar::item:pressed  { background-color: $primary_dim; color: $on_primary; }
 
 QMenu {
     background-color: $bg_raised;
@@ -1743,7 +1748,7 @@ QMenu::item {
     padding: ${s4}px ${s16}px ${s4}px ${s24}px;
     border-radius: ${radius_control}px;
 }
-QMenu::item:selected { background-color: $primary_dim; color: $fg; }
+QMenu::item:selected { background-color: $primary_dim; color: $on_primary; }
 QMenu::item:disabled { color: $fg_faint; }
 QMenu::separator {
     height: ${hairline}px;
@@ -1812,7 +1817,7 @@ QLineEdit, QAbstractSpinBox, QComboBox, QPlainTextEdit, QTextEdit {
     background-color: $bg_base;
     color: $fg;
     selection-background-color: $primary_dim;
-    selection-color: $fg;
+    selection-color: $on_primary;
     border: ${hairline}px solid $border;
     border-radius: ${radius_control}px;
     padding: ${s2}px ${s6}px;
@@ -1837,6 +1842,7 @@ QComboBox QAbstractItemView {
     color: $fg;
     border: ${hairline}px solid $border;
     selection-background-color: $primary_dim;
+    selection-color: $on_primary;
     outline: none;
 }
 QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
@@ -1892,7 +1898,7 @@ QTableView, QTreeView, QListView {
     gridline-color: $border;
     border: ${hairline}px solid $border;
     selection-background-color: $primary_dim;
-    selection-color: $fg;
+    selection-color: $on_primary;
     outline: none;
 }
 QHeaderView::section {

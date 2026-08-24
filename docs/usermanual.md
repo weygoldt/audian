@@ -158,6 +158,11 @@ region.
   into the left ear and the second half into the right. Useful for a stereo
   field recording, which is what the original behaviour assumed.
 
+There is no separate "pick two channels" control, because the mix already
+follows the **shown** channels: solo or hide until exactly two remain and
+those two become left and right. On a 16-electrode file, solo channel 3 and
+channel 9 and you are listening to that pair in stereo.
+
 The playback cursor runs only on the channels actually being heard.
 
 

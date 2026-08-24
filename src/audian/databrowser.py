@@ -234,6 +234,62 @@ class ColorMapCombo(QComboBox):
     refresh_swatches = populate
 
 
+class LevelMeter(QWidget):
+    """A slim peak-level bar for one channel.
+
+    Replaces a right-aligned ``-100.0 dB`` label.  That label was the widest
+    thing in the rail -- it alone set the rail's width, because it has to be
+    sized for the longest string it can ever hold -- and sixteen numbers
+    stacked down the side are read one at a time anyway.  A bar is read as a
+    column: which electrodes are hot is visible without reading anything.
+
+    The number is not lost; it moves to the tooltip and, for the current
+    channel, to the status bar.
+    """
+
+    HEIGHT = 4
+    #: dB full scale at the bottom of the bar.
+    FLOOR_DB = -60.0
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.db = None
+        self.selected = False
+        self.setFixedHeight(self.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumWidth(theme.S16)
+
+    def set_level(self, db, selected: bool = False) -> None:
+        self.db = db
+        self.selected = bool(selected)
+        self.setToolTip(
+            "Peak level of the visible window, dB full scale"
+            if db is None
+            else f"{db:.1f} dB peak in the visible window"
+        )
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setPen(Qt.NoPen)
+        painter.fillRect(self.rect(), theme.brush("border"))
+        if self.db is None:
+            painter.end()
+            return
+        frac = max(0.0, min(1.0, 1.0 - self.db / self.FLOOR_DB))
+        width = int(round(self.width() * frac))
+        if width > 0:
+            painter.fillRect(
+                0,
+                0,
+                width,
+                self.height(),
+                theme.brush("primary" if self.selected else "fg.muted"),
+            )
+        painter.end()
+
+
 class ChannelRailRow(QWidget):
     """One row of the channel rail: number, name, solo, mute and level.
 
@@ -285,10 +341,12 @@ class ChannelRailRow(QWidget):
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(theme.S4)
-        self.number = QLabel(f"CH {channel:02d}")
+        # just the number: "CH" repeated down sixteen rows is sixteen copies
+        # of a word the plot caption beside it already says
+        self.number = QLabel(f"{channel:02d}")
         self.number.setFont(theme.font_mono(theme.SIZE_SMALL_PT, bold=True))
         self.number.setMinimumWidth(
-            theme.mono_metrics(theme.SIZE_SMALL_PT).horizontalAdvance("CH 00 ")
+            theme.mono_metrics(theme.SIZE_SMALL_PT).horizontalAdvance("00")
         )
         top.addWidget(self.number)
         self.solo_button = self._button("S", "Solo this channel")
@@ -297,17 +355,10 @@ class ChannelRailRow(QWidget):
         self.mute_button = self._button("M", "Hide this channel")
         self.mute_button.clicked.connect(lambda: self.browser.toggle_mute(self.channel))
         top.addWidget(self.mute_button)
-        self.level = QLabel()
-        self.level.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-        self.level.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.level.setToolTip("Peak level of the visible window, dB full scale")
-        # sized from the widest string it ever holds, so the minus sign is
-        # never the character that gets elided away:
-        self.level.setMinimumWidth(
-            theme.mono_metrics(theme.SIZE_SMALL_PT).horizontalAdvance("-100.0 dB")
-        )
-        top.addWidget(self.level, 1)
+        top.addStretch(1)
         card.addLayout(top)
+        self.level = LevelMeter(self.card)
+        card.addWidget(self.level)
 
         # The name starts empty: pre-filling it with the channel index only
         # repeats the badge next to it and hides the fact that the field is
@@ -361,15 +412,17 @@ class ChannelRailRow(QWidget):
     def set_peak(self, peak: float, ampl_max: float) -> None:
         """Show the peak level of the visible window in dB full scale."""
         self.peak = peak
+        selected = self.channel == self.browser.current_channel
         if peak <= 0 or ampl_max <= 0:
-            self.level.setText("-inf dB")
+            self.level.set_level(None, selected)
             return
         db = 20 * np.log10(min(1.0, peak / ampl_max))
-        self.level.setText(f"{db:5.1f} dB")
+        self.level.set_level(db, selected)
 
     def update_state(self) -> None:
         """Repaint solo/mute state and the current-channel emphasis."""
         current = self.channel == self.browser.current_channel
+        self.level.set_level(self.level.db, current)
         self.solo_button.setChecked(self.channel in self.browser.solo_channels)
         self.mute_button.setChecked(self.channel in self.browser.muted_channels)
         self.number.setFont(theme.font_mono(theme.SIZE_SMALL_PT, bold=current))
@@ -477,12 +530,16 @@ class SharedTimeAxis(TimeAxisItem):
 
 
 class DataBrowser(QWidget):
-    # width of the channel rail and the number of visible channels above
-    # which the spectrogram collapses onto the current channel only:
-    # Wide enough for the compact single-line row: 'CH 15' + solo + mute +
-    # '-10.7 dB' in the mono face, with the S4 margins.  Measured, not
-    # guessed - at 160 px the badge and the minus sign were both clipped.
-    RAIL_WIDTH = 188
+    # Width of the channel rail.  Wide enough for the number, solo and mute,
+    # and nothing else: the rail used to be 188 px because it carried a
+    # right-aligned '-100.0 dB' label, which has to be sized for the longest
+    # string it can ever hold and so set the width of the whole column on its
+    # own.  The level is a slim bar now (LevelMeter) with the number in the
+    # tooltip, which reads better across sixteen channels anyway and costs a
+    # third of the space.  The floor is not the row -- '00 S M' fits in far
+    # less -- but the amplitude scale in the corner beneath it, which has to
+    # print a signed number and a unit.
+    RAIL_WIDTH = 100
     MAX_SPECTROGRAM_CHANNELS = 4
 
     # y-range policies of the trace panels:
@@ -927,8 +984,16 @@ class DataBrowser(QWidget):
 
             # border:
             border = QGraphicsRectItem()
-            border.setZValue(-1000)
+            # ON TOP, not behind.  At z=-1000 the plots painted over it and
+            # only the parts they did not cover showed through -- the outer
+            # margins -- so the frame read as an open bracket: top and sides
+            # but no bottom edge.  It carries no brush, so on top it costs
+            # exactly the 1 px outline it is meant to be.
+            border.setZValue(1000)
             border.setPen(theme.border_pen(selected=True))
+            # and it must never swallow a click meant for the plot beneath
+            border.setAcceptedMouseButtons(Qt.NoButton)
+            border.setAcceptHoverEvents(False)
             fig.scene().addItem(border)
             fig.sigDeviceRangeChanged.connect(self.update_borders)
             self.borders.append(border)
@@ -1286,7 +1351,7 @@ class DataBrowser(QWidget):
         self.y_readout = QLabel()
         self.y_readout.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         theme.tint(self.y_readout, "fg.muted")
-        self.y_readout.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self.y_readout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.y_readout.setContentsMargins(theme.S4, theme.S4, theme.S4, 0)
         self.y_readout.setToolTip("Amplitude range shown by every lane")
         self.y_readout.setFixedWidth(DataBrowser.RAIL_WIDTH)
@@ -2265,8 +2330,16 @@ class DataBrowser(QWidget):
         alone.
         """
         for c in range(len(self.figs)):
+            # Inset by half the pen width.  A rect at (0, 0, w, h) puts its
+            # edges exactly on the figure's boundary, and a centred pen then
+            # has half its width outside: the bottom and right strokes were
+            # clipped away entirely and the frame read as an open bracket.
+            inset = float(theme.HAIRLINE)
             self.borders[c].setRect(
-                0, 0, self.figs[c].size().width(), self.figs[c].size().height()
+                inset,
+                inset,
+                max(0.0, self.figs[c].size().width() - 2 * theme.HAIRLINE),
+                max(0.0, self.figs[c].size().height() - 2 * theme.HAIRLINE),
             )
             self.borders[c].setVisible(c == self.current_channel)
         # a figure's device range only changes when its geometry does, which
@@ -2376,7 +2449,25 @@ class DataBrowser(QWidget):
         # left axis to zero width, so this is the only place it can be read
         unit = plot.data_unit() if hasattr(plot, "data_unit") else ""
         suffix = f" {unit}" if unit else ""
-        self.y_readout.setText(f"Y {y0:+.3g} \u2026 {y1:+.3g}{suffix}")
+        # A half-span, not the full range.  The rail is 82 px wide and
+        # "Y -0.533 … +0.621 a.u." needs about twice that, so it was being
+        # clipped to "0.621 a.u." -- a number with no sign and no meaning.
+        # What this corner is for is the *scale* of every lane, and +-max
+        # says that in a third of the characters.  The exact range is one
+        # hover away.
+        span = max(abs(y0), abs(y1))
+        text = f"\u00b1{span:.3g}{suffix}"
+        # Elide rather than clip.  A QLabel too narrow for its text simply
+        # cuts it, and a cut number reads as a different number -- which is
+        # exactly what happened when this said "0.621 a.u." with the sign
+        # and the leading digit chopped off.
+        metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
+        self.y_readout.setText(
+            metrics.elidedText(text, Qt.ElideRight, self.y_readout.width() - theme.S8)
+        )
+        self.y_readout.setToolTip(
+            f"Amplitude range shown by every lane: {y0:+.4g} to {y1:+.4g}{suffix}"
+        )
 
     def trace_plot(self, channel: int) -> Optional[TimePlot]:
         """The channel's first visible trace plot, or None."""
