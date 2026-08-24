@@ -8,14 +8,51 @@ import numpy as np
 from audioio import get_datetime
 from thunderlab.dataloader import DataLoader
 
+from . import theme
+from .buffereddata import MinMaxPyramid
 from .bufferedspectrogram import BufferedSpectrogram
 
 
+def count_buffer_loads(loader) -> None:
+    """Give a thunderlab DataLoader a buffer generation counter.
+
+    The min/max pyramid over the raw buffer has to be rebuilt whenever that
+    buffer is refilled.  `move_buffer()` only raises the per-channel
+    `buffer_changed` flags, and every plot item clears its own flag
+    independently, so they cannot drive a single shared rebuild.
+    """
+    loader.buffer_generation = 0
+    inner = loader.load_buffer
+
+    def load_buffer(offset, nframes, buffer):
+        loader.buffer_generation += 1
+        return inner(offset, nframes, buffer)
+
+    loader.load_buffer = load_buffer
+
+
 class Data(object):
+    """All raw data, spectrograms, filtered and derived data of one file."""
+
+    # Byte budget for the raw buffer of a single trace.  60 s of 16 channels
+    # at 20 kHz is 153.6 MB of raw data, the same again filtered and another
+    # 155 MB of spectrogram -- for a view that shows 10 s.  A working set that
+    # size is far outside L3, which is also what makes the strided per-channel
+    # reduceat in TraceItem so expensive.  `buffer_time` is scaled down toward
+    # this budget as channels x rate rises.
+    #
+    # This is a budget, not a hard cap: audioio's `_buffer_position()` expands
+    # the buffer by up to half again when the requested range sits near the
+    # start or the end of the file, so the real peak is ~1.5x.  Measured on
+    # the 16 channel file: 69.7 MB nominal, 93.7 MB at the worst scroll
+    # position -- against 153.6 MB flat before.
+    buffer_bytes = 64 * 1024 * 1024
+    min_buffer_time = 10.0
+    max_buffer_time = 60.0
 
     def __init__(self, file_path, **kwargs):
-        self.buffer_time = 60
-        self.back_time = 20
+        self.buffer_time = Data.max_buffer_time
+        self.back_time = Data.max_buffer_time / 3
         self.follow_time = 0
         self.file_path = file_path
         self.load_kwargs = kwargs
@@ -30,10 +67,8 @@ class Data(object):
         self.traces = []
         self.sources = []
 
-
     def add_trace(self, trace):
         self.traces.append(trace)
-
 
     def remove_trace(self, name):
         t = self[name]
@@ -41,36 +76,29 @@ class Data(object):
             i = self.traces.index(t)
             del self.traces[i]
 
-
     def clear_traces(self):
         self.traces = []
 
-        
     def __del__(self):
         self.close()
 
-            
     def __len__(self):
         return len(self.traces)
 
-            
     def __getitem__(self, key):
         for trace in self.traces:
             if trace.name.lower() == key.lower():
                 return trace
         return None
 
-            
     def __contains__(self, key):
         for trace in self.traces:
             if trace.name.lower() == key.lower():
                 return True
         return False
 
-
     def keys(self):
         return [trace.name for trace in self.traces]
-
 
     def get_trace_names(self, class_name):
         traces = []
@@ -79,14 +107,12 @@ class Data(object):
                 traces.append(trace.name)
         return traces
 
-
     def is_visible(self, name):
         if name in self:
             for pi in self[name].plot_items:
                 if pi is not None and pi.isVisible():
                     return True
         return False
-
 
     def set_visible(self, name, show):
         changed = False
@@ -98,17 +124,16 @@ class Data(object):
                     pi.setVisible(show)
         return changed
 
-    
     def get_region(self, t0, t1, channel):
         traces = {}
         for t in self.traces:
-            i0 = int(t0*t.rate)
+            i0 = int(t0 * t.rate)
             if i0 < 0:
                 i0 = 0
-            i1 = int(t1*t.rate) + 1
+            i1 = int(t1 * t.rate) + 1
             if i1 > len(t):
                 i1 = len(t)
-            time = np.arange(i0, i1)/t.rate
+            time = np.arange(i0, i1) / t.rate
             data = t[i0:i1, channel]
             if isinstance(t, BufferedSpectrogram):
                 freqs = t.frequencies
@@ -116,20 +141,17 @@ class Data(object):
             else:
                 traces[t.name] = (time, data)
         return traces
-    
-        
+
     def setup_traces(self):
-        """ order trace sequence.
-        """
+        """order trace sequence."""
         traces = []
         self.sources = []
         i = -1
         while i < len(traces):
-            sname = traces[i].name if i >= 0 else 'data'
+            sname = traces[i].name if i >= 0 else "data"
             dtraces = []
             for k in range(len(self.traces)):
-                if self.traces[k] is not None and \
-                   self.traces[k].source_name is sname:
+                if self.traces[k] is not None and self.traces[k].source_name is sname:
                     dtraces.append(self.traces[k])
                     self.traces[k] = None
             for t in reversed(dtraces):
@@ -139,16 +161,30 @@ class Data(object):
         if len(traces) < len(self.traces):
             for trace in self.traces:
                 if trace is not None:
-                    print(f'! ERROR: source "{trace.source_name}" for trace "{trace.name}" not found!')
-            print('! the following sources are available:')
-            print('  data')
+                    print(
+                        f'! ERROR: source "{trace.source_name}" for trace "{trace.name}" not found!'
+                    )
+            print("! the following sources are available:")
+            print("  data")
             for source in traces:
-                print(f'  {source.name}')
+                print(f"  {source.name}")
         self.traces = traces
 
-        
+    def scale_buffer_time(self, rate: float, channels: int) -> None:
+        """Shrink `buffer_time` so one raw buffer fits the byte budget.
+
+        The raw buffer is float64, so `buffer_time*rate*channels*8` bytes.
+        Small files keep the full `max_buffer_time`; a 16 channel 20 kHz
+        recording drops from 60 s (153.6 MB) to a bit over 25 s.
+        """
+        if rate <= 0 or channels <= 0:
+            return
+        budget = Data.buffer_bytes / (rate * channels * 8)
+        self.buffer_time = min(Data.max_buffer_time, max(Data.min_buffer_time, budget))
+        self.back_time = self.buffer_time / 3
+
     def open(self, unwrap, unwrap_clip):
-        if not self.data is None:
+        if self.data is not None:
             self.data.close()
         # expand buffer times:
         self.tbefore = 0
@@ -164,30 +200,45 @@ class Data(object):
             else:
                 tbefore[i] = max(tbefore[i], tb)
                 tafter[i] = max(tafter[i], ta)
-        # raw data:        
+        # raw data:
         tbuffer = self.buffer_time + self.tbefore + self.tafter
         tback = self.back_time + self.tbefore
         verbose = isinstance(self.file_path, (list, tuple, np.ndarray))
         try:
-            self.data = DataLoader(self.file_path, tbuffer, tback,
-                                   verbose=verbose,
-                                   **self.load_kwargs)
+            self.data = DataLoader(
+                self.file_path, tbuffer, tback, verbose=verbose, **self.load_kwargs
+            )
         except Exception as e:
             self.data = None
             if isinstance(self.file_path, (list, tuple, np.ndarray)):
                 self.file_path = self.file_path[0]
             raise e
+        # Rate and channel count are only known now, so size the buffer here.
+        # Nothing is allocated until the first update_buffer(), so rewriting
+        # bufferframes/backframes at this point is safe.
+        self.scale_buffer_time(self.data.rate, self.data.channels)
+        self.data.bufferframes = int(
+            (self.buffer_time + self.tbefore + self.tafter) * self.data.rate
+        )
+        self.data.backframes = int((self.back_time + self.tbefore) * self.data.rate)
         self.data.set_unwrap(unwrap, unwrap_clip, False, self.data.unit)
-        self.data.follow = int(self.follow_time*self.data.rate)
-        self.data.name = 'data'
-        self.data.panel = 'trace'
-        self.data.panel_type =  'trace'
-        self.data.plot_items = [None]*self.data.channels
-        self.data.color = '#0000ee'
-        self.data.lw_thin = 1.1
-        self.data.lw_thick = 2
+        self.data.follow = int(self.follow_time * self.data.rate)
+        self.data.name = "data"
+        self.data.panel = "trace"
+        self.data.panel_type = "trace"
+        self.data.plot_items = [None] * self.data.channels
+        self.data.color = theme.trace_color("raw")
+        # lw_thin MUST stay <= 1.0: Qt's raster engine has a fast path for
+        # 1 pixel lines, width 1.1 falls back to QStroker.  Measured on the
+        # 16 channel file: 28.3 ms vs 4.4 ms per repaint (and 908 ms vs
+        # 5.4 ms with antialiasing on).  This is the single largest
+        # wall-clock item in the app; do not "restore" 1.1 for looks.
+        self.data.lw_thin = theme.LW_THIN
+        self.data.lw_thick = theme.LW_THICK
         self.data.dests = []
         self.data.need_update = False
+        count_buffer_loads(self.data)
+        self.data.mip_pyramid = MinMaxPyramid()
         self.traces.insert(0, self.data)
         self.sources = [None] + [i + 1 for i in self.sources]
         self.file_path = self.data.filepath
@@ -202,14 +253,12 @@ class Data(object):
         for trace, source in zip(self.traces[1:], self.sources[1:]):
             trace.open(self.traces[source])
         self.set_need_update()
-                
 
     def close(self):
-        if not self.data is None:
+        if self.data is not None:
             self.data.close()
             self.data = None
 
-            
     def set_need_update(self):
         if self.data is None:
             return
@@ -221,15 +270,13 @@ class Data(object):
         for d in self.data.dests:
             d.set_need_update()
 
-            
     def update_times(self, t0, t1):
         if self.data.need_update:
-            self.data.update_time(t0 - self.tbefore,
-                                  t1 + self.tafter)
+            self.data.update_time(t0 - self.tbefore, t1 + self.tafter)
         for trace in self.traces[1:]:
             if trace.need_update:
                 trace.align_buffer()
-        i0 = int(t0*self.data.rate)
+        i0 = int(t0 * self.data.rate)
         if i0 >= self.data.frames:
             i0 = self.data.frames - 1
         fp, _ = self.data.get_file_index(i0)

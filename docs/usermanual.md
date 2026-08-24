@@ -55,3 +55,43 @@ If you drag a screenshot file onto the audian window, then audian
 moves the displayed window to the position shown in the
 screenshot. The window position is taken from the screenshot's
 metadata.
+
+## Navigator: waveform or activity
+
+The strip below the data plots summarises the whole recording. It has two
+overviews, toggled with `Alt+F6` (*Panels -> Navigator: activity*).
+
+**Waveform** (default) draws the true min/max envelope of every pixel column.
+
+**Activity** answers a different question: *where in this recording did
+something happen, and what kind of something?* A min/max envelope cannot tell
+you that, because a single transient — an eel pulse, a bat click — saturates
+its bin exactly as a continuous signal of the same peak amplitude does. One
+pulse and a thousand pulses draw the same bar.
+
+The activity overview plots two quantities per bin instead, both in dB above
+**one global noise floor** estimated from the whole recording:
+
+- a filled band up to the bin's **RMS excess** — sustained energy: a cricket
+  chirp, a bird phrase, a wave-type EOD. A lone transient contributes only
+  `A²/N` to a bin of `N` samples, so it barely moves this;
+- a spike up to the bin's **peak excess**, drawn only where the bin is
+  classified transient — the crest a delta-like event produces and a
+  continuous signal does not.
+
+So a raised band is sustained activity, thin spikes over a flat band are
+transients, and both together are both.
+
+The reference level is deliberately global rather than per-bin. A per-bin
+baseline renormalises every bin to look equally busy, which destroys the one
+comparison the strip exists to support: a quiet stretch must stay visibly
+quiet.
+
+This assumes at least ~10% of the recording is baseline, which holds for field
+recordings. A recording that is wall-to-wall signal has no noise floor to find,
+and will measure as quiet; the navigator falls back to the waveform envelope
+whenever the statistics are unavailable.
+
+The per-bin statistics are cached beside the min/max overview as a `.stats.npy`
+sidecar. An overview cached before this existed is recompressed once, and both
+are written together from then on.

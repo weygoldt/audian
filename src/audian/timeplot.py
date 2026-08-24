@@ -1,92 +1,234 @@
-"""PlotItem for displaying any data as a function of time.
-"""
+"""PlotItem for displaying any data as a function of time."""
 
 import numpy as np
 import pyqtgraph as pg
 
-from pathlib import Path
 try:
     from PyQt5.QtCore import Signal
 except ImportError:
     from PyQt5.QtCore import pyqtSignal as Signal
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPalette, QColor
-from PyQt5.QtWidgets import QLabel
 
+from . import theme
 from .rangeplot import RangePlot
 from .timeaxisitem import TimeAxisItem
 from .yaxisitem import YAxisItem
 
 
-class TimePlot(RangePlot):
+# Below this view box height the tick values collide with each other and with
+# the in-plot caption, so only the zero line is left.  This is a layout
+# threshold, not a design token - theme.CHANNEL_MIN_HEIGHT (80) is the height a
+# channel *should* get, this is the height below which numbers stop being
+# readable at all.
+TICK_VALUES_MIN_HEIGHT = 48
 
-    def __init__(self, aspec, channel, browser, xwidth, ylabel=''):
-        left_margin = 8*xwidth
+
+class TimePlot(RangePlot):
+    # channel, time, value under the mouse pointer:
+    sigHoverValue = Signal(int, float, float)
+
+    Y_TOP_PAD = 0.06
+    """Extra headroom above the fitted amplitude range, as a fraction of it.
+
+    The in-plot ``CH nn`` caption lives in the top left corner of the view box.
+    Without this the topmost tick label lands on the same scan line as the
+    caption and the two render as one string (``0.2 _CH 01``).  Overridden to
+    zero where the y axis is not an amplitude - a frequency axis has a hard
+    Nyquist ceiling and padding above it would just be a lie with a gap in it.
+    """
+
+    def __init__(self, aspec, channel, browser, xwidth, ylabel=""):
+        self.browser = browser
+        left_margin = theme.AXIS_LEFT_WIDTH
         # axis:
-        bottom_axis = TimeAxisItem(browser.data.data.file_start_times(),
-                                   browser.data.data.file_paths,
-                                   left_margin, orientation='bottom',
-                                   showValues=True)
+        bottom_axis = TimeAxisItem(
+            browser.data.data.file_start_times(),
+            browser.data.data.file_paths,
+            left_margin,
+            orientation="bottom",
+            showValues=True,
+        )
         bottom_axis.set_start_time(browser.data.start_time)
-        top_axis = TimeAxisItem(browser.data.data.file_start_times(),
-                                browser.data.data.file_paths,
-                                left_margin, orientation='top',
-                                showValues=False)
+        top_axis = TimeAxisItem(
+            browser.data.data.file_start_times(),
+            browser.data.data.file_paths,
+            left_margin,
+            orientation="top",
+            showValues=False,
+        )
         top_axis.set_start_time(browser.data.start_time)
-        left_axis = YAxisItem(orientation='left', showValues=True)
-        left_axis.setWidth(left_margin)
-        if ylabel:
-            left_axis.setLabel(ylabel)
-        else:
-            if browser.data.channels > 4:
-                left_axis.setLabel(f'C{channel}')
-            else:
-                left_axis.setLabel(f'channel {channel}')
-        right_axis = YAxisItem(orientation='right', showValues=False)
+        left_axis = YAxisItem(orientation="left", showValues=True)
+        # all channels must line up exactly, so the left axis is fixed:
+        left_axis.setWidth(theme.AXIS_LEFT_WIDTH)
+        right_axis = YAxisItem(orientation="right", showValues=False)
 
         # plot:
-        RangePlot.__init__(self, aspec, channel, browser,
-                           axisItems={'bottom': bottom_axis,
-                                      'top': top_axis,
-                                      'left': left_axis,
-                                      'right': right_axis})
+        RangePlot.__init__(
+            self,
+            aspec,
+            channel,
+            browser,
+            axisItems={
+                "bottom": bottom_axis,
+                "top": top_axis,
+                "left": left_axis,
+                "right": right_axis,
+            },
+        )
 
-        # design:
-        self.getViewBox().setBackgroundColor('black')
+        # channel identity: a horizontal caption inside the view box.  A
+        # rotated left axis label overprints the tick values as soon as rows
+        # get short (16 channels give about 62 px per row).
+        self.caption = ylabel
+        self.current = False
+        self.dense = False
+        self.channel_label = pg.TextItem(text="", anchor=(0, 0))
+        # NOTE: do *not* set QGraphicsItem.ItemIgnoresTransformations here.
+        # pg.TextItem already keeps itself unscaled by applying the inverse
+        # of its parent's transform in updateTransform(); setting the flag
+        # as well applies the correction twice and the text is painted
+        # outside the view - present in sceneBoundingRect(), invisible on
+        # screen.
+        self.channel_label.setZValue(50)
+        self.addItem(self.channel_label, ignoreBounds=True)
+        self._show_tick_values = True
 
-        # time info box:
-        self.time_info = QLabel()
-        self.time_info.setWindowFlags(self.windowFlags()
-                                      | Qt.BypassWindowManagerHint
-                                      | Qt.FramelessWindowHint)
-        self.time_info.setVisible(False)
+        # zero line: the only y reference left once tick values are hidden.
+        self.zeroline = pg.InfiniteLine(angle=0, movable=False)
+        self.zeroline.setPen(theme.zero_pen())
+        self.zeroline.setZValue(-10)
+        self.zeroline.setValue(0)
+        self.addItem(self.zeroline, ignoreBounds=True)
 
         # audio marker:
         self.vmarker = pg.InfiniteLine(angle=90, movable=False)
-        self.vmarker.setPen(pg.mkPen('white', width=2))
+        self.vmarker.setPen(theme.cursor_pen())
         self.vmarker.setZValue(100)
         self.vmarker.setValue(-1)
         self.addItem(self.vmarker, ignoreBounds=True)
 
+        view = self.getViewBox()
+        view.sigRangeChanged.connect(self._place_caption)
+        view.sigResized.connect(self._view_resized)
+        view.sigHoverValue.connect(self._hovered)
 
-    def polish(self):
-        text_color = self.palette().color(QPalette.Text)
-        for axis in ['left', 'right', 'top', 'bottom']:
-            self.getAxis(axis).setPen(style=Qt.NoPen)
-            self.getAxis(axis).setTickPen(style=Qt.SolidLine)
-            self.getAxis(axis).setTextPen(text_color)
-        self.getAxis('left').setLabel(self.getAxis('left').labelText,
-                                      self.getAxis('left').labelUnits,
-                                      color=text_color)
-        self.getAxis('bottom').setLabel(self.getAxis('bottom').labelText,
-                                        self.getAxis('bottom').labelUnits,
-                                        color=text_color)
-        
-        
+        self.dense = theme.is_dense(self.visible_channels())
+        self._update_caption()
+
+    # --- theme -----------------------------------------------------------
+
+    def polish(self) -> None:
+        super().polish()
+        self.vmarker.setPen(theme.cursor_pen())
+        self.zeroline.setPen(theme.zero_pen())
+        self._update_caption()
+        self._style_traces()
+
+    # --- channel emphasis -------------------------------------------------
+
+    def visible_channels(self) -> int:
+        """How many channels are on screen right now.
+
+        Read off the browser rather than cached, because the user can hide and
+        show channels at any time and the stack never rebuilds the plots.
+        """
+        shown = getattr(self.browser, "show_channels", None)
+        if shown:
+            return len(shown)
+        data = getattr(self.browser, "data", None)
+        return int(getattr(data, "channels", 1) or 1)
+
+    def _style_traces(self) -> None:
+        """Push selection and stack density into every trace this plot draws."""
+        for item in self.data_items:
+            if hasattr(item, "set_selected"):
+                item.set_selected(self.current)
+            if hasattr(item, "set_dense"):
+                item.set_dense(self.dense)
+
+    def add_item(self, item, is_data=False):
+        super().add_item(item, is_data)
+        if is_data:
+            self._style_traces()
+
+    # --- caption and layout ----------------------------------------------
+
+    def set_current(self, is_current: bool) -> None:
+        """Highlight this plot as the current channel.
+
+        The selected channel is the only one drawn in a saturated colour, so
+        that in a sixteen lane stack the eye lands on it without hunting.
+        Colour alone never carries meaning: the caption also switches to bold,
+        and the channel rail marks the same row with a 2 px rule.
+        """
+        is_current = bool(is_current)
+        if is_current == self.current:
+            return
+        self.current = is_current
+        self._update_caption()
+        self._style_traces()
+
+    def set_caption(self, caption: str) -> None:
+        """Set the text shown after the channel number in the corner caption."""
+        self.caption = caption
+        self._update_caption()
+
+    def caption_text(self) -> str:
+        text = f"CH {self.channel:02d}"
+        if self.caption:
+            text += f"   {self.caption}"
+        return text
+
+    def _update_caption(self) -> None:
+        color = theme.qcolor("primary" if self.current else "fg.muted")
+        self.channel_label.setColor(color)
+        self.channel_label.setFont(
+            theme.font_mono(theme.SIZE_SMALL_PT, bold=self.current)
+        )
+        self.channel_label.setText(self.caption_text())
+        self._place_caption()
+
+    def _place_caption(self) -> None:
+        """Inset the caption from the view box corner.
+
+        S8 from the left, not S4: the left axis right-aligns its tick labels
+        hard against the view box edge, so a 4 px inset puts the caption's
+        first glyph one pixel from the ``0.2`` tick's dash and the two read as
+        a single string.  S4 from the top pairs with `Y_TOP_PAD`, which keeps
+        the topmost tick out from under the caption in the first place.
+        """
+        view = self.getViewBox()
+        (x0, x1), (y0, y1) = view.viewRange()
+        width = max(view.width(), 1)
+        height = max(view.height(), 1)
+        dx = (x1 - x0) * theme.S8 / width
+        dy = (y1 - y0) * theme.S4 / height
+        self.channel_label.setPos(x0 + dx, y1 - dy)
+
+    def _view_resized(self) -> None:
+        self._place_caption()
+        dense = theme.is_dense(self.visible_channels())
+        if dense != self.dense:
+            self.dense = dense
+            self._style_traces()
+        show = self.getViewBox().height() >= TICK_VALUES_MIN_HEIGHT
+        if show != self._show_tick_values:
+            self._show_tick_values = show
+            self.getAxis("left").setStyle(showValues=show)
+            # Below the threshold the caption has nowhere to sit except on
+            # top of the waveform.  Sixteen channels at 34 px is exactly
+            # that case, and the channel rail already names every row, so
+            # the in-plot caption is redundant there rather than missing.
+            self.channel_label.setVisible(show)
+
+    def _hovered(self, x, y) -> None:
+        self.sigHoverValue.emit(self.channel, float(x), float(y))
+
+    # --- ranges -----------------------------------------------------------
+
     def range(self, axspec):
         if axspec == self.x():
             if len(self.data_items) > 0:
-                tmax = self.data_items[0].data.frames/self.data_items[0].data.rate
+                tmax = self.data_items[0].data.frames / self.data_items[0].data.rate
                 return 0, tmax, min(10, tmax)
             else:
                 return 0, None, 10
@@ -107,27 +249,38 @@ class TimePlot(RangePlot):
                 amax = +1
             return amin, amax, astep
 
-
     def amplitudes(self, t0, t1):
+        """Data range in `[t0, t1)`, plus `Y_TOP_PAD` headroom at the top.
+
+        This is what `PlotRanges.auto_fit()` fits the y range to, so it is the
+        only place that can reserve the strip the in-plot caption sits in.
+        """
         amin = None
         amax = None
         for item in self.data_items:
-            i0 = int(np.round(t0*item.rate))
-            i1 = int(np.round(t1*item.rate))
+            if not item.isVisible():
+                continue
+            i0 = int(np.round(t0 * item.rate))
+            i1 = int(np.round(t1 * item.rate))
+            i0 = max(i0, 0)
+            i1 = min(i1, len(item.data))
+            if i1 <= i0:
+                continue
             a0 = np.min(item.data[i0:i1, item.channel])
             a1 = np.max(item.data[i0:i1, item.channel])
             if amin is None or a0 < amin:
                 amin = a0
             if amax is None or a1 > amax:
                 amax = a1
+        if amin is not None and amax is not None and amax > amin:
+            amax += self.Y_TOP_PAD * (amax - amin)
         return amin, amax
 
-    
     def get_marker_pos(self, x, dx, y, dy):
         for item in reversed(self.data_items):
             if item.isVisible():
-                i0 = max(int(np.round(x*item.rate)), 0)
-                i1 = max(int(np.round((x + dx)*item.rate)), i0 + 1)
+                i0 = max(int(np.round(x * item.rate)), 0)
+                i1 = max(int(np.round((x + dx) * item.rate)), i0 + 1)
                 if i1 > len(item.data):
                     i1 = len(item.data)
                 if i1 <= i0:
@@ -138,56 +291,13 @@ class TimePlot(RangePlot):
                 k1 = i0 + np.argmax(item.data[i0:i1, item.channel])
                 y0 = item.data[k0, item.channel]
                 y1 = item.data[k1, item.channel]
-                yc = (y0 + y1)/2
+                yc = (y0 + y1) / 2
                 if y >= yc:
-                    return k1/item.rate, y1, None
+                    return k1 / item.rate, y1, None
                 else:
-                    return k0/item.rate, y0, None
-        return x0, y, None
-
+                    return k0 / item.rate, y0, None
+        return x, y, None
 
     def set_starttime(self, mode):
-        self.getAxis('bottom').set_starttime_mode(mode)
-        self.getAxis('top').set_starttime_mode(mode)
-        
-
-    def show_times(self, screen_pos, pixel_pos):
-        brect = self.boundingRect()
-        brect.setBottom(brect.bottom() - 10)
-        if not brect.contains(pixel_pos):
-            self.time_info.setVisible(False)
-            return
-        pos = self.getViewBox().mapSceneToView(pixel_pos)
-        [xmin, xmax], [ymin, ymax] = self.viewRange()
-        if xmin <= pos.x() <= xmax and pos.y() < ymin:
-            deltax = xmax - xmin
-            spacing = 0.001 if deltax < 100 else 1
-            ts = '<style type="text/css"> td { padding: 0 4px; } </style>'
-            ts += f'<table>'
-            taxis = self.getAxis('bottom')
-            nm = 0
-            for sm in range(3):
-                label, units, vals, fname = \
-                    taxis.makeStrings([pos.x()], 1, spacing, sm, True)
-                if sm > 0 and label == 'REC':
-                    continue
-                if label == 'File':
-                    fname = Path(fname).name
-                else:
-                    fname = ''
-                ts += f'<tr><td>{label}</td><td>({units})</td><td align="right"><b>{vals[0]}</b></td><td>{fname}</td></tr>'
-                nm += 1
-            ts += '</table>'
-            if nm <= 1:
-                self.time_info.setVisible(False)
-                return
-            self.time_info.setText(ts)
-            self.time_info.setVisible(True)
-            x = screen_pos.x() + pixel_pos.x() + 1
-            if x + self.time_info.width() > screen_pos.x() + self.width():
-                x = screen_pos.x() + self.width() - self.time_info.width()
-            y = screen_pos.y() + pixel_pos.y() + 10
-            self.time_info.move(int(x), int(y))
-        else:
-            self.time_info.setVisible(False)
-
+        self.getAxis("bottom").set_starttime_mode(mode)
+        self.getAxis("top").set_starttime_mode(mode)

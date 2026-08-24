@@ -7,7 +7,25 @@
 import pyqtgraph as pg
 
 from math import floor, log10
+from typing import Optional
 from thunderlab.tabledata import TableData
+
+from . import theme
+
+
+def style_result_table(table: pg.TableWidget) -> None:
+    """Put a table of analysis results into the mono numeric face.
+
+    Every number a user compares column-wise needs aligning digits.
+    """
+    table.setFont(theme.font_mono())
+    table.setMinimumHeight(10 * theme.TOOLBAR_HEIGHT)
+    header = table.horizontalHeader()
+    if header is not None:
+        header.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+    vheader = table.verticalHeader()
+    if vheader is not None:
+        vheader.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
 
 
 class Analyzer(object):
@@ -66,19 +84,19 @@ class Analyzer(object):
 
     Methods
     -------
-    - `analyze()`: Analysis function. 
-    - `traces()`: Names of all available data traces. 
+    - `analyze()`: Analysis function.
+    - `traces()`: Names of all available data traces.
     - `trace()`: Full data trace of a given name
     - `make_column()`: Make a column for the table collecting the analysis results.
-    - `store()`: Store analysis results in table. 
+    - `store()`: Store analysis results in table.
     - `make_trace_events()`: Prepare events for plotting on top of a specific trace.
-    - `make_panel_events()`: Prepare events for plotting in a specific panel. 
-    - `set_events()`: Plot event markers. 
+    - `make_panel_events()`: Prepare events for plotting in a specific panel.
+    - `set_events()`: Plot event markers.
     - `add_events()`: Plot additional event markers.
 
     """
 
-    def __init__(self, browser, name, source_name):
+    def __init__(self, browser, name: str, source_name: str):
         self.browser = browser
         self.name = name
         self.source_name = source_name
@@ -87,16 +105,13 @@ class Analyzer(object):
         self.events = {}
         self.browser.add_analyzer(self)
 
-
     def clear(self):
-        """Clear the data table and the markers.
-        """
+        """Clear the data table and the markers."""
         self.data.clear_data()
         for name in self.events:
             for c in range(len(self.events[name])):
                 self.events[name][c].clear()
 
-        
     def analyze(self, t0, t1, channel, traces):
         """Analysis function.
 
@@ -118,10 +133,9 @@ class Analyzer(object):
         """
         pass
 
-
     def traces(self):
         """Names of all available data traces.
-        
+
         Returns
         -------
         traces: list of str
@@ -129,8 +143,7 @@ class Analyzer(object):
         """
         return self.browser.data.keys()
 
-
-    def trace(self, name):
+    def trace(self, name: str) -> Optional[object]:
         """Full data trace of a given name.
 
         Parameters
@@ -147,7 +160,6 @@ class Analyzer(object):
             return self.browser.data[name]
         else:
             return None
-
 
     def make_column(self, label, unit=None, formats=None):
         """Make a column for the table collecting the analysis results.
@@ -166,7 +178,6 @@ class Analyzer(object):
         """
         self.data.append(label, unit, formats)
 
-        
     def store(self, *args):
         """Store analysis results in table.
 
@@ -182,7 +193,6 @@ class Analyzer(object):
         """
         self.data.add(args, 0)
 
-        
     def make_trace_events(self, name, trace_name, symbol, color, size):
         """Prepare events for plotting on top of a specific trace.
 
@@ -216,7 +226,6 @@ class Analyzer(object):
             self.events[name].append(spi)
             self.browser.add_to_panel_trace(trace_name, c, spi)
 
-        
     def make_panel_events(self, name, panel_name, symbol, color, size):
         """Prepare events for plotting in a specific panel.
 
@@ -251,7 +260,6 @@ class Analyzer(object):
             self.events[name].append(spi)
             ax.add_item(spi)
 
-        
     def set_events(self, name, channel, x, y):
         """Plot event markers.
 
@@ -279,8 +287,7 @@ class Analyzer(object):
                 self.events[name][c].setData(x, y)
             else:
                 self.events[name][c].clear()
-        
-        
+
     def add_events(self, name, channel, x, y):
         """Plot additional event markers.
 
@@ -306,8 +313,8 @@ class Analyzer(object):
         for c in range(self.browser.data.data.channels):
             if c == channel or channel < 0:
                 self.events[name][c].addPoints(x, y)
-        
-        
+
+
 class PlainAnalyzer(Analyzer):
     """Implementation of an Analyzer that stores the analysis window into the table.
 
@@ -327,19 +334,15 @@ class PlainAnalyzer(Analyzer):
     """
 
     def __init__(self, browser):
-        super().__init__(browser, 'plain', 'data')
-        nd = int(floor(-log10(1/self.source.rate)))
+        super().__init__(browser, "plain", "data")
+        nd = int(floor(-log10(1 / self.source.rate)))
         if nd < 0:
             nd = 0
-        self.make_column('tstart', 's', f'%.{nd}f')
-        self.make_column('tend', 's', f'%.{nd}f')
-        self.make_column('duration', 's', f'%.{nd}f')
-        self.make_column('channel', '', '%.0f')
+        self.make_column("tstart", "s", f"%.{nd}f")
+        self.make_column("tend", "s", f"%.{nd}f")
+        self.make_column("duration", "s", f"%.{nd}f")
+        self.make_column("channel", "", "%.0f")
 
-        
     def analyze(self, t0, t1, channel, traces):
-        """Analyze the selected region.
-        """
+        """Analyze the selected region."""
         self.store(t0, t1, t1 - t0, channel)
-
-        

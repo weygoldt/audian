@@ -60,3 +60,11 @@ version = {attr = "audian.version.__version__"}
 
 [tool.pytest.ini_options]
 pythonpath = "src"
+
+[tool.ruff.format]
+# The overhaul left the tree split between single quotes (the older
+# modules) and ruff's default double quotes (theme.py and everything
+# written against it).  Double wins because it is the default: a
+# contributor who runs `ruff format` with no arguments gets the same
+# result as CI does.
+quote-style = "double"
