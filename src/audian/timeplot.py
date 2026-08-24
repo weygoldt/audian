@@ -22,6 +22,19 @@ from .yaxisitem import YAxisItem
 TICK_VALUES_MIN_HEIGHT = 48
 
 
+#: Units pyqtgraph may rescale and prefix.  Everything else is shown
+#: verbatim: it prefixes whatever string it is given, so a non-SI unit such
+#: as ``a.u.`` becomes ``ma.u.`` with the tick values silently multiplied.
+SI_UNITS = frozenset(
+    {"V", "A", "s", "m", "g", "N", "J", "W", "C", "F", "T", "K", "Hz", "Pa", "Ohm"}
+)
+
+
+def si_prefixable(unit: str) -> bool:
+    """Whether `unit` is an SI unit pyqtgraph can safely prefix."""
+    return str(unit).strip() in SI_UNITS
+
+
 class TimePlot(RangePlot):
     # channel, time, value under the mouse pointer:
     sigHoverValue = Signal(int, float, float)
@@ -121,6 +134,7 @@ class TimePlot(RangePlot):
         self.vmarker.setPen(theme.cursor_pen())
         self.zeroline.setPen(theme.zero_pen())
         self._update_caption()
+        self.update_axis_label()
         self._style_traces(retheme=True)
 
     # --- channel emphasis -------------------------------------------------
@@ -162,6 +176,7 @@ class TimePlot(RangePlot):
         super().add_item(item, is_data)
         if is_data:
             self._style_traces()
+            self.update_axis_label()
 
     # --- caption and layout ----------------------------------------------
 
@@ -190,6 +205,46 @@ class TimePlot(RangePlot):
         if self.caption:
             text += f"   {self.caption}"
         return text
+
+    def data_unit(self) -> str:
+        """Unit of the traces this panel draws, from the recording metadata.
+
+        Empty when nothing is drawn yet or the loader reports no unit.  A
+        wav with no unit metadata comes back as ``a.u.`` from thunderlab,
+        which is worth showing: "arbitrary units" is a real statement about
+        the recording, not a missing value.
+        """
+        for item in self.data_items:
+            unit = getattr(getattr(item, "data", None), "unit", "")
+            if unit:
+                return str(unit)
+        return ""
+
+    def update_axis_label(self) -> None:
+        """Put the amplitude unit on the left axis.
+
+        Only when the axis is actually showing tick values: in a dense stack
+        it is collapsed to zero width, and a label there would be painted
+        into a column that does not exist.  The stack's shared Y readout
+        carries the unit for that case instead.
+        """
+        axis = self.getAxis("left")
+        unit = self.data_unit()
+        if not (self._show_tick_values and unit):
+            axis.setLabel(None)
+            return
+        if si_prefixable(unit):
+            # a real SI unit: let pyqtgraph rescale the ticks and prefix it
+            axis.enableAutoSIPrefix(True)
+            axis.setLabel("amplitude", unit, color=theme.token("fg.muted"))
+        else:
+            # Anything else must be shown verbatim.  pyqtgraph prefixes ANY
+            # string it is handed as a unit: "a.u." -- what thunderlab reports
+            # for a wav carrying no unit metadata -- came out as "ma.u.", with
+            # the ticks rescaled by 1000, disagreeing with the stack's own Y
+            # readout directly underneath.
+            axis.enableAutoSIPrefix(False)
+            axis.setLabel(f"amplitude ({unit})", color=theme.token("fg.muted"))
 
     def _update_caption(self) -> None:
         color = theme.qcolor("primary" if self.current else "fg.muted")
@@ -227,6 +282,7 @@ class TimePlot(RangePlot):
         if show != self._show_tick_values:
             self._show_tick_values = show
             self.getAxis("left").setStyle(showValues=show)
+            self.update_axis_label()
             # Below the threshold the caption has nowhere to sit except on
             # top of the waveform.  Sixteen channels at 34 px is exactly
             # that case, and the channel rail already names every row, so

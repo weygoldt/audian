@@ -499,6 +499,12 @@ class DataBrowser(QWidget):
     MODE_SAVE = 3
     MODE_ASK = 4
 
+    #: Play only the current channel, in mono.
+    AUDIO_SELECTED = "selected"
+    #: Play every shown channel, mixed down to stereo: the first half of
+    #: them averaged into the left ear, the second half into the right.
+    AUDIO_SHOWN = "shown"
+
     sigRangesChanged = Signal(object, object)
     sigFilenameChanged = Signal(object, str)
     sigResolutionChanged = Signal()
@@ -507,6 +513,7 @@ class DataBrowser(QWidget):
     sigEnvelopeChanged = Signal()
     sigTraceChanged = Signal(object, object, object)
     sigAudioChanged = Signal(object, object, object)
+    sigAudioSourceChanged = Signal(object)
 
     def __init__(
         self,
@@ -548,6 +555,11 @@ class DataBrowser(QWidget):
         # channel selection:
         self.show_channels = None
         self.current_channel = 0
+        # What playback sends to the speakers.  "selected" is the default:
+        # averaging eight electrodes of an array into one ear is not a
+        # signal anybody wants to listen to, and the point of selecting a
+        # channel is usually to hear that channel.
+        self.audio_source = DataBrowser.AUDIO_SELECTED
         self.selected_channels = []
         # non-destructive filters over show_channels:
         self.solo_channels = []
@@ -605,6 +617,7 @@ class DataBrowser(QWidget):
         self.hover_panel = None
         self.hover_channel = 0
         self.audiofacw = None
+        self.audiosrcw = None
         self.nfftw = None
         self.ofracw = None
         self.ofraclabelw = None
@@ -1488,6 +1501,23 @@ class DataBrowser(QWidget):
 
         # audio playback:
         group = ParameterGroup("Audio", self.parambar)
+        self.audiosrcw = QComboBox(self.parambar)
+        self.audiosrcw.setToolTip(
+            "What playback sends to the speakers: the current channel on its "
+            "own, or every shown channel mixed down to stereo"
+        )
+        self.audiosrcw.addItems(["selected channel", "all shown (stereo mix)"])
+        self.audiosrcw.setEditable(False)
+        self.audiosrcw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        self.audiosrcw.setCurrentIndex(
+            0 if self.audio_source == DataBrowser.AUDIO_SELECTED else 1
+        )
+        self.audiosrcw.currentIndexChanged.connect(
+            lambda i: self.set_audio_source(
+                DataBrowser.AUDIO_SELECTED if i == 0 else DataBrowser.AUDIO_SHOWN
+            )
+        )
+        group.add_row("Source", "⇧P", self.audiosrcw)
         self.audiofacw = QComboBox(self.parambar)
         self.audiofacw.setToolTip("Audio time expansion factor")
         self.audiofacw.addItems(
@@ -2342,7 +2372,11 @@ class DataBrowser(QWidget):
         if plot is None:
             return
         y0, y1 = plot.getViewBox().viewRange()[1]
-        self.y_readout.setText(f"Y {y0:+.3g} \u2026 {y1:+.3g}")
+        # the unit rides here because a dense stack collapses the per-lane
+        # left axis to zero width, so this is the only place it can be read
+        unit = plot.data_unit() if hasattr(plot, "data_unit") else ""
+        suffix = f" {unit}" if unit else ""
+        self.y_readout.setText(f"Y {y0:+.3g} \u2026 {y1:+.3g}{suffix}")
 
     def trace_plot(self, channel: int) -> Optional[TimePlot]:
         """The channel's first visible trace plot, or None."""
@@ -3430,6 +3464,41 @@ class DataBrowser(QWidget):
                 self.audio_heterodyne_freq,
             )
 
+    def audio_channels(self) -> list:
+        """Channels playback will send to the speakers.
+
+        Falls back to the shown channels when the current channel is hidden,
+        so pressing play never produces silence.
+        """
+        shown = list(self.show_channels) or list(range(self.data.channels))
+        if self.audio_source == DataBrowser.AUDIO_SELECTED:
+            if self.current_channel in shown:
+                return [self.current_channel]
+            return [shown[0]]
+        return shown
+
+    def set_audio_source(self, source: str, dispatch: bool = True) -> None:
+        """Choose between hearing the selected channel and hearing the mix."""
+        if source not in (DataBrowser.AUDIO_SELECTED, DataBrowser.AUDIO_SHOWN):
+            return
+        self.audio_source = source
+        if self.audiosrcw is not None:
+            index = 0 if source == DataBrowser.AUDIO_SELECTED else 1
+            if self.audiosrcw.currentIndex() != index:
+                blocked = self.audiosrcw.blockSignals(True)
+                self.audiosrcw.setCurrentIndex(index)
+                self.audiosrcw.blockSignals(blocked)
+        if dispatch:
+            self.sigAudioSourceChanged.emit(source)
+
+    def toggle_audio_source(self) -> None:
+        """Flip between the selected channel and the full mix."""
+        self.set_audio_source(
+            DataBrowser.AUDIO_SHOWN
+            if self.audio_source == DataBrowser.AUDIO_SELECTED
+            else DataBrowser.AUDIO_SELECTED
+        )
+
     def play_region(self, t0, t1):
         data = self.data["filtered"] if "filtered" in self.data else self.data["data"]
         rate = data.rate
@@ -3441,11 +3510,15 @@ class DataBrowser(QWidget):
         if i1 > len(data):
             i1 = len(data)
             t1 = i1 / rate
-        n2 = (len(self.show_channels) + 1) // 2
-        playdata = np.zeros((i1 - i0, min(2, len(self.show_channels))))
-        playdata[:, 0] = np.mean(data[i0:i1, self.show_channels[:n2]], 1)
-        if len(self.show_channels) > 1:
-            playdata[:, 1] = np.mean(data[i0:i1, self.show_channels[n2:]], 1)
+        played = self.audio_channels()
+        if self.audio_source == DataBrowser.AUDIO_SELECTED:
+            playdata = np.asarray(data[i0:i1, played[0]], dtype=float).reshape(-1, 1)
+        else:
+            n2 = (len(played) + 1) // 2
+            playdata = np.zeros((i1 - i0, min(2, len(played))))
+            playdata[:, 0] = np.mean(data[i0:i1, played[:n2]], 1)
+            if len(played) > 1:
+                playdata[:, 1] = np.mean(data[i0:i1, played[n2:]], 1)
         if self.audio_use_heterodyne:
             # multiply with heterodyne frequency:
             heterodyne = np.sin(
@@ -3465,8 +3538,9 @@ class DataBrowser(QWidget):
         self.audio_time = t0
         self.audio_tmax = t1
         self.audio_timer.start(50)
+        # the cursor runs only on the channels actually being heard
         for c in range(data.channels):
-            atime = self.audio_time if c in self.show_channels else -1
+            atime = self.audio_time if c in played else -1
             for vmarker in self.audio_markers[c]:
                 vmarker.setValue(atime)
 

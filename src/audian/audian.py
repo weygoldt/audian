@@ -2530,6 +2530,17 @@ class Audian(QMainWindow):
         self.acts.play_window = QAction("&Play window", self)
         self._set_glyph(self.acts.play_window, "play")
         self.acts.play_window.setToolTip("Play window (Space)")
+
+        self.acts.audio_source = QAction("Play &selected channel only", self)
+        self.acts.audio_source.setCheckable(True)
+        self.acts.audio_source.setChecked(True)
+        self.acts.audio_source.setShortcut("Shift+P")
+        self.acts.audio_source.setToolTip(
+            "Send only the current channel to the speakers, instead of every "
+            "shown channel mixed down to stereo"
+        )
+        self.acts.audio_source.triggered.connect(self.toggle_audio_source)
+        self.data_acts.append(self.acts.audio_source)
         self.acts.play_window.setShortcut(" ")
         self.acts.play_window.triggered.connect(
             lambda x=0: self.browser().play_scroll()
@@ -2577,6 +2588,7 @@ class Audian(QMainWindow):
         region_menu.addAction(self.acts.cross_hair)
         region_menu.addSeparator()
         region_menu.addAction(self.acts.play_window)
+        region_menu.addAction(self.acts.audio_source)
         region_menu.addAction(self.acts.use_heterodyne)
         # region_menu.addSeparator()
         # region_menu.addAction(self.acts.label_editor)
@@ -3519,6 +3531,33 @@ class Audian(QMainWindow):
 
         return panel_menu
 
+    def sync_audio_source(self, browser) -> None:
+        """Keep the menu check in step with the browser being shown."""
+        if isinstance(browser, DataBrowser) and hasattr(self.acts, "audio_source"):
+            self.acts.audio_source.setChecked(
+                browser.audio_source == DataBrowser.AUDIO_SELECTED
+            )
+
+    def toggle_audio_source(self):
+        """Flip playback between the selected channel and the full mix."""
+        browser = self.browser()
+        if not isinstance(browser, DataBrowser):
+            return
+        browser.toggle_audio_source()
+        self.sync_audio_source(browser)
+        self.statusBar().showMessage(
+            "Playing the selected channel"
+            if browser.audio_source == DataBrowser.AUDIO_SELECTED
+            else "Playing all shown channels, mixed to stereo",
+            2500,
+        )
+
+    def dispatch_audio_source(self, source):
+        if self.link_audio:
+            for b in self.browsers:
+                if b is not self.browser() and isinstance(b, DataBrowser):
+                    b.set_audio_source(source, False)
+
     def dispatch_audio(self, rate_fac, use_heterodyne, heterodyne_freq):
         if self.link_audio:
             for b in self.browsers:
@@ -3762,6 +3801,7 @@ class Audian(QMainWindow):
             browser.sigEnvelopeChanged.connect(self.dispatch_envelope)
             browser.sigTraceChanged.connect(self.dispatch_trace)
             browser.sigAudioChanged.connect(self.dispatch_audio)
+            browser.sigAudioSourceChanged.connect(self.dispatch_audio_source)
             browser.set_starttime_mode(self.starttime_mode)
             pb = self.browser() if self.prev_browser is None else self.prev_browser
             if self.link_panels:

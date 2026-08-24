@@ -141,3 +141,38 @@ With a single file open the strip hides itself entirely.
 
 `Ctrl+PgUp` / `Ctrl+PgDown` move between tabs, `Ctrl+W` closes the current
 one, and each tab carries a close mark on its right.
+
+
+## Playback
+
+`Space` plays the visible window; dragging a region in Play mode plays that
+region.
+
+**What gets played** is set by *Audio → Source* in the parameter bar, or
+`Shift+P`:
+
+- **selected channel** (default) — the current channel alone, in mono. This
+  is what you want on an electrode array: averaging eight electrodes into one
+  ear is not a signal anybody needs to hear.
+- **all shown (stereo mix)** — every visible channel, the first half averaged
+  into the left ear and the second half into the right. Useful for a stereo
+  field recording, which is what the original behaviour assumed.
+
+The playback cursor runs only on the channels actually being heard.
+
+
+## Axis labels
+
+The amplitude axis is labelled with the unit the recording carries in its
+metadata — `amplitude (mV)`, `amplitude (a.u.)` and so on. A wav with no unit
+metadata reads as `a.u.`, which is a real statement about the recording rather
+than a missing value, so it is shown.
+
+In a dense stack the per-lane axis is collapsed to reclaim its width, and the
+unit rides on the stack's single amplitude readout in the bottom-left corner
+instead.
+
+Note that only genuine SI units are rescaled and prefixed (`V` → `mV`).
+Anything else is shown verbatim: pyqtgraph will happily prefix any string it
+is handed, which turned `a.u.` into `ma.u.` with every tick multiplied by a
+thousand.
