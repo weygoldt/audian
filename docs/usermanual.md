@@ -154,14 +154,17 @@ region.
 - **selected channel** (default) — the current channel alone, in mono. This
   is what you want on an electrode array: averaging eight electrodes into one
   ear is not a signal anybody needs to hear.
+- **channel pair (L/R)** — one channel in each ear, chosen explicitly in the
+  **Pair** row that appears below. Nothing is averaged, and the pair does not
+  follow visibility: hiding a lane never silently changes what you are
+  hearing, which is the point of choosing it by hand.
 - **all shown (stereo mix)** — every visible channel, the first half averaged
   into the left ear and the second half into the right. Useful for a stereo
-  field recording, which is what the original behaviour assumed.
+  field recording, which is what the original behaviour assumed. On a
+  16-electrode file this is the mean of eight electrodes per ear, so it is
+  rarely what you want there.
 
-There is no separate "pick two channels" control, because the mix already
-follows the **shown** channels: solo or hide until exactly two remain and
-those two become left and right. On a 16-electrode file, solo channel 3 and
-channel 9 and you are listening to that pair in stereo.
+`Shift+P` steps through the three.
 
 The playback cursor runs only on the channels actually being heard.
 

@@ -561,6 +561,11 @@ class DataBrowser(QWidget):
     #: Play every shown channel, mixed down to stereo: the first half of
     #: them averaged into the left ear, the second half into the right.
     AUDIO_SHOWN = "shown"
+    #: Play one explicitly chosen channel in each ear.  Unlike AUDIO_SHOWN
+    #: this averages nothing and does not care which channels are visible:
+    #: the pair is a deliberate choice, so hiding a channel must not
+    #: silently change what is being heard.
+    AUDIO_PAIR = "pair"
 
     sigRangesChanged = Signal(object, object)
     sigFilenameChanged = Signal(object, str)
@@ -571,6 +576,7 @@ class DataBrowser(QWidget):
     sigTraceChanged = Signal(object, object, object)
     sigAudioChanged = Signal(object, object, object)
     sigAudioSourceChanged = Signal(object)
+    sigAudioPairChanged = Signal(object, object)
 
     def __init__(
         self,
@@ -617,6 +623,8 @@ class DataBrowser(QWidget):
         # signal anybody wants to listen to, and the point of selecting a
         # channel is usually to hear that channel.
         self.audio_source = DataBrowser.AUDIO_SELECTED
+        self.audio_left = 0
+        self.audio_right = min(1, max(0, self.data.channels - 1))
         self.selected_channels = []
         # non-destructive filters over show_channels:
         self.solo_channels = []
@@ -675,6 +683,9 @@ class DataBrowser(QWidget):
         self.hover_channel = 0
         self.audiofacw = None
         self.audiosrcw = None
+        self.audioleftw = None
+        self.audiorightw = None
+        self.audiopairw = None
         self.nfftw = None
         self.ofracw = None
         self.ofraclabelw = None
@@ -1571,18 +1582,53 @@ class DataBrowser(QWidget):
             "What playback sends to the speakers: the current channel on its "
             "own, or every shown channel mixed down to stereo"
         )
-        self.audiosrcw.addItems(["selected channel", "all shown (stereo mix)"])
+        self.audiosrcw.addItems(list(DataBrowser.AUDIO_SOURCE_LABELS))
         self.audiosrcw.setEditable(False)
         self.audiosrcw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.audiosrcw.setCurrentIndex(
-            0 if self.audio_source == DataBrowser.AUDIO_SELECTED else 1
+            DataBrowser.AUDIO_SOURCES.index(self.audio_source)
         )
         self.audiosrcw.currentIndexChanged.connect(
-            lambda i: self.set_audio_source(
-                DataBrowser.AUDIO_SELECTED if i == 0 else DataBrowser.AUDIO_SHOWN
-            )
+            lambda i: self.set_audio_source(DataBrowser.AUDIO_SOURCES[i])
         )
         group.add_row("Source", "⇧P", self.audiosrcw)
+
+        # the explicit stereo pair, revealed only when it is the source
+        # a plain QWidget paints no background unless it is told to, which
+        # is what we want here: the row sits on the parameter band's ground
+        self.audiopairw = QWidget(self.parambar)
+        pair = QHBoxLayout(self.audiopairw)
+        pair.setContentsMargins(0, 0, 0, 0)
+        pair.setSpacing(theme.S6)
+        channels = [f"ch {c:02d}" for c in range(self.data.channels)]
+        for side, tip in (
+            ("left", "Channel sent to the LEFT ear"),
+            ("right", "Channel sent to the RIGHT ear"),
+        ):
+            label = QLabel("L" if side == "left" else "R", self.audiopairw)
+            label.setFont(theme.font_mono(theme.SIZE_SMALL_PT, bold=True))
+            theme.tint(label, "fg.muted")
+            combo = QComboBox(self.audiopairw)
+            combo.addItems(channels)
+            combo.setEditable(False)
+            combo.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+            combo.setToolTip(tip)
+            combo.setCurrentIndex(
+                self.audio_left if side == "left" else self.audio_right
+            )
+            combo.currentIndexChanged.connect(
+                (lambda i: self.set_audio_pair(left=i))
+                if side == "left"
+                else (lambda i: self.set_audio_pair(right=i))
+            )
+            pair.addWidget(label)
+            pair.addWidget(combo, 1)
+            if side == "left":
+                self.audioleftw = combo
+            else:
+                self.audiorightw = combo
+        self.audiopairw.setVisible(self.audio_source == DataBrowser.AUDIO_PAIR)
+        group.add_row("Pair", "", self.audiopairw)
         self.audiofacw = QComboBox(self.parambar)
         self.audiofacw.setToolTip("Audio time expansion factor")
         self.audiofacw.addItems(
@@ -3556,11 +3602,16 @@ class DataBrowser(QWidget):
             )
 
     def audio_channels(self) -> list:
-        """Channels playback will send to the speakers.
+        """Channels playback will send to the speakers, in output order.
 
-        Falls back to the shown channels when the current channel is hidden,
-        so pressing play never produces silence.
+        Falls back to the shown channels when the *current* channel is
+        hidden, so pressing play never produces silence.  An explicitly
+        chosen pair is never overridden that way: the point of choosing it
+        is that hiding a lane does not change what you are listening to.
         """
+        last = max(0, self.data.channels - 1)
+        if self.audio_source == DataBrowser.AUDIO_PAIR:
+            return [min(self.audio_left, last), min(self.audio_right, last)]
         shown = list(self.show_channels) or list(range(self.data.channels))
         if self.audio_source == DataBrowser.AUDIO_SELECTED:
             if self.current_channel in shown:
@@ -3568,27 +3619,64 @@ class DataBrowser(QWidget):
             return [shown[0]]
         return shown
 
+    def set_audio_pair(self, left=None, right=None, dispatch: bool = True) -> None:
+        """Choose the channel in each ear for `AUDIO_PAIR` playback."""
+        last = max(0, self.data.channels - 1)
+        if left is not None:
+            self.audio_left = max(0, min(int(left), last))
+        if right is not None:
+            self.audio_right = max(0, min(int(right), last))
+        for widget, value in (
+            (self.audioleftw, self.audio_left),
+            (self.audiorightw, self.audio_right),
+        ):
+            if widget is not None and widget.currentIndex() != value:
+                blocked = widget.blockSignals(True)
+                widget.setCurrentIndex(value)
+                widget.blockSignals(blocked)
+        if dispatch:
+            self.sigAudioPairChanged.emit(self.audio_left, self.audio_right)
+
     def set_audio_source(self, source: str, dispatch: bool = True) -> None:
         """Choose between hearing the selected channel and hearing the mix."""
-        if source not in (DataBrowser.AUDIO_SELECTED, DataBrowser.AUDIO_SHOWN):
+        if source not in (
+            DataBrowser.AUDIO_SELECTED,
+            DataBrowser.AUDIO_SHOWN,
+            DataBrowser.AUDIO_PAIR,
+        ):
             return
         self.audio_source = source
         if self.audiosrcw is not None:
-            index = 0 if source == DataBrowser.AUDIO_SELECTED else 1
+            index = DataBrowser.AUDIO_SOURCES.index(source)
             if self.audiosrcw.currentIndex() != index:
                 blocked = self.audiosrcw.blockSignals(True)
                 self.audiosrcw.setCurrentIndex(index)
                 self.audiosrcw.blockSignals(blocked)
+        # progressive disclosure: the two channel pickers only exist as a
+        # question once the pair mode is what is being asked about
+        if self.audiopairw is not None:
+            self.audiopairw.setVisible(source == DataBrowser.AUDIO_PAIR)
         if dispatch:
             self.sigAudioSourceChanged.emit(source)
 
+    #: Order Shift+P steps through.
+    AUDIO_SOURCES = (AUDIO_SELECTED, AUDIO_PAIR, AUDIO_SHOWN)
+
+    #: Human labels, index-aligned with AUDIO_SOURCES.
+    AUDIO_SOURCE_LABELS = (
+        "selected channel",
+        "channel pair (L/R)",
+        "all shown (stereo mix)",
+    )
+
     def toggle_audio_source(self) -> None:
-        """Flip between the selected channel and the full mix."""
-        self.set_audio_source(
-            DataBrowser.AUDIO_SHOWN
-            if self.audio_source == DataBrowser.AUDIO_SELECTED
-            else DataBrowser.AUDIO_SELECTED
-        )
+        """Step through the playback sources."""
+        order = DataBrowser.AUDIO_SOURCES
+        try:
+            index = order.index(self.audio_source)
+        except ValueError:
+            index = 0
+        self.set_audio_source(order[(index + 1) % len(order)])
 
     def play_region(self, t0, t1):
         data = self.data["filtered"] if "filtered" in self.data else self.data["data"]
@@ -3604,6 +3692,11 @@ class DataBrowser(QWidget):
         played = self.audio_channels()
         if self.audio_source == DataBrowser.AUDIO_SELECTED:
             playdata = np.asarray(data[i0:i1, played[0]], dtype=float).reshape(-1, 1)
+        elif self.audio_source == DataBrowser.AUDIO_PAIR:
+            # straight through: one channel per ear, nothing averaged
+            playdata = np.zeros((i1 - i0, 2))
+            playdata[:, 0] = data[i0:i1, played[0]]
+            playdata[:, 1] = data[i0:i1, played[1]]
         else:
             n2 = (len(played) + 1) // 2
             playdata = np.zeros((i1 - i0, min(2, len(played))))

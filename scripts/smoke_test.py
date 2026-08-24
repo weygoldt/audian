@@ -203,6 +203,11 @@ def main(argv=None):
         "live re-theme path rather than only the startup path",
     )
     ap.add_argument(
+        "--audio-pair",
+        action="store_true",
+        help="switch playback to the explicit left/right channel pair",
+    )
+    ap.add_argument(
         "--activity",
         action="store_true",
         help="switch the navigator to the baseline-referenced activity overview",
@@ -252,6 +257,19 @@ def main(argv=None):
         pump(app, 2.0)
         if _theme.current_theme() != args.theme:
             faults.append(f"--theme: still on {_theme.current_theme()}")
+
+    if args.audio_pair:
+        from audian.databrowser import DataBrowser
+
+        browser = main_win.browser()
+        if browser is None:
+            faults.append("--audio-pair: no browser")
+        else:
+            browser.set_audio_source(DataBrowser.AUDIO_PAIR)
+            browser.set_audio_pair(left=0, right=min(1, browser.data.channels - 1))
+            pump(app, 1.5)
+            if browser.audio_source != DataBrowser.AUDIO_PAIR:
+                faults.append("--audio-pair: refused to switch")
 
     if args.activity:
         from audian.fulltraceplot import OVERVIEW_ACTIVITY, FullTracePlot

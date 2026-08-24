@@ -11,12 +11,14 @@ from audian.databrowser import DataBrowser
 from audian.timeplot import SI_UNITS, si_prefixable
 
 
-def _browser(source, current, shown, channels=16):
+def _browser(source, current, shown, channels=16, left=0, right=1):
     """The attributes DataBrowser.audio_channels actually reads."""
     return SimpleNamespace(
         audio_source=source,
         current_channel=current,
         show_channels=list(shown),
+        audio_left=left,
+        audio_right=right,
         data=SimpleNamespace(channels=channels),
     )
 
@@ -113,3 +115,51 @@ def test_spectrogram_never_clears_its_axis_label():
     )
     SpectrogramPlot.update_axis_label(plot)
     assert calls == [], calls
+
+
+def test_pair_source_plays_the_two_chosen_channels_in_order():
+    browser = _browser(DataBrowser.AUDIO_PAIR, 0, range(16), left=3, right=9)
+    assert DataBrowser.audio_channels(browser) == [3, 9]
+
+
+def test_pair_ignores_visibility():
+    """An explicit pair is a deliberate choice.
+
+    Hiding a lane must not silently change what is in your ears -- which is
+    the whole reason the picker exists rather than reusing the shown-channel
+    mix.
+    """
+    browser = _browser(DataBrowser.AUDIO_PAIR, 0, [0, 1], left=3, right=9)
+    assert DataBrowser.audio_channels(browser) == [3, 9]
+
+
+def test_pair_is_clamped_to_the_file():
+    """A pair carried over from a wider file must not index past the end."""
+    browser = _browser(
+        DataBrowser.AUDIO_PAIR, 0, range(2), channels=2, left=9, right=15
+    )
+    assert DataBrowser.audio_channels(browser) == [1, 1]
+
+
+def test_pair_may_be_the_same_channel_twice():
+    browser = _browser(DataBrowser.AUDIO_PAIR, 0, range(16), left=4, right=4)
+    assert DataBrowser.audio_channels(browser) == [4, 4]
+
+
+def test_source_cycle_visits_every_mode_and_returns():
+    """Shift+P steps rather than toggles, so it has to come back round."""
+    assert len(DataBrowser.AUDIO_SOURCES) == len(DataBrowser.AUDIO_SOURCE_LABELS)
+    assert set(DataBrowser.AUDIO_SOURCES) == {
+        DataBrowser.AUDIO_SELECTED,
+        DataBrowser.AUDIO_PAIR,
+        DataBrowser.AUDIO_SHOWN,
+    }
+    seen, source = [], DataBrowser.AUDIO_SELECTED
+    for _ in range(len(DataBrowser.AUDIO_SOURCES)):
+        seen.append(source)
+        source = DataBrowser.AUDIO_SOURCES[
+            (DataBrowser.AUDIO_SOURCES.index(source) + 1)
+            % len(DataBrowser.AUDIO_SOURCES)
+        ]
+    assert sorted(seen) == sorted(DataBrowser.AUDIO_SOURCES)
+    assert source == DataBrowser.AUDIO_SELECTED
