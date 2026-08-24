@@ -197,6 +197,29 @@ class SpectrogramPlot(TimePlot):
             if handle is not None:
                 handle.setPen(theme.handle_pen())
 
+    # --- axis label -------------------------------------------------------
+
+    def update_axis_label(self) -> None:
+        """Never label this axis with an amplitude.
+
+        TimePlot puts the trace's amplitude unit on the left axis, but here
+        the left axis is *frequency*: inherited unchanged it labelled the
+        frequency axis "amplitude (a.u.)".  The amplitude of a spectrogram
+        is its colour, so that unit belongs on the colour bar -- which
+        carries it already, in dB.
+
+        The frequency unit is deliberately not put here either.  A rotated
+        axis label runs straight through the tick values at sixteen
+        channels, which is why it lives in the corner caption instead; see
+        :meth:`caption_text`.
+
+        So this does nothing at all -- and it must not "clear" the label to
+        achieve that.  ``setLabel(None)`` drops the axis's ``labelUnits``,
+        which is exactly what pyqtgraph's auto SI prefixing keys off, so the
+        frequency axis lost its kHz scaling and started printing 20000 and
+        40000 instead of 20 and 40.
+        """
+
     # --- caption ----------------------------------------------------------
 
     def caption_text(self) -> str:

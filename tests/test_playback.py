@@ -64,3 +64,32 @@ def test_non_si_units_are_never_prefixed():
     """
     for unit in ("a.u.", "arb", "counts", "dB", "", "a.u"):
         assert not si_prefixable(unit), unit
+
+
+def test_spectrogram_does_not_label_its_frequency_axis_as_amplitude():
+    """A spectrogram's y axis is frequency; its amplitude is the colour bar.
+
+    SpectrogramPlot inherits TimePlot, so the amplitude label leaked onto
+    the frequency axis and read "amplitude (a.u.)".  The override must also
+    be a genuine no-op: clearing the label with setLabel(None) drops the
+    axis's labelUnits, which is what pyqtgraph's auto SI prefixing keys off,
+    and the frequency axis then printed 20000 instead of 20.
+    """
+    from audian.spectrogramplot import SpectrogramPlot
+    from audian.timeplot import TimePlot
+
+    assert SpectrogramPlot.update_axis_label is not TimePlot.update_axis_label
+
+    touched = []
+
+    class _Axis:
+        def setLabel(self, *args, **kwargs):
+            touched.append(("setLabel", args, kwargs))
+
+        def enableAutoSIPrefix(self, *args):
+            touched.append(("enableAutoSIPrefix", args))
+
+    SpectrogramPlot.update_axis_label(
+        SimpleNamespace(getAxis=lambda name: _Axis(), data_items=[])
+    )
+    assert touched == [], touched
