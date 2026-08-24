@@ -438,6 +438,11 @@ LW_THIN = 1.0
 LW_THICK = 1.8  # only for the sparse step==1 branch, where points are few
 LW_HAIRLINE = 1.0
 LW_CURSOR = 2.0
+LW_CLOSE = 1.3
+"""Stroke width of the tab close mark.
+
+Thin on purpose: a close affordance sits next to every tab title and should
+read as a mark, not as a control competing with the title beside it."""
 LW_SELECTED = 2.0
 """Pen width of the **selected** channel's waveform.
 
@@ -1040,6 +1045,66 @@ def waveform_fill_brush(
 # ---------------------------------------------------------------------------
 
 
+#: Dynamic property recording which token a widget's text colour came from.
+FG_PROPERTY = "audianFgToken"
+
+#: Dynamic property recording that a widget wears the hairline group frame.
+FRAME_PROPERTY = "audianFramed"
+
+
+def tint(widget: Any, token_name: str = "fg.muted") -> Any:
+    """Colour a widget's text from a token, and remember which one.
+
+    Qt stylesheets bake the colour string at the moment they are set, so a
+    widget styled this way does not follow a live theme switch.  Recording
+    the *token* on the widget is what lets :func:`restyle_tree` put it right
+    again without every call site having to be re-found by hand -- which is
+    how the parameter captions and the group frames were missed the first
+    time.
+    """
+    widget.setProperty(FG_PROPERTY, token_name)
+    widget.setStyleSheet(f"color: {token(token_name)};")
+    return widget
+
+
+def frame(widget: Any) -> Any:
+    """Give a container the hairline group frame, re-appliably."""
+    widget.setObjectName("audianGroup")
+    widget.setProperty(FRAME_PROPERTY, True)
+    widget.setStyleSheet(
+        "#audianGroup { "
+        f"border: {HAIRLINE}px solid {token('border')}; "
+        f"border-radius: {RADIUS_CONTROL}px; "
+        "}"
+    )
+    return widget
+
+
+def restyle_tree(root: Any) -> int:
+    """Re-apply every tagged colour under *root*.  Returns how many changed.
+
+    Walks the widget tree rather than a registry, so a widget created after
+    this was written is still covered as long as it was styled through
+    :func:`tint` or :func:`frame`.
+    """
+    from PyQt5.QtWidgets import QWidget
+
+    count = 0
+    widgets = [root] + list(root.findChildren(QWidget))
+    for widget in widgets:
+        try:
+            token_name = widget.property(FG_PROPERTY)
+            if token_name:
+                tint(widget, str(token_name))
+                count += 1
+            elif widget.property(FRAME_PROPERTY):
+                frame(widget)
+                count += 1
+        except RuntimeError:
+            continue
+    return count
+
+
 def style_axis(axis_item: Any, mono: bool = True, show_line: bool = False) -> None:
     """Apply the full axis style to a ``pg.AxisItem`` in one call.
 
@@ -1521,6 +1586,19 @@ QToolButton, QPushButton {
     border-radius: ${radius_control}px;
     padding: ${s4}px ${s8}px;
 }
+/* Deterministic height, but ONLY on the main toolbar.  A QToolBar stretches
+   its buttons to match the tallest item; re-applying a stylesheet to a
+   laid-out toolbar drops that and every icon-only button collapses to its
+   own hint (21 px against the 32 px it had a moment earlier).  Stating the
+   height makes the switched and freshly-built windows agree.
+
+   It must NOT apply to every QToolButton: the channel rail's solo and mute
+   buttons are deliberately tiny, and giving them a 26 px floor grew the
+   lane pitch from 36 to 44 px, which pushed two channels of a sixteen
+   channel stack off the bottom of the window. */
+QToolBar#audian_toolbar QToolButton {
+    min-height: ${control_height}px;
+}
 QToolButton:hover, QPushButton:hover {
     background-color: $bg_raised;
     border-color: $border_hi;
@@ -1595,20 +1673,27 @@ QTabWidget::pane {
 QTabBar {
     background-color: $bg_base;
 }
+/* Tabs sit on the LEFT (QTabWidget.West).  The selected tab is marked by a
+   rule down its leading edge, the same device the channel rail uses, and the
+   label is painted horizontally by VerticalTabBar -- Qt would rotate it. */
 QTabBar::tab {
     background-color: $bg_base;
     color: $fg_muted;
     border: ${hairline}px solid $border;
-    border-bottom: 0px;
-    border-top: ${focus_width}px solid transparent;
-    padding: ${s6}px ${s12}px;
-    margin-right: ${s2}px;
+    border-right: 0px;
+    border-left: ${focus_width}px solid transparent;
+    padding: ${s6}px ${s8}px;
+    margin-bottom: ${s2}px;
 }
 QTabBar::tab:hover { color: $fg; background-color: $bg_surface; }
 QTabBar::tab:selected {
     background-color: $bg_surface;
     color: $fg;
-    border-top: ${focus_width}px solid $primary;
+    border-left: ${focus_width}px solid $primary;
+}
+QTabWidget::pane {
+    border: 0px;
+    border-left: ${hairline}px solid $border;
 }
 
 /* --- status bar ----------------------------------------------------- */

@@ -124,3 +124,18 @@ sky:
 
 Everything re-themes live, including the plots, the navigator, the spectrogram
 colormaps and the toolbar icons. Nothing needs restarting.
+
+
+## Tabs
+
+Open files are listed down the **left** edge, not across the top. Vertical
+space is the scarce axis for a stacked waveform view; a horizontal strip
+spends about 30 px of height on what is usually one or two entries, and there
+is more width to give. Labels stay horizontal — Qt's own vertical tabs rotate
+them ninety degrees, which makes the file name, the entire point of the tab,
+unreadable at a glance.
+
+With a single file open the strip hides itself entirely.
+
+`Ctrl+PgUp` / `Ctrl+PgDown` move between tabs, `Ctrl+W` closes the current
+one, and each tab carries a close mark on its right.

@@ -11,10 +11,11 @@ import multiprocessing as mp
 import pyqtgraph as pg
 
 from pathlib import Path
-from PyQt5.QtCore import Qt, QTimer, QBuffer, QSize, QRectF, QEvent
+from PyQt5.QtCore import QPointF, Qt, QTimer, QBuffer, QSize, QRect, QRectF, QEvent
 from PyQt5.QtGui import QKeySequence, QIcon, QGuiApplication
 from PyQt5.QtGui import QPixmap, QPainter, QPainterPath, QFontMetrics
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget
+from PyQt5.QtWidgets import QTabBar, QStylePainter, QStyleOptionTab
 from PyQt5.QtWidgets import QStyle, QProxyStyle
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel
 from PyQt5.QtWidgets import QAction, QActionGroup, QPushButton
@@ -98,12 +99,6 @@ _FILLED_GLYPHS = {
         [(0.94, 0.50), (0.52, 0.14), (0.52, 0.86)],
         [(0.10, 0.40), (0.56, 0.40), (0.56, 0.60), (0.10, 0.60)],
     ],
-    "home": [
-        [(0.50, 0.04), (0.98, 0.46), (0.02, 0.46)],
-        [(0.16, 0.42), (0.84, 0.42), (0.84, 0.96), (0.16, 0.96)],
-        # an odd-even subpath: the door is cut out of the body again
-        [(0.40, 0.64), (0.60, 0.64), (0.60, 0.96), (0.40, 0.96)],
-    ],
 }
 
 # the mirrored glyphs share their outline with the forward-facing one:
@@ -142,6 +137,17 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
     painter.setBrush(Qt.NoBrush)
     m = 2  # margin
     e = size - 2 * m  # extent
+    if kind == "close":
+        # Two strokes at a generous inset.  Qt's own SP_TabCloseButton is a
+        # heavy bevelled X from the platform style; this is the same mark
+        # drawn as the design system draws everything else.
+        pen = theme.pen(color, theme.LW_CLOSE, alpha=alpha)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        i = size * 0.30
+        painter.drawLine(QPointF(i, i), QPointF(size - i, size - i))
+        painter.drawLine(QPointF(size - i, i), QPointF(i, size - i))
+        return
     filled = _filled_glyph_path(kind, size)
     if filled is not None:
         painter.fillPath(filled, theme.brush(color, alpha))
@@ -156,12 +162,26 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         path.lineTo(m + e * 0.8, m + e * 0.7)
         path.lineTo(m + e, size / 2)
         painter.drawPath(path)
+    elif kind == "home":
+        # "zoom home" is *show the whole recording*, not a house.  Two end
+        # stops with a span between them says that; a literal house said
+        # nothing about time at all.
+        y = size / 2
+        painter.drawLine(int(m), int(m + e * 0.15), int(m), int(m + e * 0.85))
+        painter.drawLine(int(m + e), int(m + e * 0.15), int(m + e), int(m + e * 0.85))
+        painter.drawLine(int(m + e * 0.14), int(y), int(m + e * 0.86), int(y))
+        for tip, direction in ((m + e * 0.14, 1), (m + e * 0.86, -1)):
+            path.moveTo(tip + direction * e * 0.18, y - e * 0.16)
+            path.lineTo(tip, y)
+            path.lineTo(tip + direction * e * 0.18, y + e * 0.16)
+        painter.drawPath(path)
     elif kind == "spectrogram":
-        # a frame filled with horizontal bands
+        # a time/frequency field: bands that vary, inside a light frame, so
+        # it cannot be confused with the colour bar beside it
         painter.drawRect(QRectF(m, m, e, e))
-        for i in range(1, 4):
-            y = m + e * i / 4
-            painter.drawLine(int(m + 1), int(y), int(m + e - 1), int(y))
+        for i, frac in enumerate((0.35, 0.75, 0.55)):
+            y = m + e * (0.28 + 0.22 * i)
+            painter.drawLine(int(m + e * 0.12), int(y), int(m + e * frac), int(y))
     elif kind == "power":
         # a peaked curve rising from the left
         path.moveTo(m, m + e)
@@ -171,10 +191,21 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         path.lineTo(m + e, m + e)
         painter.drawPath(path)
     elif kind == "colorbar":
-        painter.drawRect(QRectF(m + e * 0.25, m, e * 0.5, e))
-        for i in range(1, 4):
-            y = m + e * i / 4
-            painter.drawLine(int(m + e * 0.25), int(y), int(m + e * 0.75), int(y))
+        # a narrow upright scale with a ramp inside it: upright and solid
+        # where the spectrogram glyph is square and open
+        bar = QRectF(m + e * 0.32, m, e * 0.36, e)
+        painter.drawRect(bar)
+        for i in range(4):
+            shade = 0.85 - 0.2 * i
+            painter.fillRect(
+                QRectF(
+                    bar.left() + 1,
+                    bar.top() + 1 + (bar.height() - 2) * i / 4,
+                    bar.width() - 2,
+                    (bar.height() - 2) / 4,
+                ),
+                theme.brush(color, shade * (1.0 if alpha is None else alpha)),
+            )
     elif kind == "navigator":
         painter.drawRect(QRectF(m, m + e * 0.25, e, e * 0.5))
         painter.setBrush(theme.brush(color, 0.5 * (1.0 if alpha is None else alpha)))
@@ -246,6 +277,141 @@ def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
         QIcon.On,
     )
     return icon
+
+
+class VerticalTabBar(QTabBar):
+    """Tabs stacked down the side, with labels that stay horizontal.
+
+    Vertical space is the scarce axis: a waveform stack wants every pixel of
+    height it can get, and a horizontal tab strip spends ~30 px of it on
+    something that is usually one or two entries long.  Moving the strip to
+    the side spends horizontal space instead, which there is more of.
+
+    Qt's ``West`` tab position does this but rotates the label ninety
+    degrees, which is unreadable at a glance and makes file names -- the
+    whole point of the tab -- useless.  This bar keeps Qt's vertical
+    geometry and paints the text horizontally into it.
+    """
+
+    MIN_WIDTH = 132
+    MAX_WIDTH = 260
+
+    def tabSizeHint(self, index: int) -> QSize:
+        """Size a tab from its own content, in bar coordinates.
+
+        Not derived from ``super().tabSizeHint()``: Qt reports a vertical
+        bar's hint already oriented for the bar, and transposing it again
+        collapsed every tab to the minimum width, which elided file names
+        that had room to spare.
+        """
+        font = self.font()
+        font.setBold(True)  # the selected tab is bold; size for the worst case
+        metrics = QFontMetrics(font)
+        width = (
+            theme.S8
+            + metrics.horizontalAdvance(self.tabText(index))
+            + theme.S4
+            + self.CLOSE_SIZE
+            + theme.S6
+            # slack: the style sheet's own tab padding is applied on top of
+            # this hint, so an exact fit still elides by a few pixels
+            + theme.S16
+        )
+        height = metrics.height() + 2 * theme.S6
+        return QSize(
+            min(max(width, self.MIN_WIDTH), self.MAX_WIDTH),
+            max(height, theme.CONTROL_HEIGHT),
+        )
+
+    def minimumTabSizeHint(self, index: int) -> QSize:
+        return QSize(self.MIN_WIDTH, self.tabSizeHint(index).height())
+
+    CLOSE_SIZE = 14
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self._hover_close = -1
+
+    def close_rect(self, index: int) -> QRect:
+        """Where the close mark for `index` sits, in bar coordinates.
+
+        Computed here rather than handed to ``setTabButton``: Qt lays a tab
+        button out with the *horizontal* bar's geometry in mind and drops it
+        into the middle of the label on a vertical bar.
+        """
+        rect = self.tabRect(index)
+        size = self.CLOSE_SIZE
+        return QRect(
+            rect.right() - size - theme.S6,
+            rect.top() + (rect.height() - size) // 2,
+            size,
+            size,
+        )
+
+    def paintEvent(self, event) -> None:
+        painter = QStylePainter(self)
+        option = QStyleOptionTab()
+        for index in range(self.count()):
+            self.initStyleOption(option, index)
+            # shape only: drawing the label here would rotate it
+            painter.drawControl(QStyle.CE_TabBarTabShape, option)
+            rect = self.tabRect(index)
+            current = index == self.currentIndex()
+            close = self.close_rect(index)
+            text_rect = QRect(
+                rect.left() + theme.S8,
+                rect.top(),
+                close.left() - rect.left() - theme.S8 - theme.S4,
+                rect.height(),
+            )
+            painter.save()
+            painter.setPen(theme.qcolor("fg" if current else "fg.muted"))
+            font = painter.font()
+            font.setBold(current)
+            painter.setFont(font)
+            label = QFontMetrics(font).elidedText(
+                self.tabText(index), Qt.ElideMiddle, max(0, text_rect.width())
+            )
+            painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, label)
+            painter.restore()
+
+            token = (
+                "fg"
+                if index == self._hover_close
+                else ("fg.muted" if current else "fg.faint")
+            )
+            painter.drawPixmap(
+                close, glyph_pixmap("close", self.CLOSE_SIZE, token, None)
+            )
+
+    def _close_at(self, pos) -> int:
+        for index in range(self.count()):
+            if self.close_rect(index).contains(pos):
+                return index
+        return -1
+
+    def mouseMoveEvent(self, event) -> None:
+        hovered = self._close_at(event.pos())
+        if hovered != self._hover_close:
+            self._hover_close = hovered
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if self._hover_close != -1:
+            self._hover_close = -1
+            self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            index = self._close_at(event.pos())
+            if index >= 0:
+                self.tabCloseRequested.emit(index)
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
 
 class MnemonicStyle(QProxyStyle):
@@ -1091,6 +1257,8 @@ class Audian(QMainWindow):
 
         # (widget, glyph kind) pairs, so a theme switch can rebuild icons
         self._glyph_targets = []
+        # last (text, active) per status readout, for re-rendering on a switch
+        self._readout_state = {}
         # toolbar separators carry a baked colour and must be restyled too
         self._toolbar_separators = []
 
@@ -1140,11 +1308,21 @@ class Audian(QMainWindow):
         self.setWindowTitle(f"Audian {__version__}")
 
         self.tabs = QTabWidget(self)
+        # Tabs live down the LEFT edge: vertical space is what a waveform
+        # stack is short of, and a horizontal strip spends ~30 px of it on
+        # what is usually one or two entries.
+        self.tabs.setTabBar(VerticalTabBar(self.tabs))
+        self.tabs.setTabPosition(QTabWidget.West)
         self.tabs.setDocumentMode(True)
         self.tabs.setMovable(True)
-        self.tabs.setTabBarAutoHide(False)
-        self.tabs.setTabsClosable(True)
-        self.tabs.tabCloseRequested.connect(lambda index: self.close(index))
+        # a single file needs no tab strip at all - that is the common case,
+        # and hiding it gives the whole width back
+        self.tabs.setTabBarAutoHide(True)
+        self.tabs.setTabsClosable(False)
+        # connect the BAR, not the QTabWidget: the widget only forwards its
+        # bar's tabCloseRequested while setTabsClosable(True), and the close
+        # marks here are painted by VerticalTabBar rather than by Qt.
+        self.tabs.tabBar().tabCloseRequested.connect(self.close)
         self.tabs.currentChanged.connect(self.adapt_menu)
 
         # page 0 is the empty state, page 1 the browser tabs.  The empty
@@ -1226,6 +1404,9 @@ class Audian(QMainWindow):
             self.startup.reload()
             if was_current:
                 self.stack.setCurrentWidget(self.startup)
+        # last: every stylesheet and icon is in place, so recompute the
+        # geometry they imply
+        self.repolish()
         self.acts.daylight_mode.setChecked(name == theme.THEME_LIGHT)
         save_setting("theme", name)
         self.statusBar().showMessage(
@@ -1520,6 +1701,9 @@ class Audian(QMainWindow):
         if text is None:
             text = self.READOUT_PLACEHOLDERS[field]
             active = False
+        # the markup carries baked colour strings, so the last state is kept
+        # and re-rendered on a theme switch (see refresh_readouts)
+        self._readout_state[field] = (text, active)
         key, value = self.split_readout(str(text))
         label.setText(
             self.readout_markup(key, "fg.muted")
@@ -1658,6 +1842,42 @@ class Audian(QMainWindow):
             f"padding: 0px {theme.S8}px; }}"
         )
 
+    def repolish(self) -> None:
+        """Recompute every widget's style and size hint after a re-theme.
+
+        Setting a stylesheet repaints, but it does not re-run the style's
+        size calculations for widgets that were already laid out: the
+        transport buttons came out 37x21 after a switch against 37x32 when
+        the theme was set before the window was built.  Unpolishing and
+        re-polishing each widget is what makes the two paths agree.
+        """
+        style = self.style()
+        for widget in [self] + self.findChildren(QWidget):
+            try:
+                style.unpolish(widget)
+                style.polish(widget)
+                widget.updateGeometry()
+            except RuntimeError:
+                continue
+        for layout_owner in [self] + self.findChildren(QWidget):
+            try:
+                layout = layout_owner.layout()
+            except RuntimeError:
+                continue
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+
+    def refresh_readouts(self) -> None:
+        """Re-render the status readouts after a theme switch.
+
+        They are rich text with the colour written into the markup, so unlike
+        a stylesheet they cannot simply be re-applied -- the last value has to
+        be pushed through :meth:`set_readout` again.
+        """
+        for field, (text, active) in list(self._readout_state.items()):
+            self.set_readout(field, text, active)
+
     def restyle_chrome(self) -> None:
         """Re-apply every inline stylesheet the main window owns.
 
@@ -1665,6 +1885,9 @@ class Audian(QMainWindow):
         application stylesheet alone does not move them: without this the
         toolbar stays dark under a light menu bar.
         """
+        theme.restyle_tree(self)
+        self.refresh_readouts()
+        self.tabs.tabBar().update()
         if self.toolbar is not None:
             self.toolbar.setStyleSheet(self._toolbar_style())
         for line in self._toolbar_separators:

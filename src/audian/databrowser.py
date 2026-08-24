@@ -67,13 +67,7 @@ def marker_tip(x, y, data):
 
 def frame_widget(widget: QWidget) -> None:
     """Give a container widget the 1px hairline frame of the design system."""
-    widget.setObjectName("audianGroup")
-    widget.setStyleSheet(
-        "#audianGroup { "
-        f"border: {theme.HAIRLINE}px solid {theme.token('border')}; "
-        f"border-radius: {theme.RADIUS_CONTROL}px; "
-        "}"
-    )
+    theme.frame(widget)
 
 
 def caption_label(text: str, shortcut: str = "") -> QLabel:
@@ -91,7 +85,7 @@ def caption_label(text: str, shortcut: str = "") -> QLabel:
         text = f"{text}  {shortcut}"
     label = QLabel(text.upper())
     label.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
-    label.setStyleSheet(f"color: {theme.token('fg.muted')};")
+    theme.tint(label, "fg.muted")
     return label
 
 
@@ -1278,7 +1272,7 @@ class DataBrowser(QWidget):
         # exactly what the shared amplitude scale needs.
         self.y_readout = QLabel()
         self.y_readout.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-        self.y_readout.setStyleSheet(f"color: {theme.token('fg.muted')};")
+        theme.tint(self.y_readout, "fg.muted")
         self.y_readout.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self.y_readout.setContentsMargins(theme.S4, theme.S4, theme.S4, 0)
         self.y_readout.setToolTip("Amplitude range shown by every lane")
@@ -1599,6 +1593,7 @@ class DataBrowser(QWidget):
                 self.datafig.apply_theme()
             else:
                 self.datafig.polish()
+        theme.restyle_tree(self)
         for row in self.rail_rows:
             row.update_state()
         # the colormap is cached per theme and oriented to the page -- the
