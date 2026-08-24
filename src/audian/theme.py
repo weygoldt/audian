@@ -838,6 +838,31 @@ def border_pen(selected: bool = False) -> QPen:
 # are sixteen equally loud claims on the eye, which is the same as none.
 # ---------------------------------------------------------------------------
 
+TOOLBAR_BUTTON_BOX = 30
+"""Outer height of a tool bar button, in px, borders included.
+
+Pinned on the widget rather than left to the layout.  A QToolBar sizes its
+items itself, and re-applying a style sheet to a laid-out bar makes it
+re-centre them at a different height than it first chose: natively the bar
+held buttons of 30 and 32 px, after a theme switch it held 30 px buttons
+positioned 6 px lower, whose bottom border and rounded corners then fell
+outside the bar and were clipped.  Stating the height makes the two paths
+identical by construction.
+
+Equals :data:`TOOLBAR_BUTTON_HEIGHT` plus the style sheet's ``S4`` padding
+top and bottom and its hairline border on each side.
+"""
+
+TOOLBAR_BUTTON_HEIGHT = 20
+"""Content height of a tool bar button, in px, excluding padding and border.
+
+Stated so a re-theme cannot resize the bar (see the tool bar rule in the
+style sheet), and kept well below :data:`CONTROL_HEIGHT`: a tool bar button
+holds a 16 px glyph, not a line of editable text, and borrowing the input
+height made every button 36 px tall in a bar with 35 px to give -- which
+clipped their bottom border and rounded corners clean off.
+"""
+
 MIN_GRAPHIC_CONTRAST = 3.0
 """Floor for a *non-text* graphical object against its own background.
 
@@ -1620,6 +1645,24 @@ QToolBar {
     padding: ${s2}px ${s6}px;
     min-height: ${toolbar_height}px;
 }
+/* The main tool bar states its own metrics.  It used to carry a second,
+   widget-level style sheet set from audian.py, and the two were applied at
+   different moments: on a theme switch the app sheet landed first and the
+   widget sheet second, and the bar re-laid its items 6 px lower, far enough
+   that their bottom borders and rounded corners fell outside the bar and
+   were clipped.  One rule, one source, one moment. */
+QToolBar#audian_toolbar {
+    background-color: $bg_surface;
+    border: 0px;
+    border-bottom: ${hairline}px solid $border;
+    /* No padding or spacing: the bar holds a single content widget that
+       does its own layout.  Whatever padding is stated here gets folded
+       into the bar's item margin, and that margin is recomputed when the
+       application style sheet is re-applied -- which is how a theme switch
+       used to push the buttons 6 px down and clip them. */
+    padding: 0px;
+    spacing: 0px;
+}
 QToolBar::handle, QToolBar::separator:hidden {
     width: 0px;
     height: 0px;
@@ -1651,7 +1694,7 @@ QToolButton, QPushButton {
    lane pitch from 36 to 44 px, which pushed two channels of a sixteen
    channel stack off the bottom of the window. */
 QToolBar#audian_toolbar QToolButton {
-    min-height: ${control_height}px;
+    min-height: ${toolbar_button_height}px;
 }
 QToolButton:hover, QPushButton:hover {
     background-color: $bg_raised;
@@ -1956,6 +1999,7 @@ def stylesheet() -> str:
             primary_dim=token("primary.dim"),
             on_primary=token("on.primary"),
             edge=token("edge"),
+            toolbar_button_height=TOOLBAR_BUTTON_HEIGHT,
             bg_lane=token("bg.lane"),
             accent=token("accent"),
             success=token("success"),

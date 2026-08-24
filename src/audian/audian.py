@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel
 from PyQt5.QtWidgets import QAction, QActionGroup, QPushButton
 from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QScrollArea
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
-from PyQt5.QtWidgets import QStackedWidget, QStatusBar, QToolBar, QToolButton
+from PyQt5.QtWidgets import QStackedWidget, QStatusBar, QToolButton
 from PyQt5.QtWidgets import QLineEdit, QGridLayout, QSizePolicy, QFrame
 from PyQt5.QtWidgets import QProgressBar, QKeySequenceEdit, QMenu
 from PyQt5.QtWidgets import QListWidget, QListWidgetItem, QPlainTextEdit
@@ -1355,13 +1355,21 @@ class Audian(QMainWindow):
         self.stack = QStackedWidget(self)
         self.stack.addWidget(self.startup)
         self.stack.addWidget(self.tabs)
+        # the tool bar is a plain band stacked above the canvas
+        self.chrome = QWidget(self)
+        make_transparent(self.chrome, "audian_chrome")
+        self.chrome_box = QVBoxLayout(self.chrome)
+        self.chrome_box.setContentsMargins(0, 0, 0, 0)
+        self.chrome_box.setSpacing(0)
+
         # The chrome/canvas seam lives on the CANVAS, not on the tool bar.
         # A border on the bar is laid over by its own buttons -- a 36 px
         # button in a 37 px bar covers all but the gaps -- and padding it
         # clear costs 5 px of the height the tab strip was moved sideways to
         # save.  One pixel on the canvas edge buys the same line for nothing.
         theme.band(self.stack, top=True, ground="bg.base")
-        self.setCentralWidget(self.stack)
+        self.chrome_box.addWidget(self.stack, 1)
+        self.setCentralWidget(self.chrome)
         self.startup_active = True
 
         # actions:
@@ -1844,31 +1852,20 @@ class Audian(QMainWindow):
 
     def toolbar_gap(self) -> None:
         """A 12px gap, a hairline, another 12px gap."""
-        left = QWidget(self.toolbar)
+        left = QWidget(self.toolbar_content)
         make_transparent(left, "audian_toolbar_gap")
         left.setFixedWidth(theme.S12)
-        self.toolbar.addWidget(left)
-        line = QFrame(self.toolbar)
+        self.toolbar_box.addWidget(left)
+        line = QFrame(self.toolbar_content)
         line.setFrameShape(QFrame.VLine)
         line.setFixedWidth(theme.HAIRLINE)
         line.setStyleSheet(f"background: {theme.token('border')};border: none;")
         self._toolbar_separators.append(line)
-        self.toolbar.addWidget(line)
-        right = QWidget(self.toolbar)
+        self.toolbar_box.addWidget(line)
+        right = QWidget(self.toolbar_content)
         make_transparent(right, "audian_toolbar_gap")
         right.setFixedWidth(theme.S12)
-        self.toolbar.addWidget(right)
-
-    @staticmethod
-    def _toolbar_style() -> str:
-        """The toolbar's own stylesheet, rebuilt from the active tokens."""
-        return (
-            "QToolBar#audian_toolbar {"
-            f"background: {theme.token('bg.surface')};"
-            f"border-bottom: {theme.HAIRLINE}px solid {theme.token('border')};"
-            f"spacing: {theme.S4}px;"
-            f"padding: 0px {theme.S8}px; }}"
-        )
+        self.toolbar_box.addWidget(right)
 
     def repolish(self) -> None:
         """Recompute every widget's style and size hint after a re-theme.
@@ -1916,8 +1913,6 @@ class Audian(QMainWindow):
         theme.restyle_tree(self)
         self.refresh_readouts()
         self.tabs.tabBar().update()
-        if self.toolbar is not None:
-            self.toolbar.setStyleSheet(self._toolbar_style())
         for line in self._toolbar_separators:
             try:
                 line.setStyleSheet(f"background: {theme.token('border')};border: none;")
@@ -1937,24 +1932,39 @@ class Audian(QMainWindow):
                 widget.setStyleSheet(f"color: {theme.token(token_name)};")
 
     def toolbar_button(self, act, style=Qt.ToolButtonIconOnly) -> QToolButton:
-        button = QToolButton(self.toolbar)
+        button = QToolButton(self.toolbar_content)
         button.setDefaultAction(act)
         button.setToolButtonStyle(style)
         button.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         button.setAutoRaise(True)
-        self.toolbar.addWidget(button)
+        button.setFixedHeight(theme.TOOLBAR_BUTTON_BOX)
+        self.toolbar_box.addWidget(button)
         return button
 
     def setup_toolbar(self) -> None:
-        tb = QToolBar("Audian", self)
+        """Build the tool bar.
+
+        Deliberately a plain widget rather than a ``QToolBar``.  This bar is
+        never movable, floatable or dockable, so QToolBar's only contribution
+        was its layout -- and that layout is recomputed from the style every
+        time the application style sheet is re-applied, with different
+        metrics than it used when the window was first built.  Measured
+        across a theme switch: items 6 px lower and 2 px shorter, which put
+        their bottom borders and rounded corners outside the bar so they were
+        clipped.  Pinning heights, setting the bar's contents margins,
+        zeroing its padding and skipping its re-polish each failed to hold;
+        a widget with an ordinary QHBoxLayout simply does the same thing
+        twice.
+        """
+        tb = QWidget(self)
         tb.setObjectName("audian_toolbar")
-        tb.setMovable(False)
-        tb.setFloatable(False)
-        tb.setIconSize(QSize(16, 16))
-        tb.setContextMenuPolicy(Qt.PreventContextMenu)
-        tb.setStyleSheet(self._toolbar_style())
-        self.addToolBar(Qt.TopToolBarArea, tb)
+        theme.band(tb, bottom=True)
         self.toolbar = tb
+        self.toolbar_content = tb
+        self.toolbar_box = QHBoxLayout(tb)
+        self.toolbar_box.setContentsMargins(theme.S8, theme.S4, theme.S8, theme.S4)
+        self.toolbar_box.setSpacing(theme.S4)
+        self.chrome_box.insertWidget(0, tb)
 
         # transport:
         for act in (
@@ -2033,14 +2043,15 @@ class Audian(QMainWindow):
         ampl_menu.addAction(self.acts.center_amplitude)
         self.ampl_button.setMenu(ampl_menu)
         self.update_amplitude_button()
-        tb.addWidget(self.ampl_button)
+        self.ampl_button.setFixedHeight(theme.TOOLBAR_BUTTON_BOX)
+        self.toolbar_box.addWidget(self.ampl_button)
 
         # right aligned channel selector:
-        spacer = QWidget(tb)
+        spacer = QWidget(self.toolbar_content)
         make_transparent(spacer, "audian_toolbar_gap")
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        tb.addWidget(spacer)
-        self.channel_button = QToolButton(tb)
+        self.toolbar_box.addWidget(spacer, 1)
+        self.channel_button = QToolButton(self.toolbar_content)
         self._set_glyph(self.channel_button, "channels")
         self.channel_button.setPopupMode(QToolButton.InstantPopup)
         self.channel_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -2051,7 +2062,8 @@ class Audian(QMainWindow):
         self.channel_menu = QMenu(self.channel_button)
         self.channel_menu.aboutToShow.connect(self.build_channel_menu)
         self.channel_button.setMenu(self.channel_menu)
-        tb.addWidget(self.channel_button)
+        self.channel_button.setFixedHeight(theme.TOOLBAR_BUTTON_BOX)
+        self.toolbar_box.addWidget(self.channel_button)
 
         # The height is fixed only once the bar is populated, otherwise the
         # toolbar layout raises the minimum height from its contents.  The
