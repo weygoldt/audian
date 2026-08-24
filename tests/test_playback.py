@@ -225,3 +225,33 @@ def test_right_clicking_a_lane_does_not_change_the_channel():
     stub, calls = _clickable(current=0)
     DataBrowser.mouse_clicked(stub, (_Click(Qt.RightButton),), 5)
     assert calls == []
+
+
+def _ranged(y_mode, selected, channels=16):
+    return SimpleNamespace(
+        y_mode=y_mode,
+        selected_channels=list(selected),
+        data=SimpleNamespace(channels=channels),
+    )
+
+
+def test_shared_y_applies_amplitude_ops_to_every_channel():
+    """Under a shared Y every lane shows the same span by definition.
+
+    Reset (Shift+V), Center and the zoom steps went through apply_ranges(),
+    which used the selection unconditionally -- so with a shared Y a drag
+    moved all sixteen lanes while Shift+V reset one, because clicking a lane
+    narrows the selection to it.
+    """
+    stub = _ranged(DataBrowser.y_shared, [5])
+    assert DataBrowser.range_channels(stub) == list(range(16))
+
+
+def test_per_channel_y_applies_only_to_the_selection():
+    stub = _ranged(DataBrowser.y_per_channel, [5])
+    assert DataBrowser.range_channels(stub) == [5]
+
+
+def test_per_channel_y_honours_a_multi_selection():
+    stub = _ranged(DataBrowser.y_per_channel, [2, 3, 4])
+    assert DataBrowser.range_channels(stub) == [2, 3, 4]

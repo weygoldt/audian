@@ -209,3 +209,16 @@ the selection to a range, exactly as it does in the rail.
 
 Right-click and drag are unaffected: dragging still selects a region and
 right-click still opens the region menu.
+
+
+## Amplitude operations and the Y mode
+
+Reset (`Shift+V`), Center (`C`), Fit Y (`v`) and the amplitude zoom steps
+apply to **every channel** while the Y axis is shared — which it is by
+default, and which the tool bar reports as *Y: shared*. Under a shared Y
+every lane shows the same span by definition, so an operation on one lane is
+an operation on all of them.
+
+Switch the Y axis to per-channel and the same operations apply only to the
+selected channels instead, which is what selecting a range of lanes with
+shift-click is for.

@@ -2939,14 +2939,27 @@ class DataBrowser(QWidget):
             self.plot_ranges.set_powers()
         self.update_levels()
 
+    def range_channels(self) -> list:
+        """Channels an amplitude operation applies to.
+
+        Under a shared Y every lane shows the same span *by definition*, so
+        an operation on one lane is an operation on all of them.  Only when
+        the lanes are scaled independently does the selection decide.
+
+        This used to be worked out in set_ranges() alone: apply_ranges(),
+        which is what Reset (Shift+V), Center and the zoom steps go through,
+        used the selection unconditionally.  So under a shared Y -- the
+        default -- dragging a range moved every lane while Shift+V reset one,
+        and clicking a lane silently narrowed the selection to it.
+        """
+        if self.y_mode == DataBrowser.y_shared:
+            return list(range(self.data.channels))
+        return self.selected_channels
+
     def set_ranges(self, axspec, r0=None, r1=None):
         if self.setting:
             return
-        channels = (
-            list(range(self.data.channels))
-            if self.y_mode == DataBrowser.y_shared
-            else self.selected_channels
-        )
+        channels = self.range_channels()
         with self.updating():
             self.plot_ranges[axspec].set_ranges(
                 r0, r1, None, channels, self.isVisible()
@@ -2956,7 +2969,7 @@ class DataBrowser(QWidget):
     def apply_ranges(self, amplitudefunc, axspec):
         with self.updating():
             getattr(self.plot_ranges, amplitudefunc)(
-                axspec, self.selected_channels, self.isVisible()
+                axspec, self.range_channels(), self.isVisible()
             )
         self.report_y_range()
 
