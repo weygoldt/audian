@@ -113,6 +113,10 @@ INTERACTIONS = [
     ("skip to end", "time_end"),
     ("skip to start", "time_home"),
     ("toggle grid", "toggle_grid"),
+    ("hide annotations", "toggle_annotations"),
+    ("show annotations", "toggle_annotations"),
+    ("next annotation", "next_annotation"),
+    ("previous annotation", "previous_annotation"),
     ("high-pass up", "highpass_up"),
     ("high-pass down", "highpass_down"),
     ("frequency resolution up", "frequency_resolution_up"),
@@ -146,6 +150,20 @@ def run_interactions(app, main_win):
             ("y mode: per-channel", lambda: main_win.set_y_mode(1)),
             ("y mode: fixed", lambda: main_win.set_y_mode(2)),
             ("y mode: shared", lambda: main_win.set_y_mode(0)),
+            (
+                "hide an event class",
+                lambda: browser.annotations.set_event("LOC", False),
+            ),
+            ("show an event class", lambda: browser.annotations.set_event("LOC", True)),
+            (
+                "hide predicted events",
+                lambda: browser.annotations.set_status("unmatched", False),
+            ),
+            (
+                "show predicted events",
+                lambda: browser.annotations.set_status("unmatched", True),
+            ),
+            ("clear annotations", lambda: browser.clear_annotations()),
             ("metadata dialog", lambda: browser.show_metadata()),
             ("message log", lambda: main_win.show_log()),
             ("shrink window", lambda: main_win.resize(1000, 700)),
@@ -212,6 +230,20 @@ def main(argv=None):
         action="store_true",
         help="switch the navigator to the baseline-referenced activity overview",
     )
+    ap.add_argument(
+        "--events",
+        help="alignment CSV to draw over the recording (see audian.events)",
+    )
+    ap.add_argument(
+        "--goto",
+        type=float,
+        help="centre the time window on this second of the recording",
+    )
+    ap.add_argument(
+        "--window",
+        type=float,
+        help="width of the time window in seconds",
+    )
     ap.add_argument("--census", action="store_true", help="report top-level widgets")
     ap.add_argument(
         "--interact",
@@ -237,12 +269,43 @@ def main(argv=None):
     files = [] if (args.empty or not args.wav) else [args.wav]
 
     t_build = time.monotonic()
-    main_win = A.Audian(files, {}, plugins, [], 0, None, False, 0)
+    main_win = A.Audian(files, {}, plugins, [], 0, None, False, 0, args.events)
     main_win.resize(args.width, args.height)
     main_win.show()
     build_ms = (time.monotonic() - t_build) * 1000
 
     pump(app, args.settle)
+
+    if args.events or args.goto is not None or args.window is not None:
+        browser = main_win.browser()
+        if browser is None:
+            faults.append("--events/--goto: no browser")
+        else:
+            if args.events and not browser.annotations.loaded:
+                faults.append(f"--events: {args.events} was not loaded")
+            if args.goto is not None or args.window is not None:
+                width = args.window
+                if width is None:
+                    trange = browser.plot_ranges["t"]
+                    width = trange.r1[0] - trange.r0[0]
+                start = 0.0 if args.goto is None else args.goto - 0.5 * width
+                browser.set_times(start, width)
+            pump(app, 2.0)
+            layer = browser.annotations
+            if layer.loaded:
+                table = layer.table
+                print(
+                    f"annotations: {table.name} -- {table.summary()}\n"
+                    f"             trust={layer.trust} "
+                    f"channel={table.header.recording_channel} "
+                    f"dropped={table.dropped}"
+                )
+                trange = browser.plot_ranges["t"]
+                t0, t1 = trange.r0[0], trange.r1[0]
+                shown = sum(
+                    table[key].count_between(t0, t1) for key in layer.active_keys()
+                )
+                print(f"             {shown} events in view {t0:.3f}..{t1:.3f} s")
 
     if args.spectrogram:
         browser = main_win.browser()

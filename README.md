@@ -21,6 +21,7 @@ for viewing and analyzing recordings of animal vocalizations.
 - Change low- and high-pass filter cutoff frequencies interactively.
 - Optional envelope with lowpass-filter cutoff frequency that can be changed interactively.
 - Hide and show channels as well as plot panels.
+- Overlay events from an alignment CSV on traces and spectrogram, backed by polars and windowed to the visible range.
 - Extensive and intuitive key shortcuts for most functions.
 - Plugins for additional computed traces, plot panels, and analysis.
 
@@ -234,6 +235,11 @@ options:
                from audioio package
   -U [UNWRAP]  unwrap clipped data with threshold relative to maximum input range and clip using unwrap() from audioio
                package
+  -a CSV, --events CSV
+               alignment or event CSV to draw over the recording; without it an alignment file sitting beside the
+               recording and naming it in its #recording= header is picked up automatically
+  --theme {dark,light}
+               colour theme; 'light' is the high-contrast daylight theme for outdoor use
 
 version 2.0 by Jan Benda (2015-2024)
 ```

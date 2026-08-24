@@ -1,3 +1,4 @@
+import logging
 import os
 
 import numpy as np
@@ -50,9 +51,21 @@ from .spectrogramplot import SpectrogramPlot
 from .markerdata import colors, color_value
 from .markerdata import MarkerLabel, MarkerLabelsModel
 from .markerdata import MarkerData, MarkerDataModel
+from .eventoverlay import (
+    LEGEND_H,
+    LEGEND_W,
+    SPECTROGRAM_ALPHA,
+    TRACE_ALPHA,
+    AnnotationLayer,
+    EventOverlay,
+    legend_icon,
+    swatch_icon,
+)
 from .analyzer import PlainAnalyzer, style_result_table
 from .statisticsanalyzer import StatisticsAnalyzer
 
+
+log = logging.getLogger(__name__)
 
 pg.setConfigOption("useNumba", True)
 
@@ -568,6 +581,11 @@ class DataBrowser(QWidget):
     RAIL_WIDTH = 48
     MAX_SPECTROGRAM_CHANNELS = 4
 
+    #: Chips per row in the Annotations group.  Four labels and three
+    #: statuses is seven toggles; laid out in one row they are wider than the
+    #: bar, so they wrap.
+    ANNOTATION_CHIP_COLUMNS = 4
+
     # y-range policies of the trace panels:
     y_shared = 0
     y_per_channel = 1
@@ -613,6 +631,7 @@ class DataBrowser(QWidget):
         audio,
         acts,
         save_path,
+        events_path=None,
         *args,
         **kwargs,
     ):
@@ -766,6 +785,27 @@ class DataBrowser(QWidget):
             self.marker_labels, self.acts, self
         )
         self.marker_orig_acts = []
+
+        # annotations: events read from a CSV and drawn over every lane.
+        # The layer is created up front and stays empty until a table is
+        # loaded, so nothing downstream has to test for its existence.
+        self.annotations = AnnotationLayer(self)
+        self.annotations.sigTableChanged.connect(self.rebuild_annotations)
+        self.annotations.sigVisibilityChanged.connect(self.redraw_annotations)
+        #: path given on the command line; None means "look for one"
+        self.events_path = events_path
+        self.annotation_overlays = []
+        self.annotation_group = None
+        self.annotation_rows = {}
+        self.annotation_sourcew = None
+        self.annotation_badgew = None
+        self.annotation_chipbox = None
+        self.annotation_chips = []
+        #: the parameter bar's groups, kept so the bar can be re-equalised
+        #: when the annotation chips change the height of their group
+        self.param_groups = []
+        self.annotation_showw = None
+        self.annotation_hoverw = None
 
         # plots:
         self.color_map = self.read_color_map_setting()
@@ -1159,6 +1199,7 @@ class DataBrowser(QWidget):
 
         if self.spectrogram:
             self.spectrogram_power = self.panels[self.data[self.spectrogram].panel].z()
+        self.attach_annotation_overlays()
         self.setup_parameter_bar()
         self.vbox.addWidget(self.parambar)
 
@@ -1690,6 +1731,9 @@ class DataBrowser(QWidget):
             self.audiohetfw.setVisible(False)
         groups.append(group)
 
+        # annotations:
+        groups.append(self.setup_annotation_group())
+
         # One band, not three boxes: equal columns on a fixed gutter, every
         # caption on one baseline and every frame the same height, so the
         # right edges line up instead of landing wherever the widest field
@@ -1698,6 +1742,7 @@ class DataBrowser(QWidget):
             group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             grid.addWidget(group, 0, column, Qt.AlignTop)
             grid.setColumnStretch(column, 1)
+        self.param_groups = groups
         ParameterGroup.equalize(groups)
         if "spectrogram" in self.data:
             self.set_resolution(dispatch=False)
@@ -1773,6 +1818,13 @@ class DataBrowser(QWidget):
         if self.cmapw is not None:
             self.cmapw.populate()
         self.set_color_map(self.color_map, dispatch=False)
+        # annotation pens carry a resolved colour, and the chip icons are
+        # baked pixmaps, so both have to be drawn again rather than restyled
+        for overlay in self.annotation_overlays:
+            overlay.polish()
+        self.build_annotation_chips()
+        self.update_annotation_badge()
+        self.redraw_annotations()
         # style_plotitem() has just reset every view box to bg.plot:
         self.update_current_plot()
 
@@ -2256,6 +2308,9 @@ class DataBrowser(QWidget):
             # cross hair is on:
             self.hover_panel = panel
             self.hover_channel = channel
+            if self.annotations.loaded and panel.is_time():
+                pointer = ax.getViewBox().mapSceneToView(evt[0])
+                self.show_annotation_under(pointer.x())
             if self.cross_hair:
                 pixel_pos = evt[0]
                 pos = ax.getViewBox().mapSceneToView(pixel_pos)
@@ -2406,6 +2461,389 @@ class DataBrowser(QWidget):
         # width cap fights a tiling compositor.
         dialog.adjustSize()
         dialog.show()
+
+    # --- annotations -----------------------------------------------------
+
+    def attach_annotation_overlays(self) -> None:
+        """Give every trace and spectrogram plot an annotation overlay.
+
+        Done once, when the plots are built.  The overlays start empty and
+        cost nothing until a table is loaded; creating them up front means a
+        file opened later never has to walk the plot tree again.
+        """
+        self.annotation_overlays = []
+        for panel in self.panels.values():
+            if panel.is_spacer() or panel.is_power():
+                continue
+            if panel.is_trace():
+                alpha = TRACE_ALPHA
+            elif panel.is_spectrogram():
+                alpha = SPECTROGRAM_ALPHA
+            else:
+                continue
+            for ax in panel.axs:
+                overlay = EventOverlay(ax, self.annotations, alpha)
+                ax.annotations = overlay
+                self.annotation_overlays.append(overlay)
+
+    def recording_path(self) -> Path:
+        """The recording an alignment file has to name.
+
+        `Data.file_path` is whatever the browser was handed, which is a list
+        while several files are being opened into one buffer and a single
+        path afterwards.  An alignment belongs to one recording, so the first
+        one is the one to check against.
+        """
+        path = self.data.file_path
+        if isinstance(path, (list, tuple, np.ndarray)):
+            path = path[0] if len(path) else ""
+        return Path(path)
+
+    def init_annotations(self) -> None:
+        """Load the annotations this browser was opened with, if any.
+
+        An explicit ``--events`` path is loaded and any failure reported.  With
+        no path, an alignment file sitting beside the recording is picked up
+        automatically -- but only if its ``#recording=`` header names *this*
+        recording, and never silently: opening one is always announced.
+        """
+        if self.events_path is not None:
+            self.load_annotations(self.events_path)
+            return
+        found = self.annotations.discover(self.recording_path())
+        if found is not None:
+            self.load_annotations(found, discovered=True)
+
+    def load_annotations(self, path, discovered: bool = False) -> bool:
+        """Read an alignment CSV and draw it over every lane."""
+        try:
+            table = self.annotations.load(path, self.recording_path())
+        except Exception as e:
+            self.notify("error", f"can not read annotations from {path}: {e}")
+            log.exception("failed to read annotations from %s", path)
+            return False
+        found = " found beside the recording" if discovered else ""
+        self.notify("success", f"{Path(path).name}{found}: {table.summary()}")
+        if table.dropped:
+            self.notify(
+                "warning",
+                f"{table.dropped} annotation rows have no t_rec_s and were dropped",
+            )
+        # An unvalidated fit or the wrong recording is not a detail for a
+        # tool tip: it invalidates every position on screen, so it goes
+        # through the same channel as an error would.
+        if self.annotations.recording_mismatch:
+            self.notify(
+                "error",
+                f"{Path(path).name} was fitted against "
+                f"{self.annotations.recording_mismatch}, not against "
+                f"{self.recording_path().name} -- every annotation is misplaced",
+            )
+        elif self.annotations.unvalidated:
+            self.notify(
+                "warning",
+                f"{Path(path).name} carries an UNVALIDATED alignment: "
+                f"annotation times are unverified predictions",
+            )
+        elif table.header.warnings:
+            self.notify(
+                "warning",
+                f"{Path(path).name}: " + "; ".join(table.header.warnings),
+            )
+        return True
+
+    def open_annotations(self) -> None:
+        """Ask for an alignment file and load it."""
+        file_path = QFileDialog.getOpenFileName(
+            self,
+            "Load annotations",
+            os.fspath(self.recording_path().parent),
+            "Alignment and event CSV (*.csv);;All files (*)",
+        )[0]
+        if file_path:
+            self.load_annotations(file_path)
+
+    def clear_annotations(self) -> None:
+        if not self.annotations.loaded:
+            return
+        self.annotations.clear()
+        self.notify("info", "annotations cleared")
+
+    def toggle_annotations(self) -> None:
+        if not self.annotations.loaded:
+            self.open_annotations()
+            return
+        self.annotations.toggle()
+
+    def rebuild_annotations(self) -> None:
+        """React to a new (or cleared) table: rebuild items, chips and badge."""
+        for overlay in self.annotation_overlays:
+            if self.annotations.loaded:
+                overlay.rebuild()
+            else:
+                overlay.clear()
+        self.build_annotation_chips()
+        self.update_annotation_badge()
+        self.redraw_annotations()
+
+    def redraw_annotations(self) -> None:
+        for overlay in self.annotation_overlays:
+            overlay.update_plot()
+        self.update_annotation_chips()
+
+    def annotation_keys(self) -> list:
+        return self.annotations.active_keys()
+
+    def step_annotation(self, forward: bool = True) -> None:
+        """Centre the view on the next annotation in time.
+
+        This is how the overlay gets checked against the recording: step to a
+        matched event, zoom in, and see whether the line sits on the pulse.
+        Only the classes that are switched on are stepped through, so the
+        step follows what is on screen.
+        """
+        table = self.annotations.table
+        if table is None:
+            return
+        keys = self.annotation_keys()
+        if not keys:
+            self.notify("warning", "no annotation class is switched on")
+            return
+        trange = self.plot_ranges[Panel.times[0]]
+        centre = 0.5 * (trange.r0[0] + trange.r1[0])
+        found = table.step(centre, forward, keys)
+        if found is None:
+            self.notify("info", "no further annotation in that direction")
+            return
+        event_class, index = found
+        time = float(event_class.times[index])
+        window = trange.r1[0] - trange.r0[0]
+        self.set_times(time - 0.5 * window, window)
+        self.notify("info", event_class.describe(index))
+
+    def annotation_under(self, time: float) -> str:
+        """Describe the annotation nearest to `time`, for the pointer readout."""
+        table = self.annotations.table
+        if table is None or not self.annotations.visible:
+            return ""
+        found = table.nearest(time, self.annotation_keys())
+        if found is None:
+            return ""
+        event_class, index = found
+        delta = float(event_class.times[index]) - time
+        # milliseconds are the unit that matters when the pointer is on an
+        # event; fourteen thousand of them are not a reading, they are a
+        # statement that the nearest event is nowhere near
+        if abs(delta) < 1.0:
+            gap = f"{1e3 * delta:+.1f} ms"
+        else:
+            gap = f"{delta:+.2f} s"
+        return f"{event_class.describe(index)}  (Δ {gap})"
+
+    def show_annotation_under(self, time: float) -> None:
+        """Name the annotation nearest the pointer in the parameter bar.
+
+        Elided to the width the row already has, never wider.  This readout
+        changes on every mouse move, and a label that asks for the width of
+        its longest string would relayout the whole parameter bar under the
+        pointer -- the same failure the status bar readouts were rebuilt to
+        stop.  The full line stays available as the tool tip.
+        """
+        label = self.annotation_hoverw
+        if label is None:
+            return
+        text = self.annotation_under(time)
+        label.setToolTip(text)
+        metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
+        label.setText(metrics.elidedText(text, Qt.ElideRight, max(label.width(), 1)))
+
+    # -- the parameter bar group --
+
+    def setup_annotation_group(self) -> "ParameterGroup":
+        """Build the Annotations group of the parameter bar.
+
+        Always built, even with nothing loaded: the group is the only place
+        that states where the annotations came from and whether their
+        alignment was ever validated, and a control that appears and
+        disappears is one nobody learns to look at.  It is hidden while no
+        table is loaded and shown the moment one is.
+        """
+        group = ParameterGroup("Annotations", self.parambar)
+
+        self.annotation_sourcew = QLabel("—", self.parambar)
+        self.annotation_sourcew.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+        theme.tint(self.annotation_sourcew, "fg")
+        self.annotation_badgew = QLabel("", self.parambar)
+        self.annotation_badgew.setFont(theme.font_mono(theme.SIZE_SMALL_PT, bold=True))
+        self.annotation_badgew.setAlignment(Qt.AlignCenter)
+        loadw = QToolButton(self.parambar)
+        loadw.setText("Load…")
+        loadw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        loadw.setToolTip("Read events from an alignment CSV  (Ctrl+Shift+A)")
+        loadw.clicked.connect(self.open_annotations)
+        group.add_row(
+            "Source", "", self.annotation_sourcew, self.annotation_badgew, loadw
+        )
+
+        # One strip for both toggle axes: what the events are, and whether
+        # they were observed.  A grid rather than a row, because a file with
+        # four labels and three statuses needs seven chips and the bar is not
+        # seven chips wide -- they wrap instead of being clipped, since a
+        # toggle nobody can see is a class nobody knows is hidden.
+        self.annotation_chipbox = QWidget(self.parambar)
+        strip = QGridLayout(self.annotation_chipbox)
+        strip.setContentsMargins(0, 0, 0, 0)
+        strip.setHorizontalSpacing(theme.S4)
+        strip.setVerticalSpacing(theme.S2)
+        strip.setColumnStretch(DataBrowser.ANNOTATION_CHIP_COLUMNS, 1)
+        self.annotation_showw = QToolButton(self.annotation_chipbox)
+        self.annotation_showw.setText("Show")
+        self.annotation_showw.setCheckable(True)
+        self.annotation_showw.setChecked(True)
+        self.annotation_showw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        self.annotation_showw.setToolTip("Show the annotation overlay  (F8)")
+        self.annotation_showw.toggled.connect(self.annotations.set_visible)
+        strip.addWidget(self.annotation_showw, 0, 0)
+        group.add_row("Classes", "", self.annotation_chipbox)
+
+        self.annotation_hoverw = QLabel("", self.parambar)
+        self.annotation_hoverw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+        self.annotation_hoverw.setWordWrap(False)
+        # Ignored, not Preferred: the row takes the width the column has and
+        # never asks for more, so what the pointer happens to be near cannot
+        # change the geometry of the bar (see show_annotation_under).
+        self.annotation_hoverw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        theme.tint(self.annotation_hoverw, "fg.muted")
+        group.add_row("Pointer", "", self.annotation_hoverw)
+
+        self.annotation_group = group
+        group.setVisible(False)
+        return group
+
+    def build_annotation_chips(self) -> None:
+        """Rebuild the per-event and per-status toggle chips.
+
+        The chips double as the legend: each one is drawn with the pen the
+        overlay itself uses, so the colour of an event and the difference
+        between an observed and a predicted line can be read off the bar
+        rather than remembered.
+        """
+        if self.annotation_chipbox is None:
+            return
+        strip = self.annotation_chipbox.layout()
+        for chip in self.annotation_chips:
+            strip.removeWidget(chip)
+            chip.setParent(None)
+            chip.deleteLater()
+        self.annotation_chips = []
+        if not self.annotations.loaded:
+            if self.annotation_group is not None:
+                self.annotation_group.setVisible(False)
+            return
+
+        unvalidated = self.annotations.unvalidated
+        chips = []
+        for event, count, color, enabled in self.annotations.event_counts():
+            chip = self.annotation_chip(f"{event}  {count}", enabled)
+            chip.setIcon(swatch_icon(color))
+            chip.setToolTip(f"Show {event} events ({count})")
+            chip.toggled.connect(lambda on, e=event: self.annotations.set_event(e, on))
+            chips.append(chip)
+        for status, count, measured, enabled in self.annotations.status_counts():
+            chip = self.annotation_chip(f"{status}  {count}", enabled)
+            chip.setIcon(legend_icon(theme.token("fg"), measured, unvalidated))
+            chip.setToolTip(
+                f"Show {status} events ({count}).\n"
+                + (
+                    "Observed: the pulse was found in the recording, and the "
+                    "line is drawn across the whole lane."
+                    if measured
+                    else "Predicted: nothing was found in the recording at "
+                    "this time -- it is where the fit says the pulse should "
+                    "be. Drawn as a short dashed stub with a hollow cap."
+                )
+            )
+            chip.toggled.connect(
+                lambda on, st=status: self.annotations.set_status(st, on)
+            )
+            chips.append(chip)
+
+        columns = DataBrowser.ANNOTATION_CHIP_COLUMNS
+        for i, chip in enumerate(chips):
+            # +1 so the Show button keeps the first cell of the first row
+            slot = i + 1
+            strip.addWidget(chip, slot // columns, slot % columns)
+        self.annotation_chips = chips
+
+        if self.annotation_group is not None:
+            self.annotation_group.setVisible(True)
+        # the group grew or shrank by a row of chips, and equalize() froze
+        # every frame height when the bar was built
+        ParameterGroup.equalize(self.param_groups)
+
+    def annotation_chip(self, text: str, checked: bool) -> QToolButton:
+        chip = QToolButton(self.annotation_chipbox)
+        chip.setText(text)
+        chip.setCheckable(True)
+        chip.setChecked(bool(checked))
+        chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+        chip.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        # exactly the pixmap size: a legend icon scaled by even one pixel
+        # loses the hairline that says whether the line is solid or broken
+        chip.setIconSize(QSize(LEGEND_W, LEGEND_H))
+        return chip
+
+    def update_annotation_chips(self) -> None:
+        """Keep the Show button in step with the layer."""
+        if self.annotation_showw is None:
+            return
+        blocked = self.annotation_showw.blockSignals(True)
+        self.annotation_showw.setChecked(self.annotations.visible)
+        self.annotation_showw.blockSignals(blocked)
+
+    def update_annotation_badge(self) -> None:
+        """Restate where the annotations came from and how far to trust them."""
+        if self.annotation_sourcew is None:
+            return
+        table = self.annotations.table
+        if table is None:
+            self.annotation_sourcew.setText("—")
+            self.annotation_sourcew.setToolTip("")
+            self.annotation_badgew.setText("")
+            self.annotation_badgew.setVisible(False)
+            if self.annotation_hoverw is not None:
+                self.annotation_hoverw.setText("")
+            return
+        metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
+        name = metrics.elidedText(table.name, Qt.ElideMiddle, 20 * theme.S8)
+        # The channel goes in the label, not only in the tool tip: the fit is
+        # per channel, and which one it was made against is the difference
+        # between an annotation that was checked against what is on screen
+        # and one that was checked against the lane below it.
+        channel = table.header.recording_channel
+        fitted = f"  fit ch {channel:02d}" if channel is not None else "  fit ch ??"
+        self.annotation_sourcew.setText(name + fitted)
+        self.annotation_sourcew.setToolTip(
+            f"{table.path}\n{table.summary()}\n"
+            + (
+                f"The alignment was fitted against channel {channel} of the "
+                "recording.\nIt is drawn over every channel, because the "
+                "channels share one clock,\nbut only that one was checked."
+                if channel is not None
+                else "The header does not say which channel the fit was made against."
+            )
+        )
+        text, token, tip = self.annotations.badge()
+        self.annotation_badgew.setText(text)
+        self.annotation_badgew.setToolTip(tip)
+        self.annotation_badgew.setVisible(bool(text))
+        self.annotation_badgew.setStyleSheet(
+            f"color: {theme.token(token)};"
+            f"background: {theme.token('bg.surface')};"
+            f"border: {theme.HAIRLINE}px solid {theme.token(token)};"
+            f"border-radius: {theme.RADIUS_CONTROL}px;"
+            f"padding: {theme.S2}px {theme.S6}px;"
+        )
 
     def update_borders(self, rect=None):
         """Frame the current channel only.

@@ -222,3 +222,77 @@ an operation on all of them.
 Switch the Y axis to per-channel and the same operations apply only to the
 selected channels instead, which is what selecting a range of lanes with
 shift-click is for.
+
+
+## Annotations from an alignment CSV
+
+An **alignment file** says when something happened during the recording —
+one row per emitted stimulus pulse, already mapped onto the recording's
+clock. Audian draws those rows as vertical lines over every trace and every
+spectrogram, so you can see whether an event lands where it should.
+
+```sh
+audian -a alignment.csv DR0000_0087.wav
+```
+
+Without `-a`, Audian looks for `<recording>.alignment.csv`,
+`<recording>-alignment.csv` or a plain `alignment.csv` next to the
+recording, and opens it only if its `#recording=` header names *that*
+recording. A stray alignment file from a neighbouring experiment is exactly
+the mistake that would put every line in the wrong place, so the check is
+not optional. It is never silent either: the status bar says what was
+opened and how many events it holds.
+
+Only the `t_rec_s` column positions anything — seconds from frame 0 of the
+recording. Everything else is either provenance or the evidence behind one
+row.
+
+### The Annotations panel
+
+The bottom bar grows an **Annotations** group while a file is loaded:
+
+- **Source** — the file, the channel the fit was made against, and a badge
+  saying how far its positions may be believed. Hover the badge for the fit
+  itself: scale, offset and drift.
+- **Classes** — one chip per event label and one per status. Colour is the
+  event; the chips are drawn with the same pens the plot uses, so the strip
+  doubles as the legend. Click one to hide that class.
+- **Pointer** — the annotation nearest the mouse, with its sequence number,
+  trial, and how far the detection sat from the prediction.
+
+`F8` hides and shows the whole overlay. `n` and `Shift+N` step the view to
+the next and previous annotation of a class that is shown — which is how you
+check the overlay against the audio: step to an event, zoom in, and see
+whether the line sits on the pulse.
+
+### Observed and predicted are drawn differently
+
+A **matched** row was found in the recording. It is drawn as a solid line
+across the whole lane.
+
+An **unmatched** or **outside** row was not. Its time is where the fit says
+the pulse should be, and nothing in the recording confirms it — which is
+exactly why its `t_det_s` column is empty. It is drawn as a short dashed
+stub near the top of the lane with a hollow diamond cap, so it can never be
+mistaken for something that was seen.
+
+### An unvalidated alignment is never shown quietly
+
+Every line's position comes from the scale/offset fit in the file's header.
+If that fit is wrong, every line is in the wrong place *and still looks
+fine*. So when the header says `validated=0` — or carries no `validated` key
+at all — Audian does two things: it badges the panel **UNVALIDATED** in red
+and warns in the status bar, and it draws every line broken instead of
+solid. Observed and predicted stay distinguishable from each other (dashes
+against dots); both stop looking like statements of fact.
+
+An alignment fitted against a different recording badges louder still, as
+**WRONG RECORDING**.
+
+### Long sessions
+
+Only what is in the visible time range is drawn, and inside that range
+events closer together than one screen pixel are collapsed to the one line
+they would have painted anyway. A file with half a million events costs a
+few milliseconds a frame, and the count on each chip is always the number of
+events in the file, not the number of lines on screen.

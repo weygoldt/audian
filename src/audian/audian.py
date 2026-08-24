@@ -1104,6 +1104,15 @@ class CheatSheet(QDialog):
             ),
         ),
         (
+            "Annotations",
+            (
+                "toggle_annotations",
+                "next_annotation",
+                "previous_annotation",
+                "load_annotations",
+            ),
+        ),
+        (
             "Regions",
             (
                 "zoom_region",
@@ -1265,6 +1274,7 @@ class Audian(QMainWindow):
         lowpass_cutoff,
         unwrap,
         unwrap_clip,
+        events_path=None,
     ):
         super().__init__()
 
@@ -1291,6 +1301,11 @@ class Audian(QMainWindow):
         self.channels = channels
         self.highpass_cutoff = highpass_cutoff
         self.lowpass_cutoff = lowpass_cutoff
+        # An explicit --events file names one recording, so it is handed to
+        # the first browser and then dropped.  Every other file opened in
+        # the same run looks for an alignment beside itself instead, which
+        # is what the header check in events.find_alignment() is for.
+        self.events_path = events_path
 
         self.audio = PlayAudio()
 
@@ -3492,6 +3507,70 @@ class Audian(QMainWindow):
                     )
         self.sync_toolbar()
 
+    # --- annotations ------------------------------------------------------
+
+    def load_annotations(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.open_annotations()
+
+    def clear_annotations(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.clear_annotations()
+
+    def toggle_annotations(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.toggle_annotations()
+
+    def next_annotation(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.step_annotation(True)
+
+    def previous_annotation(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.step_annotation(False)
+
+    def setup_annotation_actions(self, menu):
+        self.acts.load_annotations = QAction("&Load annotations…", self)
+        self.acts.load_annotations.setShortcut("Ctrl+Shift+A")
+        self.acts.load_annotations.setToolTip(
+            "Read events from an alignment CSV and draw them over every lane"
+        )
+        self.acts.load_annotations.triggered.connect(self.load_annotations)
+
+        self.acts.toggle_annotations = QAction("&Toggle annotations", self)
+        self.acts.toggle_annotations.setShortcut("F8")
+        self.acts.toggle_annotations.triggered.connect(self.toggle_annotations)
+
+        self.acts.clear_annotations = QAction("&Clear annotations", self)
+        self.acts.clear_annotations.triggered.connect(self.clear_annotations)
+
+        self.acts.next_annotation = QAction("&Next annotation", self)
+        self.acts.next_annotation.setShortcut("n")
+        self.acts.next_annotation.setToolTip(
+            "Centre the view on the next annotation of a class that is shown"
+        )
+        self.acts.next_annotation.triggered.connect(self.next_annotation)
+
+        self.acts.previous_annotation = QAction("&Previous annotation", self)
+        self.acts.previous_annotation.setShortcut("Shift+N")
+        self.acts.previous_annotation.triggered.connect(self.previous_annotation)
+
+        annotation_menu = menu.addMenu("&Annotations")
+        annotation_menu.addAction(self.acts.load_annotations)
+        annotation_menu.addAction(self.acts.toggle_annotations)
+        annotation_menu.addAction(self.acts.clear_annotations)
+        annotation_menu.addSeparator()
+        annotation_menu.addAction(self.acts.next_annotation)
+        annotation_menu.addAction(self.acts.previous_annotation)
+
+        self.data_menus.append(annotation_menu)
+        return annotation_menu
+
     def setup_panel_actions(self, menu):
         self.acts.link_panels = QAction("Link &panels", self)
         # self.acts.link_panels.setShortcut('Alt+P')
@@ -3647,6 +3726,7 @@ class Audian(QMainWindow):
         self.setup_envelope_actions(view_menu)
         self.setup_channel_actions(view_menu)
         self.setup_panel_actions(view_menu)
+        self.setup_annotation_actions(view_menu)
         self.traces_menu = view_menu.addMenu("&Traces")
         self.data_menus.append(self.traces_menu)
         view_menu.addAction(self.acts.toggle_grid)
@@ -3776,6 +3856,7 @@ class Audian(QMainWindow):
             self.audio,
             self.acts,
             self.save_path,
+            self.take_events_path(),
         )
         self.tabs.addTab(browser, browser.name())
         self.browsers.append(browser)
@@ -3820,6 +3901,7 @@ class Audian(QMainWindow):
                     self.audio,
                     self.acts,
                     self.save_path,
+                    self.take_events_path(),
                 )
                 self.tabs.addTab(nbrowser, nbrowser.name())
                 self.browsers.append(nbrowser)
@@ -3865,8 +3947,17 @@ class Audian(QMainWindow):
             self.remember_file(browser)
             self.sync_toolbar()
             self.notify("success", f"opened {browser.name()}")
+            # after the open message, so that what the annotations have to
+            # say about their alignment is the last thing left standing
+            browser.init_annotations()
             QTimer.singleShot(100, self.load_data)
             break
+
+    def take_events_path(self):
+        """The --events path, once.  See `Audian.events_path`."""
+        path = self.events_path
+        self.events_path = None
+        return path
 
     def remember_file(self, browser):
         """Add a freshly opened browser to the recent files list."""
@@ -3996,6 +4087,17 @@ def audian_cli(cargs=[], plugins=None):
         help="unwrap clipped data with threshold relative to maximum input range and clip using unwrap() from audioio package",
     )
     parser.add_argument(
+        "-a",
+        "--events",
+        dest="events_path",
+        default=None,
+        type=str,
+        metavar="CSV",
+        help="alignment or event CSV to draw over the recording; without it "
+        "an alignment file sitting beside the recording and naming it in its "
+        "#recording= header is picked up automatically",
+    )
+    parser.add_argument(
         "--theme",
         dest="theme",
         default=None,
@@ -4066,6 +4168,7 @@ def audian_cli(cargs=[], plugins=None):
         args.lowpass_cutoff,
         args.unwrap,
         args.unwrap_clip,
+        args.events_path,
     )
     main.show()
     app.exec_()

@@ -12,6 +12,11 @@ class RangePlot(pg.PlotItem):
         self.channel = channel
         self.data_items = []
         self.grid_on = False
+        #: annotation overlay, attached by the browser once a table is
+        #: loaded (see `eventoverlay.EventOverlay`).  Deliberately NOT a
+        #: data item: annotations must never take part in fitting the
+        #: amplitude range or in answering "what is under the pointer".
+        self.annotations = None
 
         # view box:
         view = SelectViewBox(channel)
@@ -151,3 +156,5 @@ class RangePlot(pg.PlotItem):
         for item in self.data_items:
             if item.isVisible():
                 item.update_plot()
+        if self.annotations is not None:
+            self.annotations.update_plot()
