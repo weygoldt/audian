@@ -70,6 +70,7 @@ AUDIO_SUFFIXES = (
 GLYPH_NORMAL = "fg.muted"  # 6.9:1 on bg.surface
 GLYPH_ACTIVE = "fg"  # hover / selected
 GLYPH_DISABLED = "fg.faint"  # what the palette already gives disabled text
+GLYPH_ON = "on.primary"  # on a checked button's primary.dim fill
 # NOTE: the design brief asked for 55% alpha on the disabled glyph.  Over
 # bg.base that composites to #404855 - 1.96:1, which is the very greyness
 # the invisible-icon defect was filed about, and it is dimmer than the
@@ -231,9 +232,19 @@ def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
         (QIcon.Selected, GLYPH_ACTIVE, None),
         (QIcon.Disabled, GLYPH_DISABLED, GLYPH_DISABLED_ALPHA),
     ):
-        pm = glyph_pixmap(kind, size, role, alpha)
-        icon.addPixmap(pm, mode, QIcon.Off)
-        icon.addPixmap(pm, mode, QIcon.On)
+        icon.addPixmap(glyph_pixmap(kind, size, role, alpha), mode, QIcon.Off)
+    # A checked button is filled with primary.dim, which is *dark* in the
+    # daylight theme.  Drawing the On state in the same ink as the Off state
+    # put a black glyph on navy there -- the icon vanished exactly when the
+    # button was active.  On states get the on-primary foreground instead.
+    on_pixmap = glyph_pixmap(kind, size, GLYPH_ON, None)
+    for mode in (QIcon.Normal, QIcon.Active, QIcon.Selected):
+        icon.addPixmap(on_pixmap, mode, QIcon.On)
+    icon.addPixmap(
+        glyph_pixmap(kind, size, GLYPH_DISABLED, GLYPH_DISABLED_ALPHA),
+        QIcon.Disabled,
+        QIcon.On,
+    )
     return icon
 
 
@@ -506,6 +517,41 @@ class RecentRow(QPushButton):
         return metrics.elidedText(
             lead + sep.join(parts[:1] + ["…"] + parts[-1:]), Qt.ElideMiddle, width
         )
+
+
+def settings_path() -> Path:
+    """Where the few persistent preferences live.
+
+    Config rather than cache: a wiped cache must cost the user nothing but
+    recomputation, and a theme choice is not recomputable.
+    """
+    return audian_dirs.user_config_path / "settings.json"
+
+
+def settings() -> dict:
+    """Read the preferences file.  Never raises; a broken file reads empty."""
+    try:
+        path = settings_path()
+        if path.exists():
+            with open(path) as sf:
+                values = json.load(sf)
+            if isinstance(values, dict):
+                return values
+    except (OSError, ValueError) as e:
+        log.debug("could not read settings: %s", e)
+    return {}
+
+
+def save_setting(key: str, value) -> None:
+    """Update one preference in place.  Never raises."""
+    values = settings()
+    values[key] = value
+    try:
+        audian_dirs.user_config_path.mkdir(parents=True, exist_ok=True)
+        with open(settings_path(), "w") as df:
+            json.dump(values, df, indent=2)
+    except OSError as e:
+        log.debug("could not write settings: %s", e)
 
 
 class StartupPage(QWidget):
@@ -1043,6 +1089,11 @@ class Audian(QMainWindow):
 
         self.acts = acts
 
+        # (widget, glyph kind) pairs, so a theme switch can rebuild icons
+        self._glyph_targets = []
+        # toolbar separators carry a baked colour and must be restyled too
+        self._toolbar_separators = []
+
         self.browsers = []
         self.prev_browser = None  # for load_data()
         self.file_paths = []
@@ -1142,6 +1193,74 @@ class Audian(QMainWindow):
     def __del__(self):
         if self.audio is not None:
             self.audio.close()
+
+    def set_app_theme(self, name: str) -> None:
+        """Switch the whole application between the dark and daylight themes.
+
+        ``theme.apply()`` only reaches the Qt chrome -- palette, font and
+        stylesheet.  The plots are a pyqtgraph graphics scene whose pens and
+        brushes were resolved when each item was built, so without the walk
+        below a switch leaves light menus wrapped around dark plots.
+        """
+        if name not in (theme.THEME_DARK, theme.THEME_LIGHT):
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        theme.apply(app, name)
+        self.refresh_glyph_icons()
+        self.restyle_chrome()
+        for browser in self.browsers:
+            if hasattr(browser, "apply_theme"):
+                browser.apply_theme()
+        # StartupPage bakes token values into per-widget stylesheets across
+        # several builders; rebuilding it is exact, where chasing each one
+        # would silently miss whichever gets added next.
+        if self.startup is not None:
+            was_current = self.stack.currentWidget() is self.startup
+            fresh = StartupPage(self)
+            self.stack.insertWidget(0, fresh)
+            self.stack.removeWidget(self.startup)
+            self.startup.deleteLater()
+            self.startup = fresh
+            self.startup.reload()
+            if was_current:
+                self.stack.setCurrentWidget(self.startup)
+        self.acts.daylight_mode.setChecked(name == theme.THEME_LIGHT)
+        save_setting("theme", name)
+        self.statusBar().showMessage(
+            "Daylight theme - high contrast for outdoor use"
+            if name == theme.THEME_LIGHT
+            else "Dark theme",
+            2500,
+        )
+
+    def toggle_daylight(self) -> None:
+        """Flip between the dark and daylight themes (Ctrl+Shift+L)."""
+        self.set_app_theme(
+            theme.THEME_DARK
+            if theme.current_theme() == theme.THEME_LIGHT
+            else theme.THEME_LIGHT
+        )
+
+    def _set_glyph(self, target, kind: str) -> None:
+        """Give `target` a themed glyph icon, and remember the pairing.
+
+        A ``QIcon`` bakes its pixmaps when it is built, so icons do not follow
+        a live theme switch on their own.  Recording (target, kind) here is
+        what lets :meth:`refresh_glyph_icons` rebuild them.
+        """
+        self._glyph_targets.append((target, kind))
+        target.setIcon(glyph_icon(kind))
+
+    def refresh_glyph_icons(self) -> None:
+        """Rebuild every glyph icon from the current token table."""
+        for target, kind in self._glyph_targets:
+            try:
+                target.setIcon(glyph_icon(kind))
+            except RuntimeError:
+                # the underlying C++ object went away with a closed tab
+                continue
 
     def show_startup(self):
         """Show the empty state instead of the browser tabs."""
@@ -1521,11 +1640,50 @@ class Audian(QMainWindow):
         line.setFrameShape(QFrame.VLine)
         line.setFixedWidth(theme.HAIRLINE)
         line.setStyleSheet(f"background: {theme.token('border')};border: none;")
+        self._toolbar_separators.append(line)
         self.toolbar.addWidget(line)
         right = QWidget(self.toolbar)
         make_transparent(right, "audian_toolbar_gap")
         right.setFixedWidth(theme.S12)
         self.toolbar.addWidget(right)
+
+    @staticmethod
+    def _toolbar_style() -> str:
+        """The toolbar's own stylesheet, rebuilt from the active tokens."""
+        return (
+            "QToolBar#audian_toolbar {"
+            f"background: {theme.token('bg.surface')};"
+            f"border-bottom: {theme.HAIRLINE}px solid {theme.token('border')};"
+            f"spacing: {theme.S4}px;"
+            f"padding: 0px {theme.S8}px; }}"
+        )
+
+    def restyle_chrome(self) -> None:
+        """Re-apply every inline stylesheet the main window owns.
+
+        These are baked from token values when the widget is built, so the
+        application stylesheet alone does not move them: without this the
+        toolbar stays dark under a light menu bar.
+        """
+        if self.toolbar is not None:
+            self.toolbar.setStyleSheet(self._toolbar_style())
+        for line in self._toolbar_separators:
+            try:
+                line.setStyleSheet(f"background: {theme.token('border')};border: none;")
+            except RuntimeError:
+                continue
+        if getattr(self, "mode_chip", None) is not None:
+            has_mode = bool(self.mode_chip.text())
+            self.mode_chip.setStyleSheet(
+                chip_style("fg", "border.hi") if has_mode else chip_style("fg.muted")
+            )
+        for name, token_name in (
+            ("message_label", "fg.muted"),
+            ("progress_label", "fg.muted"),
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setStyleSheet(f"color: {theme.token(token_name)};")
 
     def toolbar_button(self, act, style=Qt.ToolButtonIconOnly) -> QToolButton:
         button = QToolButton(self.toolbar)
@@ -1543,13 +1701,7 @@ class Audian(QMainWindow):
         tb.setFloatable(False)
         tb.setIconSize(QSize(16, 16))
         tb.setContextMenuPolicy(Qt.PreventContextMenu)
-        tb.setStyleSheet(
-            "QToolBar#audian_toolbar {"
-            f"background: {theme.token('bg.surface')};"
-            f"border-bottom: {theme.HAIRLINE}px solid {theme.token('border')};"
-            f"spacing: {theme.S4}px;"
-            f"padding: 0px {theme.S8}px; }}"
-        )
+        tb.setStyleSheet(self._toolbar_style())
         self.addToolBar(Qt.TopToolBarArea, tb)
         self.toolbar = tb
 
@@ -1565,11 +1717,11 @@ class Audian(QMainWindow):
         self.toolbar_gap()
 
         # region mode, exclusive, legible:
-        self.acts.zoom_region.setIcon(glyph_icon("zoom"))
-        self.acts.play_region.setIcon(glyph_icon("play"))
-        self.acts.analyze_region.setIcon(glyph_icon("analyze"))
-        self.acts.save_region.setIcon(glyph_icon("save"))
-        self.acts.ask_region.setIcon(glyph_icon("ask"))
+        self._set_glyph(self.acts.zoom_region, "zoom")
+        self._set_glyph(self.acts.play_region, "play")
+        self._set_glyph(self.acts.analyze_region, "analyze")
+        self._set_glyph(self.acts.save_region, "save")
+        self._set_glyph(self.acts.ask_region, "ask")
         self.mode_buttons = []
         for act in (
             self.acts.zoom_region,
@@ -1583,11 +1735,11 @@ class Audian(QMainWindow):
         self.toolbar_gap()
 
         # panels:
-        self.acts.toggle_traces.setIcon(glyph_icon("trace"))
-        self.acts.toggle_spectrograms.setIcon(glyph_icon("spectrogram"))
-        self.acts.toggle_power.setIcon(glyph_icon("power"))
-        self.acts.toggle_cbars.setIcon(glyph_icon("colorbar"))
-        self.acts.toggle_fulldata.setIcon(glyph_icon("navigator"))
+        self._set_glyph(self.acts.toggle_traces, "trace")
+        self._set_glyph(self.acts.toggle_spectrograms, "spectrogram")
+        self._set_glyph(self.acts.toggle_power, "power")
+        self._set_glyph(self.acts.toggle_cbars, "colorbar")
+        self._set_glyph(self.acts.toggle_fulldata, "navigator")
         for act in (
             self.acts.toggle_traces,
             self.acts.toggle_spectrograms,
@@ -1600,7 +1752,7 @@ class Audian(QMainWindow):
         self.toolbar_gap()
 
         # amplitude:
-        self.acts.auto_zoom_amplitude.setIcon(glyph_icon("fit"))
+        self._set_glyph(self.acts.auto_zoom_amplitude, "fit")
         self.toolbar_button(self.acts.auto_zoom_amplitude, Qt.ToolButtonTextBesideIcon)
         self.ampl_button = QToolButton(tb)
         self.ampl_button.setPopupMode(QToolButton.InstantPopup)
@@ -1638,7 +1790,7 @@ class Audian(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
         self.channel_button = QToolButton(tb)
-        self.channel_button.setIcon(glyph_icon("channels"))
+        self._set_glyph(self.channel_button, "channels")
         self.channel_button.setPopupMode(QToolButton.InstantPopup)
         self.channel_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.channel_button.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
@@ -2052,13 +2204,13 @@ class Audian(QMainWindow):
         self.acts.rect_zoom.setChecked(True)
 
         self.acts.zoom_back = QAction("Zoom &back", self)
-        self.acts.zoom_back.setIcon(glyph_icon("back"))
+        self._set_glyph(self.acts.zoom_back, "back")
         self.acts.zoom_back.setToolTip("Zoom back (Backspace)")
         self.acts.zoom_back.setShortcuts(["Backspace", "Alt+Left"])
         self.acts.zoom_back.triggered.connect(lambda x=0: self.browser().zoom_back())
 
         self.acts.zoom_forward = QAction("Zoom &forward", self)
-        self.acts.zoom_forward.setIcon(glyph_icon("forward"))
+        self._set_glyph(self.acts.zoom_forward, "forward")
         self.acts.zoom_forward.setToolTip("Zoom forward (Shift+Backspace)")
         self.acts.zoom_forward.setShortcuts(["Shift+Backspace", "Alt+Right"])
         self.acts.zoom_forward.triggered.connect(
@@ -2066,7 +2218,7 @@ class Audian(QMainWindow):
         )
 
         self.acts.zoom_home = QAction("Zoom &home", self)
-        self.acts.zoom_home.setIcon(glyph_icon("home"))
+        self._set_glyph(self.acts.zoom_home, "home")
         self.acts.zoom_home.setToolTip("Zoom home (Alt+Backspace)")
         self.acts.zoom_home.setShortcut("Alt+Backspace")
         self.acts.zoom_home.triggered.connect(lambda x=0: self.browser().zoom_home())
@@ -2113,7 +2265,7 @@ class Audian(QMainWindow):
         )
 
         self.acts.play_window = QAction("&Play window", self)
-        self.acts.play_window.setIcon(glyph_icon("play"))
+        self._set_glyph(self.acts.play_window, "play")
         self.acts.play_window.setToolTip("Play window (Space)")
         self.acts.play_window.setShortcut(" ")
         self.acts.play_window.triggered.connect(
@@ -2233,7 +2385,7 @@ class Audian(QMainWindow):
         self.acts.link_time_scroll.toggled.connect(self.toggle_link_timescroll)
 
         self.acts.time_down = QAction("Seek &forward", self)
-        self.acts.time_down.setIcon(glyph_icon("seek-forward"))
+        self._set_glyph(self.acts.time_down, "seek-forward")
         self.acts.time_down.setToolTip("Seek forward (Page down)")
         self.acts.time_down.setShortcuts(QKeySequence.MoveToNextPage)
         self.acts.time_down.triggered.connect(
@@ -2241,7 +2393,7 @@ class Audian(QMainWindow):
         )
 
         self.acts.time_up = QAction("Seek &backward", self)
-        self.acts.time_up.setIcon(glyph_icon("seek-backward"))
+        self._set_glyph(self.acts.time_up, "seek-backward")
         self.acts.time_up.setToolTip("Seek backward (Page up)")
         self.acts.time_up.setShortcuts(QKeySequence.MoveToPreviousPage)
         self.acts.time_up.triggered.connect(
@@ -2261,7 +2413,7 @@ class Audian(QMainWindow):
         )
 
         self.acts.time_end = QAction("&End", self)
-        self.acts.time_end.setIcon(glyph_icon("skip-forward"))
+        self._set_glyph(self.acts.time_end, "skip-forward")
         self.acts.time_end.setToolTip("Skip to end of data (End)")
         self.acts.time_end.setShortcuts(
             [QKeySequence.MoveToEndOfLine, QKeySequence.MoveToEndOfDocument]
@@ -2271,7 +2423,7 @@ class Audian(QMainWindow):
         )
 
         self.acts.time_home = QAction("&Home", self)
-        self.acts.time_home.setIcon(glyph_icon("skip-backward"))
+        self._set_glyph(self.acts.time_home, "skip-backward")
         self.acts.time_home.setToolTip("Skip to beginning of data (Home)")
         self.acts.time_home.setShortcuts(
             [QKeySequence.MoveToStartOfLine, QKeySequence.MoveToStartOfDocument]
@@ -3133,6 +3285,15 @@ class Audian(QMainWindow):
         self.acts.previous_file.setShortcut("Ctrl+PgUp")
         self.acts.previous_file.triggered.connect(self.previous_tab)
 
+        self.acts.daylight_mode = QAction("&Daylight mode", self)
+        self.acts.daylight_mode.setCheckable(True)
+        self.acts.daylight_mode.setChecked(theme.current_theme() == theme.THEME_LIGHT)
+        self.acts.daylight_mode.setShortcut("Ctrl+Shift+L")
+        self.acts.daylight_mode.setToolTip(
+            "High-contrast light theme for reading the screen in direct sunlight"
+        )
+        self.acts.daylight_mode.triggered.connect(self.toggle_daylight)
+
         self.acts.maximize_window = QAction("Toggle &maximize", self)
         self.acts.maximize_window.setShortcut("Ctrl+Shift+M")
         self.acts.maximize_window.triggered.connect(self.toggle_maximize)
@@ -3147,6 +3308,7 @@ class Audian(QMainWindow):
         self.traces_menu = view_menu.addMenu("&Traces")
         self.data_menus.append(self.traces_menu)
         view_menu.addAction(self.acts.toggle_grid)
+        view_menu.addAction(self.acts.daylight_mode)
         view_menu.addAction(self.acts.maximize_window)
         self.addAction(self.acts.next_file)
         self.addAction(self.acts.previous_file)
@@ -3490,6 +3652,14 @@ def audian_cli(cargs=[], plugins=None):
         help="unwrap clipped data with threshold relative to maximum input range and clip using unwrap() from audioio package",
     )
     parser.add_argument(
+        "--theme",
+        dest="theme",
+        default=None,
+        choices=["dark", "light"],
+        help="colour theme; 'light' is the high-contrast daylight theme for "
+        "outdoor use (default: whatever was last chosen, else dark)",
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         default=[],
@@ -3538,7 +3708,11 @@ def audian_cli(cargs=[], plugins=None):
         files = args.files
 
     app = QApplication(sys.argv[:1] + qt_args)
-    theme.apply(app)
+    # the command line wins for this run; otherwise restore the last choice
+    theme_name = args.theme or settings().get("theme", theme.THEME_DARK)
+    if theme_name not in (theme.THEME_DARK, theme.THEME_LIGHT):
+        theme_name = theme.THEME_DARK
+    theme.apply(app, theme_name)
     main = Audian(
         files,
         load_kwargs,

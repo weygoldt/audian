@@ -69,6 +69,8 @@ helper still maps to the active theme's equivalent.  Prefer helpers.
 
 from __future__ import annotations
 
+import copy
+
 from string import Template
 from typing import Any, Iterable, Sequence
 
@@ -272,30 +274,47 @@ DARK_TOKENS: dict[str, str] = {
     "trace.filtered": TRACE_FILTERED,
     "trace.envelope": TRACE_ENVELOPE,
     "trace.zero": TRACE_ZERO,
+    # foreground for anything sitting ON a primary fill (checked toolbar
+    # buttons, the open button).  Light in BOTH themes: primary.dim is dark
+    # in the daylight theme, so $fg there would be black on navy.
+    "on.primary": FG,
 }
 
-#: The light token table.  A straightforward inversion of the surfaces with
-#: darkened accents and data-series colours so they still clear 4.5:1 on a
-#: light plot background.  Deliberately not over-invested in.
+#: The light token table -- a **daylight** theme, not a polite inversion.
+#:
+#: This exists because the tool is used outdoors in direct sun, where a
+#: screen's own emission is competing with the sky.  The design rules are
+#: therefore different from the dark theme's, and deliberately so:
+#:
+#: * plot and page grounds are pure ``#FFFFFF``.  Any tint costs luminance,
+#:   and luminance is the entire budget under glare.
+#: * ink is near-black.  There are no mid-greys: a 4.5:1 label that reads
+#:   fine indoors disappears at 50 000 lux, so even ``fg.faint`` -- excluded
+#:   from the contrast gate as decoration -- is held above 6:1 here.
+#: * data-series colours are dark and saturated rather than bright.  On white
+#:   a pale trace has almost no contrast; the dark theme's ``#7FD4FF`` scores
+#:   1.4:1 on white against 8.9:1 for the value used below.
+#: * borders are strong enough to survive washout instead of being hairlines.
 LIGHT_TOKENS: dict[str, str] = {
-    "bg.base": "#F4F6FA",
-    "bg.surface": "#E9EDF3",
+    "bg.base": "#FFFFFF",
+    "bg.surface": "#EDEFF3",
     "bg.raised": "#FFFFFF",
-    "bg.plot": "#FAFBFD",
-    "border": "#C9D2DF",
-    "border.hi": "#97A4B6",
-    "fg": "#0E141C",
-    "fg.muted": "#4A5666",
-    "fg.faint": "#6F7C8E",
-    "primary": "#1552C7",
-    "primary.dim": "#0E3B90",
-    "accent": "#8F5200",
-    "success": "#17784A",
-    "danger": "#C22B2B",
-    "trace.raw": "#12649B",
-    "trace.filtered": "#8A5200",
-    "trace.envelope": "#A81F6B",
-    "trace.zero": "#C7CFDB",
+    "bg.plot": "#FFFFFF",
+    "border": "#9AA6B4",
+    "border.hi": "#5C6B7C",
+    "fg": "#000000",
+    "fg.muted": "#2B3440",
+    "fg.faint": "#5A6675",
+    "primary": "#0B3FA8",
+    "primary.dim": "#082E7A",
+    "accent": "#8A4200",
+    "success": "#0B5C34",
+    "danger": "#A11212",
+    "trace.raw": "#0B4F8A",
+    "trace.filtered": "#8A4200",
+    "trace.envelope": "#8E1A5C",
+    "trace.zero": "#AAB4C0",
+    "on.primary": "#FFFFFF",
 }
 
 #: All selectable themes, by name.
@@ -811,6 +830,25 @@ dimmed waveform is a graphic, so 3:1 is the line it may not cross.  Every
 dimming request is clamped to it -- see :func:`dim_color`.
 """
 
+MIN_GRAPHIC_CONTRAST_DAYLIGHT = 4.5
+"""The same floor for the daylight theme, held a full step higher.
+
+3:1 is the WCAG floor for non-text graphics and is right for a screen read
+indoors.  It is not right for one read in direct sun: glare raises the
+effective black level, so a line that measures 3:1 on the bench is far less
+than 3:1 on a riverbank.  Unselected traces in the light theme are therefore
+knocked back only as far as 4.5:1 -- they lose emphasis without becoming
+unreadable, which is the whole point of dimming them.
+"""
+
+
+def min_graphic_contrast() -> float:
+    """The graphic contrast floor for the *active* theme."""
+    if current_theme() == THEME_LIGHT:
+        return MIN_GRAPHIC_CONTRAST_DAYLIGHT
+    return MIN_GRAPHIC_CONTRAST
+
+
 TRACE_DIM_MIX = 0.65
 """How far an unselected trace is mixed toward the plot background when dense.
 
@@ -849,7 +887,7 @@ def dim_color(
     c: Any,
     amount: float = TRACE_DIM_MIX,
     onto: Any = "bg.plot",
-    min_contrast: float = MIN_GRAPHIC_CONTRAST,
+    min_contrast: float | None = None,
 ) -> QColor:
     """Mix *c* toward *onto*, but never below *min_contrast* against *onto*.
 
@@ -857,6 +895,10 @@ def dim_color(
     for 0.65 and, if that would leave the line at 2.4:1 on ``bg.plot``, you get
     the deepest mix that still clears 3:1 instead.  Cached per active theme.
     """
+    if min_contrast is None:
+        # resolved per call, not defaulted in the signature: the floor is a
+        # property of the active theme and the theme changes at runtime.
+        min_contrast = min_graphic_contrast()
     base = qcolor(c)
     ground = qcolor(onto)
     key = f"dim:{current_theme()}:{base.name()}:{ground.name()}:{amount}:{min_contrast}"
@@ -1490,7 +1532,7 @@ QToolButton:pressed, QPushButton:pressed {
 QToolButton:checked, QPushButton:checked {
     background-color: $primary_dim;
     border-color: $primary;
-    color: $fg;
+    color: $on_primary;
 }
 QToolButton:disabled, QPushButton:disabled {
     color: $fg_faint;
@@ -1761,6 +1803,7 @@ def stylesheet() -> str:
             fg_faint=token("fg.faint"),
             primary=token("primary"),
             primary_dim=token("primary.dim"),
+            on_primary=token("on.primary"),
             accent=token("accent"),
             success=token("success"),
             danger=token("danger"),
@@ -1857,6 +1900,66 @@ SPECTROGRAM_MAP_LABELS: list[str] = [
     "jet (legacy - non-uniform)",
 ]
 
+#: Spectrogram colormaps for the **daylight** theme.  A separate list, not a
+#: flipped version of the one above, because most sequential maps cannot be
+#: flipped usefully: reversing viridis or magma puts their saturated *yellow*
+#: end at the noise floor, and since the noise floor is most of a spectrogram
+#: the result is a glaring yellow field -- the worst possible outcome for the
+#: one theme that exists to be read in bright sun.
+#:
+#: These all run from a neutral near-white low end to a dark high end, which
+#: is both readable under glare and the long-standing convention for printed
+#: spectrograms.  Every entry is a plain pyqtgraph name; which of them get
+#: flipped is held in :data:`REVERSED_MAPS`.
+SPECTROGRAM_MAPS_LIGHT: list[str] = [
+    "CET-L17",
+    "CET-L18",
+    "CET-L19",
+    "CET-L1",
+    "CET-CBL2",
+]
+
+#: Maps drawn reversed, per theme, so their *low* end -- the noise floor,
+#: which is most of a spectrogram -- matches the page.
+#:
+#: Kept beside the lists rather than encoded into the names so that every
+#: entry above stays a valid ``pg.colormap.get`` argument.  Only maps with
+#: neutral or near-neutral ends are ever flipped: reversing viridis or magma
+#: would put their saturated yellow end at the noise floor.
+REVERSED_MAPS: dict[str, frozenset] = {
+    # CET-L17 natively runs white -> blue, a light floor, which is a white
+    # slab in a dark window
+    THEME_DARK: frozenset({"CET-L17"}),
+    # both of these natively run dark -> light
+    THEME_LIGHT: frozenset({"CET-L1", "CET-CBL2"}),
+}
+
+#: Human labels, index-aligned with SPECTROGRAM_MAPS_LIGHT.
+SPECTROGRAM_MAP_LABELS_LIGHT: list[str] = [
+    # labels name the ramp as it is actually rendered, sampled at five
+    # stops rather than guessed from the map's number
+    "CET-L17 (uniform, warm to blue)",
+    "CET-L18 (uniform, amber to red)",
+    "CET-L19 (uniform, blue to red)",
+    "greyscale (dark = loud)",
+    "CET-CBL2 (colour-blind safe)",
+]
+
+
+def spectrogram_maps() -> list[str]:
+    """The colormap names offered by the *active* theme."""
+    if current_theme() == THEME_LIGHT:
+        return SPECTROGRAM_MAPS_LIGHT
+    return SPECTROGRAM_MAPS
+
+
+def spectrogram_map_labels() -> list[str]:
+    """The colormap labels offered by the *active* theme."""
+    if current_theme() == THEME_LIGHT:
+        return SPECTROGRAM_MAP_LABELS_LIGHT
+    return SPECTROGRAM_MAP_LABELS
+
+
 #: Index into SPECTROGRAM_MAPS used when nothing else is specified.
 DEFAULT_SPECTROGRAM_MAP = 0
 
@@ -1868,6 +1971,7 @@ def spectrogram_colormap(index_or_name: int | str) -> Any:
     back to ``SPECTROGRAM_MAPS[0]`` instead of raising -- a bad colormap in a
     config file must not stop the application from opening a file.  Cached.
     """
+    maps = spectrogram_maps()
     if isinstance(index_or_name, str):
         name = index_or_name
     else:
@@ -1875,16 +1979,20 @@ def spectrogram_colormap(index_or_name: int | str) -> Any:
             idx = int(index_or_name)
         except (TypeError, ValueError):
             idx = DEFAULT_SPECTROGRAM_MAP
-        idx = max(0, min(len(SPECTROGRAM_MAPS) - 1, idx))
-        name = SPECTROGRAM_MAPS[idx]
+        idx = max(0, min(len(maps) - 1, idx))
+        name = maps[idx]
+    reverse = name in REVERSED_MAPS.get(current_theme(), frozenset())
 
-    key = f"cmap:{name}"
+    key = f"cmap:{current_theme()}:{name}"
     cmap = _CACHE.get(key)
     if cmap is None:
         try:
             cmap = pg.colormap.get(name)
         except Exception:
             cmap = pg.colormap.get(SPECTROGRAM_MAPS[DEFAULT_SPECTROGRAM_MAP])
+        if reverse:
+            cmap = copy.deepcopy(cmap)
+            cmap.reverse()
         _CACHE[key] = cmap
     return cmap
 

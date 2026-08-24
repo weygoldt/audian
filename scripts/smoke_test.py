@@ -197,6 +197,12 @@ def main(argv=None):
         "--spectrogram", action="store_true", help="make the spectrogram panel visible"
     )
     ap.add_argument(
+        "--theme",
+        choices=["dark", "light"],
+        help="switch to this theme AFTER the window is built, exercising the "
+        "live re-theme path rather than only the startup path",
+    )
+    ap.add_argument(
         "--activity",
         action="store_true",
         help="switch the navigator to the baseline-referenced activity overview",
@@ -238,6 +244,14 @@ def main(argv=None):
         if browser is not None and not getattr(browser, "show_specs", 0):
             main_win.acts.toggle_spectrograms.trigger()
             pump(app, 4.0)
+
+    if args.theme:
+        from audian import theme as _theme
+
+        main_win.set_app_theme(args.theme)
+        pump(app, 2.0)
+        if _theme.current_theme() != args.theme:
+            faults.append(f"--theme: still on {_theme.current_theme()}")
 
     if args.activity:
         from audian.fulltraceplot import OVERVIEW_ACTIVITY, FullTracePlot

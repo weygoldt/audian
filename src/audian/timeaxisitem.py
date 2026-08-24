@@ -13,6 +13,7 @@ class TimeAxisItem(pg.AxisItem):
         self._left_margin = left_margin
         super().__init__(*args, **kwargs)
         theme.style_axis(self)
+
         self._file_times = file_times
         self._file_paths = file_paths
         self._starttime = None
@@ -39,6 +40,19 @@ class TimeAxisItem(pg.AxisItem):
             return
         self._left_margin = left_margin
         self.resizeEvent()
+
+    def apply_theme(self) -> None:
+        """Re-resolve pens and fonts from the current token table.
+
+        `style_axis()` bakes the tick, text and label pens when the axis is
+        built, so without this a theme switch leaves a dark axis strip under
+        light plots.
+        """
+        theme.style_axis(self)
+        self.picture = None
+        self.update()
+
+    polish = apply_theme
 
     def set_start_time(self, time):
         """Set time of first data element.

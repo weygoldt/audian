@@ -95,3 +95,32 @@ whenever the statistics are unavailable.
 The per-bin statistics are cached beside the min/max overview as a `.stats.npy`
 sidecar. An overview cached before this existed is recompressed once, and both
 are written together from then on.
+
+
+## Daylight mode
+
+Audian ships two themes. The default is dark. `Ctrl+Shift+L` (*View → Daylight
+mode*) switches to the high-contrast light theme; the choice is remembered
+between sessions, and `audian --theme light` sets it for one run.
+
+Daylight mode is not a polite inversion of the dark theme — it is built for
+reading a laptop screen in direct sun, where the display is competing with the
+sky:
+
+- plot and page grounds are pure white, because under glare luminance is the
+  entire budget and any tint spends it;
+- there are no mid-greys. Even the faintest text is held above 6:1, where the
+  dark theme lets decoration sit lower;
+- traces are dark and saturated rather than bright. The dark theme's cyan
+  scores 1.4:1 on white; the daylight blue scores 8.4:1;
+- unselected traces are dimmed only as far as 4.5:1, against 3:1 in the dark
+  theme. Glare raises the effective black level, so a line that measures 3:1
+  on the bench is less than that on a riverbank;
+- spectrograms use a separate set of colormaps that run from a neutral white
+  noise floor to a dark high end — the long-standing convention for printed
+  spectrograms, and the only orientation that stays readable in sun. The dark
+  theme's maps are not simply flipped: reversing viridis or magma would put
+  their saturated yellow end at the noise floor, which is most of the image.
+
+Everything re-themes live, including the plots, the navigator, the spectrogram
+colormaps and the toolbar icons. Nothing needs restarting.

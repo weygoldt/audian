@@ -13,17 +13,27 @@ from .traceitem import TraceItem
 
 
 def resolve_colormap(color_map):
-    """Return a `pg.ColorMap` for a color map object, name or theme index."""
+    """Return a `pg.ColorMap` for a color map object, name or theme index.
+
+    Names and indices go through :func:`theme.spectrogram_colormap`, which
+    orients the ramp so the noise floor -- most of a spectrogram -- matches
+    the page: the dark end under the dark theme, the light end under the
+    daylight one.  Asking pyqtgraph directly would skip that for every name
+    it happens to know, which is nearly all of them, and leave a black slab
+    sitting in a white window.
+    """
     if isinstance(color_map, pg.ColorMap):
         return color_map
+    try:
+        return theme.spectrogram_colormap(color_map)
+    except Exception:
+        pass
     if isinstance(color_map, str):
         try:
-            cmap = pg.colormap.get(color_map)
+            return pg.colormap.get(color_map)
         except Exception:
-            cmap = None
-        if cmap is not None:
-            return cmap
-    return theme.spectrogram_colormap(color_map)
+            pass
+    return theme.spectrogram_colormap(theme.DEFAULT_SPECTROGRAM_MAP)
 
 
 class Panel(object):

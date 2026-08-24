@@ -121,7 +121,7 @@ class TimePlot(RangePlot):
         self.vmarker.setPen(theme.cursor_pen())
         self.zeroline.setPen(theme.zero_pen())
         self._update_caption()
-        self._style_traces()
+        self._style_traces(retheme=True)
 
     # --- channel emphasis -------------------------------------------------
 
@@ -137,13 +137,26 @@ class TimePlot(RangePlot):
         data = getattr(self.browser, "data", None)
         return int(getattr(data, "channels", 1) or 1)
 
-    def _style_traces(self) -> None:
-        """Push selection and stack density into every trace this plot draws."""
+    def _style_traces(self, retheme: bool = False) -> None:
+        """Push selection and stack density into every trace this plot draws.
+
+        `set_selected` and `set_dense` deliberately do nothing when the flag
+        has not changed -- they are called on every layout pass.  That makes
+        them useless for a *theme* switch, where the flags are identical but
+        the colours behind them are not, so `retheme` forces each item to
+        re-resolve its pen from the current token table.
+        """
         for item in self.data_items:
             if hasattr(item, "set_selected"):
                 item.set_selected(self.current)
             if hasattr(item, "set_dense"):
                 item.set_dense(self.dense)
+            if retheme:
+                restyle = getattr(item, "apply_theme", None) or getattr(
+                    item, "polish", None
+                )
+                if callable(restyle):
+                    restyle()
 
     def add_item(self, item, is_data=False):
         super().add_item(item, is_data)

@@ -304,3 +304,79 @@ def _main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main())
+
+
+def _relative_luminance(rgb):
+    channels = [int(v) / 255.0 for v in rgb[:3]]
+    linear = [
+        c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def test_every_light_map_is_a_plain_pyqtgraph_name():
+    """The reversal flag must not leak into the names.
+
+    It used to be encoded as a '!r' suffix, which quietly made the list
+    entries invalid arguments to pg.colormap.get.
+    """
+    import pyqtgraph as pg
+
+    assert len(theme.SPECTROGRAM_MAPS_LIGHT) == len(theme.SPECTROGRAM_MAP_LABELS_LIGHT)
+    for name in theme.SPECTROGRAM_MAPS_LIGHT:
+        assert "!" not in name, name
+        assert pg.colormap.get(name) is not None, name
+
+
+def test_spectrogram_noise_floor_matches_the_page():
+    """A spectrogram's low end is the noise floor, and it is most of the image.
+
+    It has to sit at the dark end of the ramp under the dark theme and the
+    light end under the daylight theme, or the plot is a slab of the opposite
+    colour to the window around it -- and, in sun, unreadable.
+    """
+    try:
+        for name, want_dark_floor in (
+            (theme.THEME_DARK, True),
+            (theme.THEME_LIGHT, False),
+        ):
+            theme.set_theme(name)
+            for map_name in theme.spectrogram_maps():
+                colors = theme.spectrogram_colormap(map_name).getColors()
+                low = _relative_luminance(colors[0])
+                high = _relative_luminance(colors[-1])
+                if want_dark_floor:
+                    assert low < high, (name, map_name, low, high)
+                else:
+                    assert low > high, (name, map_name, low, high)
+    finally:
+        theme.set_theme(theme.THEME_DARK)
+
+
+def test_daylight_holds_graphics_to_a_higher_contrast_floor():
+    """Glare eats contrast, so the light theme dims traces less far."""
+    try:
+        theme.set_theme(theme.THEME_LIGHT)
+        light = theme.waveform_color("raw", selected=False, dense=True)
+        light_ratio = theme.contrast_ratio(light.name(), theme.token("bg.plot"))
+        assert light_ratio >= theme.MIN_GRAPHIC_CONTRAST_DAYLIGHT - 0.01
+        theme.set_theme(theme.THEME_DARK)
+        dark = theme.waveform_color("raw", selected=False, dense=True)
+        dark_ratio = theme.contrast_ratio(dark.name(), theme.token("bg.plot"))
+        assert dark_ratio >= theme.MIN_GRAPHIC_CONTRAST - 0.01
+        assert light_ratio > dark_ratio
+    finally:
+        theme.set_theme(theme.THEME_DARK)
+
+
+def test_on_primary_is_legible_on_a_checked_button():
+    """A checked button is filled with primary.dim in both themes."""
+    try:
+        for name in (theme.THEME_DARK, theme.THEME_LIGHT):
+            theme.set_theme(name)
+            ratio = theme.contrast_ratio(
+                theme.token("on.primary"), theme.token("primary.dim")
+            )
+            assert ratio >= 4.5, (name, ratio)
+    finally:
+        theme.set_theme(theme.THEME_DARK)

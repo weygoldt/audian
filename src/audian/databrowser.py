@@ -216,9 +216,28 @@ class ColorMapCombo(QComboBox):
         super().__init__(parent)
         self.setIconSize(QSize(64, 12))
         self.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
-        for i, label in enumerate(theme.SPECTROGRAM_MAP_LABELS):
-            self.addItem(colormap_icon(i), label)
+        self.populate()
         self.setEditable(False)
+
+    def populate(self) -> None:
+        """(Re)fill the combo from the active theme's colormap list.
+
+        The two themes offer different maps -- and different numbers of them
+        -- so a theme switch has to rebuild the items, not just repaint the
+        swatches, or the labels would name maps that are no longer on offer.
+        """
+        blocked = self.blockSignals(True)
+        keep = self.currentIndex()
+        self.clear()
+        self.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        for i, label in enumerate(theme.spectrogram_map_labels()):
+            self.addItem(colormap_icon(i), label)
+        if 0 <= keep < self.count():
+            self.setCurrentIndex(keep)
+        self.blockSignals(blocked)
+
+    # kept as the name the theme switch calls
+    refresh_swatches = populate
 
 
 class ChannelRailRow(QWidget):
@@ -464,9 +483,6 @@ class SharedTimeAxis(TimeAxisItem):
 
 
 class DataBrowser(QWidget):
-    # perceptually uniform maps first, jet last - see theme.py:
-    color_maps = theme.SPECTROGRAM_MAPS
-
     # width of the channel rail and the number of visible channels above
     # which the spectrogram collapses onto the current channel only:
     # Wide enough for the compact single-line row: 'CH 15' + solo + mute +
@@ -690,7 +706,7 @@ class DataBrowser(QWidget):
             )
         except (TypeError, ValueError):
             index = theme.DEFAULT_SPECTROGRAM_MAP
-        if index < 0 or index >= len(theme.SPECTROGRAM_MAPS):
+        if index < 0 or index >= len(theme.spectrogram_maps()):
             index = theme.DEFAULT_SPECTROGRAM_MAP
         return index
 
@@ -965,7 +981,7 @@ class DataBrowser(QWidget):
                         c,
                         self,
                         xwidth,
-                        theme.SPECTROGRAM_MAPS[self.color_map],
+                        theme.spectrogram_maps()[self.color_map],
                         self.show_cbars,
                         self.show_powers,
                     )
@@ -1561,6 +1577,15 @@ class DataBrowser(QWidget):
         """
         for figure in self.figs:
             theme.style_figure(figure)
+        # the shared time axis lives in a figure of its own, outside the
+        # scroll area, and so is not in self.figs
+        if self.taxis_fig is not None:
+            theme.style_figure(self.taxis_fig)
+        if getattr(self, "taxis", None) is not None and hasattr(
+            self.taxis, "apply_theme"
+        ):
+            self.taxis.apply_theme()
+            self.align_time_axis()
         for axs in self.axs:
             for ax in axs:
                 if hasattr(ax, "apply_theme"):
@@ -1576,6 +1601,13 @@ class DataBrowser(QWidget):
                 self.datafig.polish()
         for row in self.rail_rows:
             row.update_state()
+        # the colormap is cached per theme and oriented to the page -- the
+        # noise floor is the dark end under the dark theme and the light end
+        # under the daylight one -- so it has to be re-pushed, or the
+        # spectrogram stays a dark slab in a white window.
+        if self.cmapw is not None:
+            self.cmapw.populate()
+        self.set_color_map(self.color_map, dispatch=False)
         # style_plotitem() has just reset every view box to bg.plot:
         self.update_current_plot()
 
@@ -2845,11 +2877,11 @@ class DataBrowser(QWidget):
         """Apply a perceptually uniform spectrogram colormap and remember it."""
         if color_map is not None:
             self.color_map = int(color_map)
-        if self.color_map < 0 or self.color_map >= len(theme.SPECTROGRAM_MAPS):
+        if self.color_map < 0 or self.color_map >= len(theme.spectrogram_maps()):
             self.color_map = theme.DEFAULT_SPECTROGRAM_MAP
         for panel in self.panels.values():
             if panel.is_spectrogram():
-                panel.set_colormap(theme.SPECTROGRAM_MAPS[self.color_map])
+                panel.set_colormap(theme.spectrogram_maps()[self.color_map])
         if self.cmapw is not None and self.cmapw.currentIndex() != self.color_map:
             blocked = self.cmapw.blockSignals(True)
             self.cmapw.setCurrentIndex(self.color_map)
@@ -2859,7 +2891,7 @@ class DataBrowser(QWidget):
             self.sigColorMapChanged.emit()
 
     def color_map_cycler(self) -> None:
-        self.set_color_map((self.color_map + 1) % len(theme.SPECTROGRAM_MAPS))
+        self.set_color_map((self.color_map + 1) % len(theme.spectrogram_maps()))
 
     def update_filter(self, highpass_cutoff=None, lowpass_cutoff=None):
         """Called when filter cutoffs were changed by key shortcuts or handles

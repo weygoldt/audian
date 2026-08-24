@@ -606,6 +606,9 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
         for axt in self.axs:
             theme.style_plotitem(axt)
         self.refresh_colors()
+        # the activity overview keeps its own pens and brushes
+        for act in self.act_items:
+            act.apply_theme()
         for zero_line in self.zero_lines:
             zero_line.setPen(theme.zero_pen())
         for region in self.regions:
