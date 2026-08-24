@@ -163,3 +163,65 @@ def test_source_cycle_visits_every_mode_and_returns():
         ]
     assert sorted(seen) == sorted(DataBrowser.AUDIO_SOURCES)
     assert source == DataBrowser.AUDIO_SELECTED
+
+
+class _Click:
+    """The three things DataBrowser.mouse_clicked reads off an event."""
+
+    def __init__(self, button, modifiers=0):
+        self._button = button
+        self._modifiers = modifiers
+
+    def button(self):
+        return self._button
+
+    def modifiers(self):
+        return self._modifiers
+
+    def scenePos(self):
+        return None
+
+
+def _clickable(current=0):
+    calls = []
+    stub = SimpleNamespace(
+        current_channel=current,
+        cross_hair=False,
+        rail_clicked=lambda ch, extend: calls.append((ch, extend)),
+    )
+    return stub, calls
+
+
+def test_clicking_a_lane_focuses_that_channel():
+    """The rail card used to be the only way to select a channel."""
+    from PyQt5.QtCore import Qt
+
+    stub, calls = _clickable(current=0)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton),), 5)
+    assert calls == [(5, False)]
+
+
+def test_shift_clicking_a_lane_extends_the_selection():
+    from PyQt5.QtCore import Qt
+
+    stub, calls = _clickable(current=2)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton, Qt.ShiftModifier),), 6)
+    assert calls == [(6, True)]
+
+
+def test_clicking_the_current_lane_does_not_relayout():
+    """rail_clicked() relays out the whole stack; a click inside the lane
+    that is already current must not pay for that."""
+    from PyQt5.QtCore import Qt
+
+    stub, calls = _clickable(current=5)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton),), 5)
+    assert calls == []
+
+
+def test_right_clicking_a_lane_does_not_change_the_channel():
+    from PyQt5.QtCore import Qt
+
+    stub, calls = _clickable(current=0)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.RightButton),), 5)
+    assert calls == []

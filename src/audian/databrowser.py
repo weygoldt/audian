@@ -2347,6 +2347,18 @@ class DataBrowser(QWidget):
             self.set_readout("p", p_text)
 
     def mouse_clicked(self, evt, channel):
+        # Clicking a lane focuses it, wherever in the lane you click.  The
+        # rail card was the only way to do this, which meant reaching for a
+        # 48 px column to select the plot you were already looking at.  Every
+        # panel of a channel lives in that channel's own figure, so the
+        # spectrogram selects it as readily as the trace.
+        if (evt[0].button() & Qt.LeftButton) > 0:
+            extend = bool(evt[0].modifiers() & Qt.ShiftModifier)
+            # guarded: rail_clicked() relays out the stack, which is not
+            # something to do on every click inside the current channel
+            if extend or channel != self.current_channel:
+                self.rail_clicked(channel, extend)
+
         if not self.cross_hair:
             return
 

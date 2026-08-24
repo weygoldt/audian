@@ -199,3 +199,13 @@ ten directly.
 
 When some channels are hidden the button says so — `ch 0  3/16` — so the
 other thirteen are not invisible in both senses at once.
+
+
+## Selecting a channel
+
+Click anywhere in a channel's row — the trace, the spectrogram, or its card
+in the rail — and that channel becomes the current one. Shift-click extends
+the selection to a range, exactly as it does in the rail.
+
+Right-click and drag are unaffected: dragging still selects a region and
+right-click still opens the region menu.
