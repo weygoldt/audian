@@ -2570,8 +2570,16 @@ class DataBrowser(QWidget):
         self.notify("info", "annotations cleared")
 
     def toggle_annotations(self) -> None:
+        """Show or hide the overlay.
+
+        With nothing loaded this says so and stops.  It used to fall through
+        to the file chooser, which meant a key bound to a *toggle* could open
+        a modal dialog -- surprising from the keyboard, and a hang for
+        anything driving the application without a user in front of it.
+        Loading has its own action.
+        """
         if not self.annotations.loaded:
-            self.open_annotations()
+            self.notify("info", "no annotations loaded -- Ctrl+Shift+A opens a file")
             return
         self.annotations.toggle()
 
@@ -2604,6 +2612,7 @@ class DataBrowser(QWidget):
         """
         table = self.annotations.table
         if table is None:
+            self.notify("info", "no annotations loaded -- Ctrl+Shift+A opens a file")
             return
         keys = self.annotation_keys()
         if not keys:

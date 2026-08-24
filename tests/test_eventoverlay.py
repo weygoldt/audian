@@ -365,6 +365,34 @@ def test_caps_are_dropped_once_they_would_merge_into_a_bar(app, tmp_path):
     assert len(caps) == 0
 
 
+# --- actions that must never block ------------------------------------------
+
+
+def test_toggling_with_nothing_loaded_does_not_open_a_dialog(app, monkeypatch):
+    """A key bound to a toggle must not be able to raise a modal file chooser.
+
+    `DataBrowser.toggle_annotations` is on F8.  Falling through to the file
+    chooser when no table is loaded made that key open a modal dialog, which
+    is surprising from the keyboard and a hang for anything driving the
+    application without a user in front of it.
+    """
+    from audian.databrowser import DataBrowser
+
+    browser = DataBrowser.__new__(DataBrowser)
+    browser.annotations = AnnotationLayer()
+    said = []
+    monkeypatch.setattr(
+        DataBrowser, "notify", lambda self, level, message: said.append(message)
+    )
+    monkeypatch.setattr(
+        DataBrowser,
+        "open_annotations",
+        lambda self: pytest.fail("toggle raised the file chooser"),
+    )
+    browser.toggle_annotations()
+    assert said and "Ctrl+Shift+A" in said[0]
+
+
 # --- theme ------------------------------------------------------------------
 
 
