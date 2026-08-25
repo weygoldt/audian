@@ -277,9 +277,22 @@ class SpanLayer(Layer):
         *,
         open_left: np.ndarray | None = None,
         open_right: np.ndarray | None = None,
+        letter: str = "",
         **kwargs: Any,
     ) -> None:
         super().__init__(id, kind=KIND_SPAN, **kwargs)
+        #: One character drawn at every drawn span's start edge -- ``V`` /
+        #: ``B`` / ``S`` for the three treatments -- and "" for a layer that
+        #: refines nothing.  It is the THIRD-TIER refinement: the colour
+        #: channel is spent on the top-level kind (a trial happened here), so
+        #: which treatment it was is answered by this letter instead.
+        #:
+        #: Per LAYER, not per row, and that is the whole reason it is viable.
+        #: A trial layer is one treatment by construction, so the letter is a
+        #: constant the drawing path reads once -- no per-row Python, and a
+        #: merged bar that stands for several trials still carries the right
+        #: letter because they were all the same treatment.
+        self.letter = str(letter)
         self.starts = np.ascontiguousarray(starts, dtype=np.float64)
         self.ends = np.ascontiguousarray(ends, dtype=np.float64)
         #: How far the spans up to each row REACH:
@@ -347,17 +360,61 @@ class SpanLayer(Layer):
         hit = np.flatnonzero(self.ends[i0:i1] > t)
         return int(i0 + hit[-1]) if hit.size else None
 
-    def describe(self, i: int) -> str:
-        """One line about a single span, for the readout or a tool tip."""
+    def name_of(self, i: int) -> str:
+        """Which span this is, in as few characters as name it.
+
+        Split out of `describe` for the pointer readout, which assembles
+        identity, contents and bounds in that order so that elision eats the
+        bounds rather than the counts.  The chip word, not the label: the
+        chips beside the readout carry the same word.
+        """
         row = self.frame.row(i, named=True) if self.frame.height > i else {}
-        parts = [self.label]
+        number = row.get("trial_number")
+        return self.short if number is None else f"{self.short} #{int(number)}"
+
+    def bounds_of(self, i: int) -> str:
+        """Where this span runs, and whether either edge is guessed.
+
+        An open edge is never dropped, however short the line has to be: a
+        span whose start or end is not in the log is a span whose extent is
+        partly invented, and that is exactly what a shorter line is tempted
+        to lose.
+        """
+        start = float(self.starts[i])
+        end = float(self.ends[i])
+        text = f"{start:.3f}-{end:.3f} s"
+        if self.open_left[i]:
+            text = "?" + text
+        if self.open_right[i]:
+            text += "?"
+        return text
+
+    def describe(self, i: int, compact: bool = False) -> str:
+        """One line about a single span, for the readout or a tool tip.
+
+        `compact` drops what the line beside it already says.  The pointer
+        readout appends the span's own contents -- how many marks of each
+        switched-on layer fall inside it -- and that clause is the reason the
+        readout exists, so it must survive the elision.  Measured in the
+        running app: the full form spends 83 characters before the counts
+        begin, against 719 px of row, and the counts never appear.  Compact
+        uses the layer's chip word rather than its label and leaves out
+        `pulses_emitted`, which the contents clause states better and which a
+        tool tip still carries in full.
+
+        What compact never drops is an open edge.  A span whose start or end
+        is not in the log is a span whose extent is partly guessed, and that
+        is exactly the kind of thing a shorter line is tempted to lose.
+        """
+        row = self.frame.row(i, named=True) if self.frame.height > i else {}
+        parts = [self.short if compact else self.label]
         number = row.get("trial_number")
         if number is not None:
             parts.append(f"#{int(number)}")
         start = float(self.starts[i])
         end = float(self.ends[i])
         parts.append(f"{start:.3f}-{end:.3f} s ({end - start:.3f} s)")
-        if "pulses_emitted" in self.frame.columns:
+        if not compact and "pulses_emitted" in self.frame.columns:
             emitted = row.get("pulses_emitted")
             # Absent and null are different sentences, and on a silence trial
             # the difference is whether the control was checked at all.

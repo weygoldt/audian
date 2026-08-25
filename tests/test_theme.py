@@ -527,8 +527,12 @@ def test_annotation_palette_separation():
 def test_the_worst_category_pair_is_recorded_where_it_can_be_rechecked():
     """Anchors, so a hue edit that erodes the palette shows up as a diff.
 
-    Measured on this machine.  The worst pair anywhere is volley vs silence
-    under tritanopia -- 17.93 dark, 17.44 daylight -- and both clear 15.0.
+    Measured on this machine.  With treatment off the colour channel there
+    are three data categories rather than four, so there are three pairs to
+    satisfy rather than six -- and the worst pair anywhere is now trial vs
+    pulse under protanopia at 19.43 dark / 19.69 daylight, against volley vs
+    silence under tritanopia at 17.93 / 17.44 before.  The palette got wider,
+    not narrower, which is the point of spending colour on the kind.
     """
     worst = {}
     for name, table in theme.THEMES.items():
@@ -552,10 +556,10 @@ def test_the_worst_category_pair_is_recorded_where_it_can_be_rechecked():
                         )
                     )
         worst[name] = min(scores)
-    assert worst["dark"][1:] == ("volley", "silence", "tritan"), worst["dark"]
-    assert worst["light"][1:] == ("volley", "silence", "tritan"), worst["light"]
-    assert round(worst["dark"][0], 2) == 17.93
-    assert round(worst["light"][0], 2) == 17.44
+    assert worst["dark"][1:] == ("trial", "pulse", "protan"), worst["dark"]
+    assert worst["light"][1:] == ("trial", "pulse", "protan"), worst["light"]
+    assert round(worst["dark"][0], 2) == 19.43
+    assert round(worst["light"][0], 2) == 19.69
     assert min(w[0] for w in worst.values()) >= theme.MIN_CATEGORY_SEPARATION
 
 
@@ -563,8 +567,9 @@ def test_every_exempt_pair_is_actually_below_the_floor():
     """An exemption that is not needed is a hole waiting for a future edit.
 
     Below in *either* theme is enough to need the entry: several of these
-    clear 15.0 in one theme and not the other -- resting vs fault is 14.53
-    dark and 22.75 daylight, silence vs run is 22.36 dark and 14.98 daylight.
+    clear 15.0 in one theme and not the other -- pulse vs fault is 14.53 dark
+    and 22.75 daylight, detection.novel vs session is 17.78 dark and 14.68
+    daylight.
     """
     for a, b in theme.SEPARATION_EXEMPT:
         assert a in theme.ANNOTATION_ROLES and b in theme.ANNOTATION_ROLES, (a, b)
@@ -577,6 +582,51 @@ def test_every_exempt_pair_is_actually_below_the_floor():
             for kind in theme.VISION_KINDS
         )
         assert worst < theme.MIN_CATEGORY_SEPARATION, (a, b, worst)
+
+
+def test_the_palette_spends_colour_on_the_kind_and_not_on_the_treatment():
+    """The encoding ruling, stated where the roles live.
+
+    Three hues in the default view -- a trial happened here, a pulse was
+    played here, something the log cannot account for was heard here -- and
+    none of them names a treatment or a pulse type.  A role that did would be
+    the seven-hue palette coming back, so asking for one has to fail loudly
+    rather than resolve to something plausible.
+    """
+    assert theme.CATEGORY_ROLES == ("trial", "pulse", "detection.novel")
+    for gone in ("volley", "resting", "silence", "baseline", "localization"):
+        assert gone not in theme.ANNOTATION_ROLES
+        try:
+            theme.annotation_color(gone)
+        except KeyError:
+            pass
+        else:  # pragma: no cover - only reached when the gate has rotted
+            raise AssertionError(f"{gone} still resolves to a colour")
+    for name in theme.THEMES:
+        theme.set_theme(name)
+        hues = {theme.annotation_color(r) for r in theme.CATEGORY_ROLES}
+        assert len(hues) == 3, (name, hues)
+    theme.set_theme(theme.THEME_DARK)
+
+
+def test_a_treatment_letter_is_knocked_out_at_reading_contrast():
+    """Treatment moved off the colour channel and onto a letter.
+
+    A letter is READ, not seen, so it needs text contrast and not the graphic
+    floor -- and it is drawn over a waveform, where a coloured glyph is at the
+    mercy of whatever the signal is doing under it.  So it is knocked out of a
+    solid chip in the layer's own hue, and what the chip has to clear is the
+    glyph against itself: 4.99 / 5.35 in dark, 6.97 / 5.19 in daylight.
+    """
+    for name in theme.THEMES:
+        theme.set_theme(name)
+        for role in theme.CATEGORY_ROLES:
+            chip, glyph = theme.annotation_letter(role)
+            assert chip == theme.annotation_color(role)
+            assert glyph == theme.token("bg.plot")
+            ratio = theme.contrast_ratio(chip, glyph)
+            assert ratio >= MIN_CONTRAST, (name, role, ratio)
+    theme.set_theme(theme.THEME_DARK)
 
 
 def test_annotation_colors_clear_the_graphic_floor():
@@ -630,10 +680,10 @@ def test_the_annotation_tokens_do_not_repoint_an_existing_one():
     theme.  (``on.primary`` already shadows ``fg`` that way, deliberately and
     harmlessly -- both are light in both themes.  A role that is dark in one
     theme would not be harmless.)  So the ink and the neutral roles stay as
-    lookups into existing tokens and only the three chromatic hues are new.
+    lookups into existing tokens and only the two chromatic hues are new.
     """
     ann = {k: v for k, v in theme.DARK_TOKENS.items() if k.startswith("ann.")}
-    assert set(ann) == {"ann.volley", "ann.resting", "ann.silence"}
+    assert set(ann) == {"ann.trial", "ann.pulse"}
     others = {
         v.upper() for k, v in theme.DARK_TOKENS.items() if not k.startswith("ann.")
     }
@@ -671,8 +721,8 @@ def test_a_predicted_mark_differs_by_dash_and_never_by_hue():
     """
     from PyQt5.QtCore import Qt
 
-    observed = theme.annotation_pen("volley")
-    predicted = theme.annotation_pen("volley", observed=False)
+    observed = theme.annotation_pen("trial")
+    predicted = theme.annotation_pen("trial", observed=False)
     assert observed.color().name() == predicted.color().name()
     assert observed.style() == Qt.SolidLine
     assert predicted.style() != Qt.SolidLine

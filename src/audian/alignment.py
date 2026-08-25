@@ -41,7 +41,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -219,6 +219,36 @@ class Alignment:
             out.append(total / float(rate))
         return tuple(out)
 
+    @property
+    def file_starts_s(self) -> tuple[float, ...]:
+        """Recording second each declared file begins at, or ``()``.
+
+        ``join_times_s`` with a leading zero: the joins are the ends of the
+        first n-1 files, which are the starts of the last n-1.  Used to say
+        HOW FAR OUT the marks would be when only some of the files are open
+        (:meth:`SplitCoverage.message`) -- never to shift one.  On exp3:
+        0, 931.968, 1863.936, 2795.904 s.
+        """
+        joins = self.join_times_s
+        return (0.0,) + joins if joins else ()
+
+    def coverage(self, paths: Iterable[Any]) -> "SplitCoverage":
+        """Which of the declared files `paths` actually holds.
+
+        Matched by file NAME, like every other provenance check here: the
+        bundle and the recording are copied around together, so the directory
+        says nothing, and the frame counts cannot answer this question at all
+        -- see :class:`SplitCoverage`.
+        """
+        names = tuple(Path(p).name for p in paths)
+        declared = tuple(Path(f).name for f in self.recording_files)
+        return SplitCoverage(
+            declared=declared,
+            opened=tuple(n for n in declared if n in names),
+            extra=tuple(n for n in names if n not in declared),
+            starts_s=self.file_starts_s,
+        )
+
     def joins(self) -> tuple[tuple[float, float | None], ...]:
         """``(recording second, declared gap in s)`` for each declared join.
 
@@ -345,6 +375,148 @@ class RecordingCheck:
             v is False
             for v in (self.name, self.rate, self.frames, self.channel, self.sha256)
         )
+
+
+@dataclass(frozen=True)
+class SplitCoverage:
+    """How much of a recording written as several files is open.
+
+    A recording split across four WAVs is ONE timeline, and every mark in the
+    bundle is placed in whole-recording seconds.  Open a proper subset of
+    those files and the recording that is on screen starts somewhere else:
+    open exp3's third file alone and its content is recording seconds
+    1863.936-1868.936, while the marks that land in the view are the ones for
+    100-105 s.  Every one of them is 1764 s out of place and every one of them
+    looks entirely plausible.
+
+    **No other check can catch this.**  The name check passes -- the open file
+    IS one of the four the bundle names.  The frame check passes -- it accepts
+    either the whole recording's count or one file's own, deliberately, so
+    that a caller may hand it a single WAV header or the loader over all four.
+    The declared join gaps produce a soft status line whose subject is gap
+    LABELLING, not mark placement.  What is missing is the one thing the
+    browser has always known and never asked: how many of the declared files
+    are actually open.
+
+    So this is the check, and its answer is a REFUSAL rather than a
+    correction.  The offset is computable from `recording_file_frames` --
+    `starts_s` is right there -- and re-basing the marks on it is exactly the
+    kind of quiet repair that turns into a subtly wrong picture nobody can
+    see: it would have to assume the missing files are the declared ones, at
+    the declared lengths, joined at the declared gaps, none of which this
+    viewer has opened or measured.  A viewer that draws nothing and says why
+    is wrong in a way the reader can act on.
+    """
+
+    #: File names the bundle declares, in recording order.
+    declared: tuple[str, ...] = ()
+    #: The declared files that are open, in declared order.
+    opened: tuple[str, ...] = ()
+    #: Open files the bundle does not name.  Not a refusal on its own -- the
+    #: name check owns that -- but it is named in the message, because a
+    #: recording padded with a file the fit never saw is not the recording the
+    #: fit was made against either.
+    extra: tuple[str, ...] = ()
+    #: Recording second each DECLARED file starts at, when the bundle says
+    #: enough to work it out.  For the message only.
+    starts_s: tuple[float, ...] = ()
+
+    @property
+    def missing(self) -> tuple[str, ...]:
+        return tuple(n for n in self.declared if n not in self.opened)
+
+    @property
+    def partial(self) -> bool:
+        """True when the loader opened SOME of the declared files, not all.
+
+        Not when none of them is open: that is a bundle belonging to another
+        recording, which the name check already refuses with a message about
+        the right thing.  Not when there is one declared file: a single-file
+        recording is either open or it is not.
+        """
+        return len(self.declared) > 1 and bool(self.opened) and bool(self.missing)
+
+    @property
+    def shift_s(self) -> float | None:
+        """Where the first open file sits in the recording, in seconds.
+
+        How far the marks would be out, at least.  ``None`` when the bundle
+        does not carry the per-file frame counts to say.
+        """
+        if not self.opened or len(self.starts_s) != len(self.declared):
+            return None
+        return self.starts_s[self.declared.index(self.opened[0])]
+
+    def subject(self) -> str:
+        """What the fit was made against, as a phrase another sentence can use.
+
+        Written so that it still says the whole truth inside the sentence the
+        generic mismatch badge builds around it ("This bundle was fitted
+        against ..., not against the open file"): if the specific badge for
+        this refusal is ever lost, what is left names all the files and is
+        still correct rather than merely alarming.
+        """
+        return (
+            f"all {len(self.declared)} of {', '.join(self.declared)} as one recording"
+        )
+
+    def summary(self) -> str:
+        """One line for a status bar: what is open, and what to do."""
+        return (
+            f"the bundle names {len(self.declared)} files as ONE recording and "
+            f"{'only ' if len(self.opened) == 1 else ''}"
+            f"{', '.join(self.opened)} "
+            f"{'is' if len(self.opened) == 1 else 'are'} open; nothing is drawn "
+            f"-- open all {len(self.declared)} files together"
+        )
+
+    def message(self) -> str:
+        """The whole refusal: which files, how wrong it would be, what to do.
+
+        Written out in full because this is the one place the reader meets a
+        failure that looks like success everywhere else: the badge would
+        otherwise say WARNINGS, the joins would be empty, and the marks would
+        be drawn in the wrong minute of the recording.
+        """
+        lines = [
+            f"This bundle was fitted against {len(self.declared)} files as ONE "
+            f"recording, and {len(self.opened)} of them "
+            f"{'is' if len(self.opened) == 1 else 'are'} open.",
+            f"open:    {', '.join(self.opened) or '(none)'}",
+            f"missing: {', '.join(self.missing) or '(none)'}",
+        ]
+        if self.extra:
+            lines.append(f"not named by the bundle: {', '.join(self.extra)}")
+        shift = self.shift_s
+        if shift is None:
+            # Not zero.  A bundle that never said how long its files are
+            # cannot say where the open one starts, and guessing a number
+            # here would be the same invention the refusal exists to avoid.
+            lines.append(
+                "Every mark is placed in whole-recording seconds, and this "
+                "bundle carries no per-file frame counts, so how far out they "
+                "would be drawn cannot even be stated."
+            )
+        elif shift > 0.0:
+            lines.append(
+                f"Every mark is placed in whole-recording seconds, and "
+                f"{self.opened[0]} starts at {shift:.3f} s of the recording, so "
+                f"each one would be drawn about {shift:.3f} s from where it "
+                f"belongs -- and would look entirely plausible there."
+            )
+        else:
+            lines.append(
+                "Every mark is placed in whole-recording seconds, so only the "
+                "marks inside this file's own span could land correctly, and "
+                "only by accident; everything after it would be drawn over "
+                "audio that is not open."
+            )
+        lines.append("Nothing is drawn, and no mark is re-based to fit.")
+        lines.append(
+            "To read them, open the whole recording at once:\n  audian "
+            + " ".join(self.declared)
+        )
+        return "\n".join(lines)
 
 
 def _as_str(value: Any) -> str | None:

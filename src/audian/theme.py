@@ -218,6 +218,7 @@ __all__ = [
     "annotation_color",
     "annotation_pen",
     "annotation_brush",
+    "annotation_letter",
     "CONTROL_BAND_H",
     "CONTROL_BAND_PAD",
     "CONTROL_NOTE_H",
@@ -312,25 +313,33 @@ DARK_TOKENS: dict[str, str] = {
     # both grounds it reads as structure without shouting, where BORDER_HI
     # managed only 1.7:1 and simply disappeared.
     "edge": "#47566E",
-    # The three annotation categories.  Derived from Okabe-Ito by holding
-    # each member's identity and rotating only as far as audian's own painted
-    # palette forces: vermillion #D55E00 rotated -26 deg to h=30 (its 56 deg
-    # is occupied by `accent` at 76.7 and `trace.filtered` at 80.9), bluegreen
-    # #009E73 rotated +16 deg to h=180, reddish purple #CC79A7 rotated -20 deg
-    # to h=325 (345 would sit 7 deg from `trace.envelope` at 352.6).  Canonical
-    # Okabe-Ito cannot be dropped in unchanged: on this plot ground its black
-    # measures 1.12:1 and its blue 3.62:1.
+    # TWO annotation categories, because the colour channel is spent on the
+    # top-level KIND and not on treatment: a trial happened here, a pulse was
+    # played here, and the unexplained detections are the ink.  Treatment is
+    # third tier and is carried by a letter at the span's start edge, so
+    # `ann.volley` / `ann.resting` / `ann.silence` collapsed into `ann.trial`.
     #
-    # Lightness was then raised until each clears the graphic floor with room
-    # to spare on the deepest surface, bg.raised: 4.99 / 5.35 / 7.94 on
-    # bg.plot.  Run `python -m audian.theme` for the live table.
-    "ann.volley": "#FF253C",
-    "ann.resting": "#009A88",
-    # the loudest hue in the palette on purpose.  Silence is the control
-    # condition, the one an experimenter must be able to find without
-    # hunting, and it is found by contrast and by owning its own sub-row --
-    # never by greying out the treatments around it.
-    "ann.silence": "#F575FF",
+    # Both survivors are Okabe-Ito derived, holding each member's identity and
+    # rotating only as far as audian's own painted palette forces: vermillion
+    # #D55E00 rotated -26 deg to h=30 (its 56 deg is occupied by `accent` at
+    # 76.7 and `trace.filtered` at 80.9), bluegreen #009E73 rotated +16 deg to
+    # h=180.  Canonical Okabe-Ito cannot be dropped in unchanged: on this plot
+    # ground its black measures 1.12:1 and its blue 3.62:1.
+    #
+    # Lightness was raised until each clears the graphic floor with room to
+    # spare on the deepest surface, bg.raised: 4.99 / 5.35 on bg.plot.  Run
+    # `python -m audian.theme` for the live table.
+    #
+    # Which family went where is a measurement, not a taste.  `run` is the
+    # only other SPAN a lane draws, and a span is told from a span by hue
+    # alone -- the reddish-purple family that used to be `ann.silence` was
+    # dropped because keeping the bluegreen for trials would have put two
+    # spans 6.03 dE2000 apart under deuteranopia.  Trials take the vermillion
+    # family: 29.98 dark / 28.14 daylight from `run`, against the bluegreen's
+    # 6.03 / 4.82.  The bluegreen takes the pulses, which are points and are
+    # therefore already told from `run` by form.
+    "ann.trial": "#FF253C",
+    "ann.pulse": "#009A88",
 }
 
 #: The light token table -- a **daylight** theme, not a polite inversion.
@@ -370,14 +379,15 @@ LIGHT_TOKENS: dict[str, str] = {
     "on.primary": "#FFFFFF",
     "bg.lane": "#E8ECF3",
     "edge": "#7C8A9B",
-    # The daylight annotation hues: the same three Okabe-Ito-derived angles,
+    # The daylight annotation hues: the same two Okabe-Ito-derived angles,
     # taken dark instead of bright.  On white a bright mark has almost no
     # contrast, so these are the *darkened* members of each hue family --
-    # 6.97 / 5.19 / 11.57 on bg.plot, against 1.4:1 for a naive inversion of
-    # the dark theme's values.
-    "ann.volley": "#B60023",
-    "ann.resting": "#007B6C",
-    "ann.silence": "#670071",
+    # 6.97 / 5.19 on bg.plot, against 1.4:1 for a naive inversion of the dark
+    # theme's values.  The darker of the two carries the trials, whose fill is
+    # what daylight washes out first: on white #B60023 shifts the ground
+    # further per unit of alpha than #007B6C does.
+    "ann.trial": "#B60023",
+    "ann.pulse": "#007B6C",
 }
 
 #: All selectable themes, by name.
@@ -1192,28 +1202,39 @@ def waveform_fill_brush(
 #
 # The session log is a second data source drawn beside the waveform: trial
 # spans, stimulus pulses, detections, instrument runs, log entries.  Colour
-# here carries the CATEGORY and nothing else -- form carries geometry (bar /
-# tick / bracket / staircase) and position carries treatment and evidence
-# kind.  Nothing is encoded twice on an ordered channel, which is why a
-# silence trial is not greyed out and a predicted pulse is not faded: those
-# would read as claims about reliability rather than about identity.
+# here carries the top-level KIND and nothing else -- a trial happened here, a
+# pulse was played here, something the log cannot account for was heard here.
+# Form carries geometry (bar / tick / cap / staircase).
 #
-# Only the three chromatic categories get their own tokens.  The other five
+# **Treatment is not on the colour channel.**  The reading order is the user's:
+# show any trial's onset and offset first, show every played pulse second, and
+# only then say which trial was which treatment.  Spending three hues on the
+# treatments before trials had been told apart from pulses put seven hues in
+# the default view and answered the third question at the cost of the first
+# two.  Treatment is answered instead by a letter knocked out of the span's
+# start edge (`V` / `B` / `S`, see :func:`annotation_letter`), which is always
+# present, subordinate, and behind no mode switch.
+#
+# Nothing is encoded twice on an ordered channel, which is why a silence trial
+# is not greyed out and a predicted pulse is not faded: those would read as
+# claims about reliability rather than about identity.
+#
+# Only the two chromatic categories get their own tokens.  The other five
 # roles point at tokens that already exist, deliberately: `_BY_VALUE` is a
 # value-keyed dict whose later key wins, so an `ann.novel` token equal to
 # `FG` would silently re-point every `theme.FG` call through the annotation
 # role and change the colour of unrelated text.
 # ---------------------------------------------------------------------------
 
-#: Every annotation role, in the order the tracks are stacked.  A role is a
-#: *category of evidence*, not a layer: `volley` colours both the volley trial
-#: span and the volley pulses inside it, because they are the same claim seen
-#: at two time scales.  Explained detections have no role of their own -- they
-#: resolve to the role of the pulse that explains them.
+#: Every annotation role.  A role is a *category of evidence*, not a layer:
+#: `trial` colours all three treatments' spans and `pulse` colours every pulse
+#: type -- and the explained detections too, because an explained detection IS
+#: a played pulse heard back (on exp2, 2179 explained detections against
+#: exactly 2179 observed pulses, median offset 0.073 ms).  Drawing them in one
+#: hue is the correct reading, not a collision.
 ANNOTATION_ROLES: tuple[str, ...] = (
-    "volley",
-    "resting",
-    "silence",
+    "trial",
+    "pulse",
     "detection.novel",
     "run",
     "session",
@@ -1222,9 +1243,8 @@ ANNOTATION_ROLES: tuple[str, ...] = (
 )
 
 _ANNOTATION_TOKENS: dict[str, str] = {
-    "volley": "ann.volley",
-    "resting": "ann.resting",
-    "silence": "ann.silence",
+    "trial": "ann.trial",
+    "pulse": "ann.pulse",
     # the eel itself: unexplained detections are the finding, so they are the
     # ink of the page rather than one more hue competing with the stimuli.
     "detection.novel": "fg",
@@ -1312,6 +1332,28 @@ def annotation_brush(
     if unvalidated:
         b.setStyle(Qt.BDiagPattern)
     return b
+
+
+def annotation_letter(role: str) -> tuple[str, str]:
+    """``(chip colour, glyph colour)`` for a span's third-tier letter.
+
+    Treatment is not on the colour channel, so it is carried by a letter at
+    the span's start edge -- and that letter is drawn over a waveform, where
+    plain coloured text is unreadable the moment a loud sample crosses it.  It
+    is therefore **knocked out**: a solid chip in the layer's own hue with the
+    glyph punched through it in the plot ground, so the letter reads against
+    the same colour the lane is painted rather than against whatever the
+    signal happens to be doing under it.
+
+    The pair is stated here, not at the drawing site, because it is a contrast
+    claim: 4.99 (trial) and 5.35 (pulse) in dark, 6.97 and 5.19 in daylight,
+    all above :data:`MIN_CONTRAST`, which is the floor a glyph this small
+    needs.  ``bg.plot`` and not ``bg.lane``: the focused lane is the one whose
+    ground is already under its own floor (see
+    ``eventoverlay.SPAN_FILL_ALPHA``), and a chip that tracked it would carry
+    that defect into the letter.
+    """
+    return annotation_color(role), token("bg.plot")
 
 
 # ---------------------------------------------------------------------------
@@ -2836,11 +2878,14 @@ cannot tolerate.
 #:
 #: Two rules cover every entry.
 #:
-#: 1. A chromatic mark and a NEUTRAL mark are never the same *form*.  `run` is
-#:    a span the reader switches on to see 59% of the session at once,
-#:    `session` a sparse train of log lines, and `control` a staircase in a
-#:    panel of its own -- so a neutral ink is told from a chromatic one by
-#:    what it draws before its hue is ever judged.
+#: 1. A chromatic mark and a NEUTRAL mark are never the same *form*.  `pulse`
+#:    is a point train, `session` a sparse train of log lines, and `control` a
+#:    staircase in a panel of its own -- so a neutral ink is told from a
+#:    chromatic one by what it draws before its hue is ever judged.  Rule 1
+#:    does NOT cover `trial` against `run`: those are both spans, told apart by
+#:    hue alone, and they clear the floor outright (29.98 dark / 28.14
+#:    daylight).  That is why the trials took the vermillion family when the
+#:    three treatment hues collapsed into one.
 #: 2. `fault` is never drawn over the waveform at all: it appears only in the
 #:    trust badge, where nothing else it could be confused with is on screen.
 #:
@@ -2849,15 +2894,11 @@ cannot tolerate.
 #: same place.  Their 0.00 is not a collision.
 SEPARATION_EXEMPT: frozenset[tuple[str, str]] = frozenset(
     {
-        ("volley", "fault"),  # 5.62 dark / 3.40 light   -- rule 2
-        ("resting", "fault"),  # 14.53 / 22.75           -- rule 2
-        ("silence", "fault"),  # 11.48 / 13.81           -- rule 2
-        ("resting", "run"),  # 6.03 / 4.82               -- rule 1
-        ("silence", "run"),  # 22.36 / 14.98             -- rule 1
-        ("resting", "session"),  # 12.61 / 18.18         -- rule 1
-        ("resting", "control"),  # 12.61 / 18.18         -- rule 1
-        ("silence", "session"),  # 13.98 / 11.77         -- rule 1
-        ("silence", "control"),  # 13.98 / 11.77         -- rule 1
+        ("trial", "fault"),  # 5.62 dark / 3.40 light    -- rule 2
+        ("pulse", "fault"),  # 14.53 / 22.75             -- rule 2
+        ("pulse", "run"),  # 6.03 / 4.82                 -- rule 1
+        ("pulse", "session"),  # 12.61 / 18.18           -- rule 1
+        ("pulse", "control"),  # 12.61 / 18.18           -- rule 1
         ("detection.novel", "session"),  # 17.78 / 14.68 -- rule 1
         ("detection.novel", "control"),  # 17.78 / 14.68 -- rule 1
         ("session", "control"),  # 0.00 -- literally the same token
@@ -2865,7 +2906,8 @@ SEPARATION_EXEMPT: frozenset[tuple[str, str]] = frozenset(
 )
 
 #: The annotation roles that carry a CATEGORY claim, and therefore the ones
-#: that get cast into a lane as a tether or a span edge.
+#: that get cast into a lane as a point line or a span edge.  Three, not
+#: seven: the treatments share `trial` and the pulse types share `pulse`.
 #:
 #: The other four roles resolve to chrome tokens that predate the annotations --
 #: `fg.faint`, `fg.muted`, `danger` -- and those are governed by the contrast
@@ -2875,9 +2917,8 @@ SEPARATION_EXEMPT: frozenset[tuple[str, str]] = frozenset(
 #: chrome, and `fg.muted` measures 13.98 from the sparse dimmed raw trace
 #: today, with or without a session log loaded.
 CATEGORY_ROLES: tuple[str, ...] = (
-    "volley",
-    "resting",
-    "silence",
+    "trial",
+    "pulse",
     "detection.novel",
 )
 

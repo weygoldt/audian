@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (  # noqa: E402
     QApplication,
     QMainWindow,
     QMenu,
+    QSizePolicy,
     QToolButton,
     QWidget,
 )
@@ -106,6 +107,7 @@ class PanelBrowser(DataBrowser):
         self.annotation_group = None
         self.annotation_sourcew = None
         self.annotation_badgew = None
+        self.annotation_coverage = None
         self.annotation_rowboxes = []
         self.annotation_chips = []
         self.annotation_allw = None
@@ -410,15 +412,15 @@ def test_the_readout_names_the_span_the_pointer_is_standing_in(panel):
     """
     panel.solo_annotation_layer("localization")
     text = panel.annotation_under(3.0)
-    assert "Localization runs" in text
-    assert "inside, 1.500 s in" in text
+    assert "Runs " in text
+    assert text.rstrip().endswith("inside")
     assert "Δ" not in text
 
 
 def test_the_readout_reports_both_the_span_and_the_nearest_instant(panel):
     """They answer different questions and neither replaces the other."""
     text = panel.annotation_under(3.05)
-    assert "Volley trials" in text and "inside," in text
+    assert "Volley #" in text and "inside" in text
     assert "Volley pulses" in text and "Δ -50.0 ms" in text
 
 
@@ -432,6 +434,104 @@ def test_outside_every_span_the_readout_still_measures_to_the_nearest_mark(panel
 def test_nothing_is_said_while_no_layer_is_switched_on(panel):
     panel.annotations.set_visible(False)
     assert panel.annotation_under(3.0) == ""
+
+
+# --- what a trial holds ------------------------------------------------------
+
+
+def test_the_readout_counts_what_a_span_holds_from_the_layers_on_screen(panel):
+    """Stage 2 of the field workflow, in the place the reader is looking.
+
+    "How many unexplained detections fell inside THIS trial" was computable
+    -- `SessionBundle.pulses_in` has always answered it -- and was on no
+    screen.  The counts are that method's, named with the layers' own labels:
+    nothing here calls a detection a response or a fish.
+    """
+    text = panel.annotation_under(3.0)
+    assert "Volley #" in text
+    assert "sent 1" in text
+
+
+def test_a_span_that_holds_no_mark_says_so_rather_than_counting_nothing(panel):
+    """An empty silence trial and a switched-off layer are different facts."""
+    text = panel.annotation_under(5.2)
+    assert "Silence #" in text
+    assert "heard 0" in text
+    panel.solo_annotation_layer("trials.silence")
+    assert "no point layer is switched on" in panel.annotation_under(5.2)
+
+
+def test_a_switched_off_layer_is_not_counted_in_the_span_it_falls_in(panel):
+    """A count for a hidden layer is a number about something not on screen.
+
+    The toggles are how the reader narrows the question, so soloing one
+    layer has to narrow this line with them.
+    """
+    panel.annotations.set_layer("pulses.volley", False)
+    text = panel.annotation_under(3.0)
+    assert "Volley #" in text
+    assert "Volley pulses" not in text
+    assert "heard 0" in text
+
+
+def test_each_of_two_nested_spans_carries_its_own_counts(panel):
+    """A trial runs inside a localization run, and they hold different sets.
+
+    One count list at the end of the line would have no stated subject: the
+    marks in a 0.2 s trial and in the 3 s run around it are two different
+    measurements.  Each span is followed by its own.
+    """
+    panel.annotations.set_layer("localization", True)
+    text = panel.annotation_under(3.0)
+    trial, run = text.split("   ·   ")[:2]
+    assert "Volley #" in trial and "sent 1" in trial
+    assert "Runs " in run
+    assert "sent 2" in run
+
+
+def test_predicted_pulses_are_counted_apart_from_the_observed_ones(app, tmp_path):
+    """A total that mixed them would report a measurement never made.
+
+    `pulses_in` keys its result by series for exactly this reason, and the
+    readout has to keep the two apart or it undoes that.
+    """
+    browser = PanelBrowser()
+    browser.annotations.load(
+        write_bundle(
+            tmp_path / "predicted",
+            session_id="PRED",
+            pulses=[
+                pulse(3.0, "volley"),
+                pulse(3.02, "volley", match_status="unmatched", detected_time_s=None),
+            ],
+            trials=[trial(1, "volley", 2.9, 3.1, 2)],
+        )
+    )
+    app.processEvents()
+    text = browser.annotation_under(3.0)
+    assert "sent 2 (1 not heard)" in text
+
+
+def test_the_span_counts_never_ask_the_parameter_bar_for_more_width(panel):
+    """The readout changes on every mouse move; the bar may not move with it.
+
+    `QSizePolicy.Ignored` is why: the label takes the width that is left over
+    and never asks for more, so a long line elides instead of relaying out
+    the whole bar under the pointer -- the failure the status bar readouts
+    were rebuilt to stop.  The counts put the longest line in the application
+    into this label, so the property is asserted here and the elision with it.
+    """
+    label = panel.annotation_hoverw
+    assert label.sizePolicy().horizontalPolicy() == QSizePolicy.Ignored
+    label.setFixedWidth(60)
+    before = panel.parambar.sizeHint().width()
+    panel.show_annotation_under(3.0)
+    full = panel.annotation_under(3.0)
+    assert "Volley" in full
+    assert label.text() != full
+    assert theme.mono_metrics(theme.SIZE_SMALL_PT).width(label.text()) <= 60
+    assert label.toolTip() == full
+    assert panel.parambar.sizeHint().width() == before
 
 
 # --- nothing loaded ----------------------------------------------------------
@@ -606,13 +706,17 @@ class LoaderBrowser(PanelBrowser):
     loader with a total, which is what this supplies.
     """
 
-    def __init__(self, path, frames, rate, channels=1):
+    def __init__(self, path, frames, rate, channels=1, opened=None):
         super().__init__()
-        self.data = SimpleNamespace(
-            data=SimpleNamespace(
-                rate=rate, frames=frames, channels=channels, start_indices=[0]
-            )
+        loader = SimpleNamespace(
+            rate=rate, frames=frames, channels=channels, start_indices=[0]
         )
+        if opened is not None:
+            # A real loader always names what it opened; a browser built
+            # without that list has no opinion about how much of a split
+            # recording is on screen, which is why it is left out by default.
+            loader.file_paths = [Path(x) for x in opened]
+        self.data = SimpleNamespace(data=loader)
         self._recording = Path(path)
 
     def recording_path(self):
@@ -683,6 +787,124 @@ def test_a_bundle_that_really_is_the_wrong_length_still_says_so(
     browser.load_annotations(metadata)
     said = " ".join(message for _level, message in browser.said)
     assert "999999 frames" in said
+
+
+# --- only part of a split recording open -------------------------------------
+
+
+def split_bundle(directory: Path, rate: int, part: int) -> Path:
+    """A bundle whose recording is four files of `part` frames, exp3's shape."""
+    return write_bundle(
+        directory,
+        session_id="SPLIT4",
+        alignment={
+            "recording_file": None,
+            "recording_files": '["a.wav", "b.wav", "c.wav", "d.wav"]',
+            "recording_file_frames": "[" + ", ".join([str(part)] * 4) + "]",
+            "recording_rate_hz": str(rate),
+            "recording_frames": str(4 * part),
+        },
+        pulses=[pulse(1.0), pulse(3.0, "volley")],
+        trials=[trial(1, "volley", 2.9, 3.1, 1)],
+    )
+
+
+def test_opening_one_file_of_a_split_recording_draws_nothing(
+    app, tmp_path, scratch_settings
+):
+    """The MAJOR failure: every other check passed and the marks were wrong.
+
+    Opening exp3's DR0000_0090.wav alone -- file 3 of 4 -- gave
+    `RecordingCheck(name=True, frames=True, channel=True, problems=())`, a
+    badge that said WARNINGS about something else, and 124 marks drawn at
+    100-105 s over audio whose real content is recording seconds
+    1863.936-1868.936.  The browser knew all along that it had opened 1 of 4.
+    """
+    rate, part = 8000, 8000
+    browser = LoaderBrowser(
+        tmp_path / "c.wav", frames=part, rate=rate, opened=["c.wav"]
+    )
+    assert browser.load_annotations(split_bundle(tmp_path / "s", rate, part))
+    assert browser.annotations.bundle.recording_check.ok is True
+    assert browser.annotations.drawable is False
+    assert browser.annotation_keys() == []
+    assert browser.annotation_under(3.0) == ""
+
+
+def test_the_refusal_names_the_open_files_the_missing_ones_and_the_remedy(
+    app, tmp_path, scratch_settings
+):
+    """A badge that only says NO is a badge a field reader cannot act on."""
+    rate, part = 8000, 8000
+    browser = LoaderBrowser(
+        tmp_path / "c.wav", frames=part, rate=rate, opened=["c.wav"]
+    )
+    browser.load_annotations(split_bundle(tmp_path / "s", rate, part))
+    assert browser.annotation_badgew.text() == "1 OF 4 FILES"
+    tip = browser.annotation_badgew.toolTip()
+    assert "open:    c.wav" in tip
+    assert "missing: a.wav, b.wav, d.wav" in tip
+    assert "audian a.wav b.wav c.wav d.wav" in tip
+    said = [message for level, message in browser.said if level == "error"]
+    assert any("open all 4 files together" in message for message in said)
+
+
+def test_opening_the_first_file_of_a_split_recording_is_refused_too(
+    app, tmp_path, scratch_settings
+):
+    """Its marks would be right only by accident, and only for its own span."""
+    rate, part = 8000, 8000
+    browser = LoaderBrowser(
+        tmp_path / "a.wav", frames=part, rate=rate, opened=["a.wav"]
+    )
+    browser.load_annotations(split_bundle(tmp_path / "s", rate, part))
+    assert browser.annotations.drawable is False
+    assert browser.annotation_badgew.text() == "1 OF 4 FILES"
+
+
+def test_the_whole_split_recording_open_draws_as_it_always_did(
+    app, tmp_path, scratch_settings
+):
+    """The guard has to keep its hands off the case it exists to protect."""
+    rate, part = 8000, 8000
+    browser = LoaderBrowser(
+        tmp_path / "a.wav",
+        frames=4 * part,
+        rate=rate,
+        opened=["a.wav", "b.wav", "c.wav", "d.wav"],
+    )
+    browser.load_annotations(split_bundle(tmp_path / "s", rate, part))
+    assert browser.annotation_coverage is None
+    assert browser.annotations.drawable is True
+    assert browser.annotation_badgew.text() == "validated"
+    assert "Volley #" in browser.annotation_under(3.0)
+
+
+def test_a_browser_that_cannot_say_what_it_opened_makes_no_such_claim(
+    app, tmp_path, scratch_settings
+):
+    """Unknown is not the same as wrong.  A loader with no `file_paths` has
+    said nothing about how much of the recording is open, and a refusal
+    invented out of that would be the false alarm that gets a check switched
+    off in the field."""
+    rate, part = 8000, 8000
+    browser = LoaderBrowser(tmp_path / "c.wav", frames=part, rate=rate)
+    browser.load_annotations(split_bundle(tmp_path / "s", rate, part))
+    assert browser.annotation_coverage is None
+    assert browser.annotations.drawable is True
+
+
+def test_clearing_the_annotations_clears_the_refusal_with_them(
+    app, tmp_path, scratch_settings
+):
+    rate, part = 8000, 8000
+    browser = LoaderBrowser(
+        tmp_path / "c.wav", frames=part, rate=rate, opened=["c.wav"]
+    )
+    browser.load_annotations(split_bundle(tmp_path / "s", rate, part))
+    browser.clear_annotations()
+    assert browser.annotation_coverage is None
+    assert browser.annotation_badgew.text() == ""
 
 
 # --- what the reader measured, said where a reader looks ---------------------
@@ -869,19 +1091,23 @@ def test_the_step_and_master_keys_are_still_bound(host):
 # --- what the group costs the stack -----------------------------------------
 
 
-def test_the_annotations_group_is_four_rows_and_never_a_fifth(app, panel):
-    """Vertical space is the scarcest thing on screen.
+def test_the_annotations_group_is_five_rows_and_never_a_sixth(app, panel):
+    """Vertical space is the scarcest thing on screen, but not free of charge.
 
-    Measured offscreen at 1920x1080 with the real exp2 bundle: the group's
-    grid is **104 px** (source 24, show 22, two chip rows 22 each, margins and
-    spacing 14) against the 106 px the Filter group already spends, so the
-    whole parameter bar stays at the 141 px it has with nothing loaded -- it
-    used to grow to 180.  A fifth row would take 24 px out of every lane in
-    the stack, so the ceiling is checked against a group built of four chip
-    high rows rather than against a number that moves with the font.
+    Four rows for a while: source, show, and the two chip rows, with the
+    pointer readout riding at the end of the show row to save the fifth.  That
+    trade was right while the readout was one clause and wrong the moment it
+    carried the trial counts -- measured in the running app, the leftover of
+    the show row is a flat 271 px from a 1280 px window to a 3200 px one, 34
+    of the line's 227 characters, elided before the first number.  The counts
+    are the whole reason the readout exists, so the readout got its row back.
+
+    Five is the ceiling.  A sixth would take another 24 px out of every lane
+    in the stack, and the ceiling is checked against a group built of that
+    many chip-high rows rather than against a number that moves with the font.
     """
     group = panel.annotation_group
-    assert group.rows == 2 + len(ANNOTATION_CHIP_ROWS)
+    assert group.rows == 3 + len(ANNOTATION_CHIP_ROWS)
 
     reference = ParameterGroup("Reference", panel.parambar)
     for _ in range(group.rows):
@@ -895,10 +1121,48 @@ def test_the_annotations_group_is_four_rows_and_never_a_fifth(app, panel):
     )
 
 
-def test_the_pointer_readout_costs_no_row_of_its_own(panel):
-    """It rides at the end of the Show row: what the pointer is near is an
-    aside, and a row of the bar is 24 px off every lane in the stack."""
-    assert panel.annotation_hoverw.parent() is panel.annotation_showw.parent()
+def test_the_pointer_readout_is_wide_enough_to_reach_its_counts(app, panel):
+    """A readout nobody can read is worth less than the row it saves.
+
+    The counts answer the second stage of the field workflow -- how many
+    unexplained detections fell inside THIS trial, against a silence one --
+    so they have to survive the elision, not merely be computed.  Sharing the
+    Show row they did not: the leftover was 271 px at every window width from
+    1280 to 3200, and the counts first appeared at 6000 px, which is not a
+    window anybody has.
+    """
+    assert panel.annotation_hoverw.parent() is not panel.annotation_showw.parent()
+    # PanelBrowser is never shown, so widget widths are meaningless until the
+    # layout is driven at a real size.  1920 is the width the group's other
+    # measurements in this file were taken at.
+    group = panel.annotation_group
+    group.resize(1920 // 2, group.sizeHint().height())
+    group.body.resize(group.width(), group.body.sizeHint().height())
+    group.grid.activate()
+    app.processEvents()
+    metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
+    # the widest line the readout can be asked to show, from the real bundle
+    longest = max(
+        (
+            panel.annotation_under(float(layer.starts[i]) + 1e-6)
+            for layer in panel.annotations.bundle
+            if getattr(layer, "kind", "") == KIND_SPAN and len(layer.starts)
+            for i in range(len(layer.starts))
+        ),
+        key=len,
+        default="",
+    )
+    # Identity, then contents, then bounds.  The counts must survive elision,
+    # so measure up to the end of the contents clause; the bounds after it are
+    # what elision is allowed to eat, because the span is drawn on screen with
+    # both its edges and its extent is therefore already visible.
+    fields = longest.split("   \u00b7   ")[0].split("  ")
+    assert len(fields) >= 2, longest
+    upto_counts = "  ".join(fields[:2])
+    assert panel.annotation_hoverw.width() >= metrics.horizontalAdvance(upto_counts), (
+        f"{panel.annotation_hoverw.width()} px cannot show "
+        f"{len(upto_counts)} characters of {longest!r}"
+    )
 
 
 def test_a_chip_row_is_one_subline_and_never_wraps(app, panel):

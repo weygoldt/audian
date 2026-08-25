@@ -798,17 +798,26 @@ def _unlayered(counts: dict[str, int], kind: str, n: int) -> None:
 #: ``pulses_emitted = 0`` -- and it is loaded, drawn and counted exactly like
 #: the other two.  A control condition that quietly failed to load would be
 #: invisible in precisely the way that makes an experiment unreadable.
+#:
+#: All three carry the SAME role, and therefore the same hue.  The reading
+#: order is the user's: any trial's onset and offset first, every played pulse
+#: second, which treatment it was only third.  Treatment is carried instead by
+#: the `letter` -- ``V`` / ``B`` / ``S`` -- knocked out of the span's start
+#: edge, which is always on screen and behind no mode switch.  The three
+#: layers keep their own toggles regardless: stage 3 of the field workflow is
+#: "solo one treatment", and filtering is a toggle concern where colour is an
+#: encoding one.
 _TRIAL_LAYERS: tuple[tuple[str, str, str, str, str, str], ...] = (
-    (LAYER_TRIALS_VOLLEY, "volley", "Volley trials", "Volley", "Vol", "volley"),
+    (LAYER_TRIALS_VOLLEY, "volley", "Volley trials", "Volley", "Vol", "V"),
     (
         LAYER_TRIALS_BASELINE,
         "baseline",
         "Baseline trials",
         "Baseline",
         "Base",
-        "resting",
+        "B",
     ),
-    (LAYER_TRIALS_SILENCE, "silence", "Silence trials", "Silence", "Sil", "silence"),
+    (LAYER_TRIALS_SILENCE, "silence", "Silence trials", "Silence", "Sil", "S"),
 )
 
 _TRIAL_TIPS = {
@@ -851,7 +860,7 @@ def _build_trials(
 
     known = frame["treatment"] if "treatment" in frame.columns else None
     layers = []
-    for layer_id, treatment, label, short, micro, role in _TRIAL_LAYERS:
+    for layer_id, treatment, label, short, micro, letter in _TRIAL_LAYERS:
         mask = (
             (known == treatment).fill_null(False).to_numpy()
             if known is not None
@@ -864,11 +873,12 @@ def _build_trials(
                 ends_all[mask],
                 frame.filter(mask),
                 open_right=open_right[mask],
+                letter=letter,
                 label=label,
                 short=short,
                 micro=micro,
                 track=TRACK_TRIALS,
-                role=role,
+                role="trial",
                 default_on=True,
                 tip=_TRIAL_TIPS[layer_id],
             )
@@ -955,9 +965,14 @@ def _build_pulses(
         (
             LAYER_PULSES_RESTING,
             "Resting-rate pulses",
-            "Resting",
+            # "Resting pulses", not "Resting": the chip word has to say what
+            # KIND of thing it switches, because the trials track spends the
+            # same three treatment words on its own chips.  "Volley" alone
+            # appeared twice in the Sent row -- once for the trial arm and
+            # once for the pulse type -- and nothing on screen said which was
+            # which.
+            "Resting pulses",
             "Rest",
-            "resting",
             (
                 kinds.is_in(_RESTING_TYPES).fill_null(False).to_numpy()
                 if kinds is not None
@@ -969,9 +984,8 @@ def _build_pulses(
         (
             LAYER_PULSES_VOLLEY,
             "Volley pulses",
-            "Volley",
+            "Volley pulses",
             "Vol",
-            "volley",
             (
                 (kinds == "volley").fill_null(False).to_numpy()
                 if kinds is not None
@@ -982,7 +996,11 @@ def _build_pulses(
     )
     times_all = _times(frame)
     layers = []
-    for layer_id, label, short, micro, role, mask, tip in groups:
+    # ONE hue for every pulse type.  Which type it was is answered by the
+    # pointer readout (`pulse_type` is still in every frame and still in
+    # `describe`) and by soloing the per-type layer -- never by a per-pulse
+    # glyph, which at 4423 pulses would be the same mistake as colouring them.
+    for layer_id, label, short, micro, mask, tip in groups:
         series = [
             PointSeries(
                 times=np.ascontiguousarray(times_all[mask & obs]),
@@ -1007,7 +1025,7 @@ def _build_pulses(
                 short=short,
                 micro=micro,
                 track=TRACK_PULSES,
-                role=role,
+                role="pulse",
                 default_on=True,
                 tip=tip,
             )
@@ -1087,17 +1105,21 @@ def _build_detections(
     det_frame = frame.filter(explained)
     is_volley, unmatched = _parent_pulse_is_volley(det_t, pulses, meta)
     series = []
-    for role, mask in (
-        ("volley", is_volley & ~unmatched),
-        ("resting", ~is_volley & ~unmatched),
-    ):
+    # An explained detection IS a played pulse, heard back -- on exp2, 2179 of
+    # them against exactly 2179 observed pulses, median offset 0.073 ms -- so
+    # it draws in the PULSE hue and not in an ink of its own.  The two series
+    # survive the collapse to one hue because the join to the parent pulse is
+    # the only place the type of an explained detection is known: the
+    # detections CSV carries no `pulse_type`, so soloing one of these is what
+    # a per-type reading of what was heard back rests on.
+    for mask in (is_volley & ~unmatched, ~is_volley & ~unmatched):
         if mask.any():
             series.append(
                 PointSeries(
                     times=np.ascontiguousarray(det_t[mask]),
                     frame=det_frame.filter(mask),
                     observed=True,
-                    role=role,
+                    role="pulse",
                 )
             )
     if unmatched.any() or not series:
@@ -1129,7 +1151,7 @@ def _build_detections(
         micro="Exp",
         track=TRACK_HEARD,
         # A colour this layer ACTUALLY DRAWS.  Every series here takes its hue
-        # from the pulse that explains it -- volley red, resting teal -- so a
+        # from the pulse that explains it, which is the pulse hue -- so a
         # layer role of `detection.novel` painted the chip in an ink no mark
         # of this layer ever uses, and painted it pixel-identical to the
         # Unexplained chip beside it.  The chips are the only legend there is;
@@ -1582,7 +1604,7 @@ def _check_partition(
     trial_frame: pl.DataFrame | None,
     warnings: list[str],
 ) -> None:
-    """The claim that lets one hue serve a treatment's span and its pulses.
+    """The claim the treatment letter makes about the pulses under it.
 
     A volley pulse is inside a volley trial, a baseline pulse is inside a
     baseline trial, a localization pulse is inside no trial at all, and a
@@ -1591,10 +1613,12 @@ def _check_partition(
     span, 1279 of 1279 volley pulses in a volley span, 0 pulses in any of the
     12 silence spans, and ``pulses_emitted == 0`` on every one of those 12.
 
-    The whole hue-sharing scheme starts lying the moment that stops holding --
-    a red bracket over a train of teal pulses says a volley played and it did
-    not -- and a comment cannot notice.  So it is checked here, vectorised,
-    at every load, and a violation is named in :attr:`SessionBundle.warnings`.
+    Hue no longer carries treatment, so what rests on this is the LETTER: a
+    span marked ``V`` says a volley played inside it, and an ``S`` says
+    nothing did.  The moment that stops holding the letter is a lie told over
+    a pulse train that contradicts it, and a comment cannot notice.  So it is
+    checked here, vectorised, at every load, and a violation is named in
+    :attr:`SessionBundle.warnings`.
     """
     by_id = {layer.id: layer for layer in trials}
     volley = by_id.get(LAYER_TRIALS_VOLLEY)

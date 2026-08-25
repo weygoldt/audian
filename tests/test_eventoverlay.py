@@ -38,7 +38,9 @@ from audian.layers import PointLayer  # noqa: E402
 from audian.eventoverlay import (  # noqa: E402
     CAP_LIMIT,
     FILL_Z,
+    LABEL_POOL,
     MARK_Z,
+    MIN_LABEL_PX,
     SPAN_FILL_ALPHA,
     SURFACE_NAVIGATOR,
     SURFACE_ORDER,
@@ -50,7 +52,14 @@ from audian.eventoverlay import (  # noqa: E402
 )
 
 sys.path.insert(0, str(REPO / "tests"))
-from test_session import pulse, simple, trial, write_bundle  # noqa: E402
+from test_session import (  # noqa: E402
+    METADATA,
+    needs_data,
+    pulse,
+    simple,
+    trial,
+    write_bundle,
+)
 
 VOLLEY = session.LAYER_TRIALS_VOLLEY
 BASELINE = session.LAYER_TRIALS_BASELINE
@@ -560,13 +569,13 @@ def test_a_role_is_resolved_per_series_never_per_layer(app, tmp_path):
     annotations.bundle = bundle
     explained = bundle[session.LAYER_DET_EXPLAINED]
     roles = {annotations.role(explained, i) for i in range(len(explained.series))}
-    assert roles == {"resting"}
+    assert roles == {"pulse"}
     # The layer's role is the fallback and nothing else.  Checked by
     # contradicting it rather than by pinning whatever `session` sets it to --
     # that value answers a different question (which ink the chip is drawn
     # in), and pinning it here made this test fail for a reason that had
     # nothing to do with how a role is resolved.
-    stated = dataclasses.replace(explained.series[0], role="silence")
+    stated = dataclasses.replace(explained.series[0], role="trial")
     inherited = dataclasses.replace(explained.series[0], role=None)
     contrarian = PointLayer(
         "test.roles",
@@ -577,18 +586,45 @@ def test_a_role_is_resolved_per_series_never_per_layer(app, tmp_path):
         micro="x",
         track=explained.track,
     )
-    assert annotations.role(contrarian, 0) == "silence"
+    assert annotations.role(contrarian, 0) == "trial"
     assert annotations.role(contrarian, 1) == "fault"
 
 
-def test_a_span_and_its_pulses_share_one_hue(layer):
-    """The whole scheme rests on the load-time partition, so it is stated here."""
-    assert layer.color(layer.bundle[VOLLEY]) == layer.color(layer.bundle[PULSE_VOLLEY])
-    assert layer.color(layer.bundle[BASELINE]) == layer.color(layer.bundle[RESTING])
-    assert layer.color(layer.bundle[SILENCE]) not in {
-        layer.color(layer.bundle[VOLLEY]),
-        layer.color(layer.bundle[BASELINE]),
+def test_the_default_view_is_three_hues_and_none_of_them_is_a_treatment(layer):
+    """The encoding ruling, checked on what the overlay would actually paint.
+
+    Reading order: any trial's onset and offset first, every played pulse
+    second, which treatment it was only third.  So the three treatments are
+    one hue, the two pulse types are another, an explained detection joins the
+    pulses because it IS a played pulse heard back, and the unexplained ones
+    are the ink.  Three, not seven -- which is what makes the default view and
+    the navigator readable without soloing anything.
+    """
+    bundle = layer.bundle
+    trials = {layer.color(bundle[i]) for i in (VOLLEY, BASELINE, SILENCE)}
+    pulses = {layer.color(bundle[i]) for i in (RESTING, PULSE_VOLLEY)}
+    explained = {
+        layer.color(bundle[session.LAYER_DET_EXPLAINED], i)
+        for i in range(len(bundle[session.LAYER_DET_EXPLAINED].series))
     }
+    ink = layer.color(bundle[UNEXPLAINED])
+    assert len(trials) == 1
+    assert pulses == explained and len(pulses) == 1
+    assert len(trials | pulses | {ink}) == 3
+
+
+def test_every_treatment_still_has_its_own_switch(layer):
+    """Sharing a hue is not sharing a toggle.
+
+    Stage 3 of the field workflow is "solo one treatment", so the layer set
+    must survive the palette collapsing.  This is the test that fails if a
+    tidy-up merges the three trial layers because they look the same.
+    """
+    for one in (VOLLEY, BASELINE, SILENCE, RESTING, PULSE_VOLLEY):
+        layer.solo(one)
+        assert layer.active_ids() == [one]
+    layer.show_all()
+    assert set(layer.active_ids()) >= {VOLLEY, BASELINE, SILENCE}
 
 
 def test_pens_are_re_resolved_on_a_theme_switch(app, layer):
@@ -985,8 +1021,261 @@ def test_a_view_box_with_no_layout_yet_does_not_collapse_the_decimation(
     assert overlay.pixels() >= 900
 
 
+# --- the treatment letters ---------------------------------------------------
+
+
+def live_labels(overlay):
+    """``[(letter, x)]`` for every label slot currently on screen."""
+    return [
+        (overlay._label_text[i], float(overlay.labels[i].pos().x()))
+        for i in range(overlay._labels_live)
+    ]
+
+
+def test_a_trial_carries_its_treatment_as_a_letter_at_its_start_edge(app, layer):
+    """Treatment is third tier, so it is a letter and not a hue.
+
+    Always present, subordinate, behind no mode switch: there is no control to
+    find and no state in which a drawn trial is unlabelled while it is wide
+    enough to say what it was.
+    """
+    overlay = drawn_overlay(app, layer)
+    seen = dict(live_labels(overlay))
+    bundle = layer.bundle
+    assert seen == {
+        "V": pytest.approx(float(bundle[VOLLEY].starts[0])),
+        "B": pytest.approx(float(bundle[BASELINE].starts[0])),
+        "S": pytest.approx(float(bundle[SILENCE].starts[0])),
+    }
+    # hung from the top of the view, so the chip falls INTO the span it names
+    _x, y1 = overlay.plot.getViewBox().viewRange()[1]
+    for i in range(overlay._labels_live):
+        assert float(overlay.labels[i].pos().y()) == pytest.approx(y1)
+
+
+def test_a_span_too_narrow_for_the_glyph_is_left_unlabelled(app, layer):
+    """A chip on a bar narrower than itself reaches into the NEXT span.
+
+    It would then name that span, and name it wrong -- an `S` sitting over a
+    volley trial.  So the width test is on the DRAWN width, and a span that
+    cannot hold the letter simply does not get one.
+    """
+    overlay = drawn_overlay(app, layer, xrange=(0.0, 8.0))
+    assert overlay._labels_live == 3
+    # zoom out until the widest trial -- 0.6 s of silence -- is thinner than
+    # the glyph, and check that it really is before checking what was drawn
+    overlay.plot.getViewBox().setXRange(0.0, 600.0, padding=0)
+    overlay.update_plot()
+    widest = 0.6 * overlay.pixels() / 600.0
+    assert widest < MIN_LABEL_PX, widest
+    assert overlay._labels_live == 0
+    assert not any(item.isVisible() for item in overlay.labels)
+
+
+def test_more_labelable_spans_than_the_pool_are_labelled_not_at_all(app, tmp_path):
+    """An arbitrary subset is worse than nothing, so nothing is what is drawn.
+
+    A reader who saw `V V V` over three of four adjacent bars would read the
+    fourth as a volley too.  No labels at all is a state they can see; 24 of
+    31 is one they cannot.
+    """
+
+    def wide_trials(count, directory):
+        """`count` volley trials, each far wider than `MIN_LABEL_PX` in view."""
+        pitch = 1.0 / count
+        rows = [
+            trial(i, "volley", pitch * i, pitch * i + 0.6 * pitch, 1)
+            for i in range(count)
+        ]
+        bundle = simple(directory, trials=rows)
+        annotations = AnnotationLayer()
+        annotations.bundle = bundle
+        annotations.layers = {x.id: True for x in bundle}
+        overlay = drawn_overlay(app, annotations, xrange=(0.0, 1.0))
+        # A wide lane, stated rather than laid out: an offscreen widget keeps
+        # Qt's default 640 px whatever it is resized to, and what this test
+        # varies is how MANY spans are labelable, never whether any of them
+        # is.  Every bar is then far wider than the glyph at every count.
+        overlay.pixels = lambda _n=60 * count + 400: _n
+        overlay.layer.invalidate()
+        overlay._drawn = None
+        overlay.update_plot()
+        drawn = 0.6 * pitch * overlay.pixels()
+        assert drawn > 2 * MIN_LABEL_PX, drawn
+        return annotations, overlay
+
+    # exactly the pool: every one of them is seated
+    full, overlay = wide_trials(LABEL_POOL, tmp_path / "full")
+    assert len(full.bundle[VOLLEY]) == LABEL_POOL
+    assert overlay._labels_live == LABEL_POOL
+    assert set(overlay._label_text[:LABEL_POOL]) == {"V"}
+
+    # one more, and nothing at all is labelled -- it is the COUNT that
+    # decides, not anything about this bundle
+    over, overlay = wide_trials(LABEL_POOL + 1, tmp_path / "over")
+    assert len(over.bundle[VOLLEY]) == LABEL_POOL + 1
+    assert overlay._labels_live == 0
+    assert not any(item.isVisible() for item in overlay.labels)
+
+
+@needs_data
+def test_the_pool_is_never_overrun_by_the_session_it_was_sized_for(app, new_plot):
+    """The pool size is a measurement, so it is re-measured against the file.
+
+    24 slots is 1.5x the worst view of exp2 -- 16 trial spans wide enough to
+    label at once, at a 100 s view around 331 s on a 4K lane.  If the real
+    session ever put more than 24 on screen the letters would blink out
+    wholesale, so the sweep that produced the number is the test: every view
+    width from half a second to the whole recording, at the widest lane the
+    application can be given.
+    """
+    annotations = AnnotationLayer()
+    bundle = annotations.load(METADATA)
+    annotations.layers = dict.fromkeys(annotations.layers, True)
+    overlay = EventOverlay(new_plot(), annotations, SURFACE_TRACE)
+    overlay.rebuild()
+    pixels = 3840
+    t0 = bundle.t_min or 0.0
+    t1 = bundle.t_max or 1.0
+    worst = 0
+    for width in (0.5, 2, 10, 50, 100, 200, 500, t1 - t0):
+        if width > t1 - t0:
+            continue
+        for i in range(60):
+            a = t0 + (t1 - t0 - width) * i / 59.0
+            seated = sum(
+                int(annotations.label_window(lid, a, a + width, pixels).size)
+                for lid, _letter in overlay._letter_keys
+            )
+            worst = max(worst, seated)
+    assert 0 < worst <= LABEL_POOL, worst
+    # and with real headroom, not by a slot or two
+    assert worst <= 0.75 * LABEL_POOL, worst
+
+
+def test_the_label_pool_is_built_once_and_never_grown_on_the_draw_path(app, layer):
+    """A `pg.TextItem` costs 265 us to build and 47 us to detach.
+
+    Twelve of each per pan would cost more than the whole rest of the redraw,
+    so the pool is built once and driven with `setText` / `setPos`, and a slot
+    nobody needs is parked rather than removed.  Asserted by counting the
+    scene operations across a pan, because that is the property -- the timing
+    is what it buys.
+    """
+    overlay = drawn_overlay(app, layer)
+    assert len(overlay.labels) == LABEL_POOL
+    before = list(overlay.labels)
+    calls = {"add": 0, "remove": 0}
+    plot = overlay.plot
+    real_add, real_remove = plot.addItem, plot.removeItem
+    plot.addItem = lambda *a, **k: (
+        calls.__setitem__("add", calls["add"] + 1),
+        real_add(*a, **k),
+    )[1]
+    plot.removeItem = lambda *a, **k: (
+        calls.__setitem__("remove", calls["remove"] + 1),
+        real_remove(*a, **k),
+    )[1]
+    try:
+        for i in range(40):
+            start = 0.05 * i
+            plot.getViewBox().setXRange(start, start + 6.0, padding=0)
+            overlay.update_plot()
+    finally:
+        plot.addItem, plot.removeItem = real_add, real_remove
+    assert calls == {"add": 0, "remove": 0}
+    assert overlay.labels == before
+
+
+def test_a_slot_that_keeps_its_letter_is_not_re_texted(app, layer):
+    """`setText` relays a whole QTextDocument, so it is called on change only.
+
+    Slots are handed out in bundle order, so a pan that keeps the same layers
+    on screen keeps the same letter in the same slot and touches no text.
+    """
+    overlay = drawn_overlay(app, layer)
+    seen = []
+    for item in overlay.labels:
+        item.setText = lambda text, _s=seen: _s.append(text)
+    for i in range(20):
+        start = 0.01 * i
+        overlay.plot.getViewBox().setXRange(start, start + 7.0, padding=0)
+        overlay.update_plot()
+    assert seen == []
+
+
+def test_clearing_the_bundle_parks_the_letters_rather_than_removing_them(app, layer):
+    """The pool belongs to the overlay, not to the bundle it last drew."""
+    overlay = drawn_overlay(app, layer)
+    assert overlay._labels_live == 3
+    overlay.clear()
+    assert len(overlay.labels) == LABEL_POOL
+    assert overlay._labels_live == 0
+    assert not any(item.isVisible() for item in overlay.labels)
+    # and the letters come back with the next bundle, out of the same pool
+    overlay.rebuild()
+    overlay.update_plot()
+    assert {letter for letter, _x in live_labels(overlay)} == {"V", "B", "S"}
+    assert len(overlay.labels) == LABEL_POOL
+
+
+def test_the_navigator_draws_no_treatment_letters(new_plot, layer):
+    """That strip always shows the whole session, so no span could ever be
+    wide enough -- and a 24 item pool per navigator row would be built, never
+    used, and repainted with the rest of the scene."""
+    nav = EventOverlay(new_plot(), layer, SURFACE_NAVIGATOR)
+    nav.rebuild()
+    assert nav.wants_labels is False
+    assert nav.labels == []
+    nav.update_plot()
+    assert nav._labels_live == 0
+
+
+def test_a_letter_is_knocked_out_of_a_chip_in_the_trial_hue(app, layer):
+    """A coloured glyph over a waveform is at the mercy of the signal under it.
+
+    So the letter is knocked out: a solid chip in the layer's own hue with the
+    glyph punched through it in the plot ground.  Re-resolved by `polish`, on
+    the theme switch and nowhere near the draw path.
+    """
+    overlay = drawn_overlay(app, layer)
+    for name in (theme.THEME_DARK, theme.THEME_LIGHT):
+        theme.set_theme(name)
+        overlay.polish()
+        chip, glyph = theme.annotation_letter("trial")
+        for item in overlay.labels:
+            assert item.fill.color().name().upper() == chip.upper()
+            assert item.color.name().upper() == glyph.upper()
+    theme.set_theme(theme.THEME_DARK)
+    overlay.polish()
+
+
+def test_a_letter_never_takes_the_mouse(app, layer):
+    """An annotation states where something is; it is not a control.
+
+    A rubber-band drag that starts on a chip is exactly the drag a reader is
+    most likely to make, and the inner `QGraphicsTextItem` is a second item
+    the scene would offer the press to.
+    """
+    overlay = drawn_overlay(app, layer)
+    for item in overlay.labels:
+        assert item.acceptedMouseButtons() == Qt.NoButton
+        assert item.textItem.acceptedMouseButtons() == Qt.NoButton
+
+
+def test_a_letter_rides_above_every_other_annotation(app, layer):
+    """It is the only mark that has to be READ rather than seen, so a point
+    line drawn through the glyph costs the reading.  Still under the crosshair
+    and the playback marker at 100."""
+    overlay = drawn_overlay(app, layer)
+    assert overlay.label_z > overlay.cap_z > overlay.mark_z > FILL_Z
+    assert overlay.label_z < 100
+    for item in overlay.labels:
+        assert item.zValue() == overlay.label_z
+
+
 def test_the_legend_icons_are_drawn_for_every_kind():
-    color = theme.annotation_color("volley")
+    color = theme.annotation_color("trial")
     assert not eventoverlay.legend_icon(color, True).isNull()
     assert not eventoverlay.legend_icon(color, False).isNull()
     assert not eventoverlay.span_icon(color, 0.14).isNull()
@@ -1004,7 +1293,7 @@ def test_a_predicted_chip_is_as_tall_as_an_observed_one():
     """The chip is the only legend the marks have, so a short predicted line
     here would teach a stub the lane never draws -- and a per-kind y
     allocation is the one thing the drawing rule forbids."""
-    color = theme.annotation_color("volley")
+    color = theme.annotation_color("trial")
     observed = _painted_rows(eventoverlay._legend_pixmap(color, True, False))
     predicted = _painted_rows(eventoverlay._legend_pixmap(color, False, False))
     assert observed == list(range(eventoverlay.LEGEND_H))

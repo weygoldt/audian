@@ -12,7 +12,9 @@ Two objects, with a deliberate split:
 `EventOverlay`
     One per plot.  Turns those arrays into geometry.  It holds one
     `pg.PlotCurveItem` per drawn thing -- one per point series, two per span
-    layer -- so a redraw never walks a row from Python.
+    layer -- so a redraw never walks a row from Python, plus a fixed pool of
+    `pg.TextItem` for the treatment letters that is never grown, never shrunk,
+    and never touched by `addItem`/`removeItem` after it is built.
 
 The one rule everything here obeys
 ----------------------------------
@@ -24,10 +26,19 @@ simultaneous legibility of all ten.
 
 What the drawing says
 ---------------------
-* **Colour** is the evidence *category*, resolved per series through
-  :func:`audian.theme.annotation_color` -- volley, resting, silence, the ink
-  of an unexplained detection.  A series' own role wins over its layer's; a
-  layer's role is only the fallback for a series that has none.
+* **Colour is the top-level KIND, and only that.**  Three hues in the default
+  view: one for *a trial happened here*, one for *a pulse was played here*,
+  and the page's own ink for *the log cannot account for this*.  Resolved per
+  series through :func:`audian.theme.annotation_color`; a series' own role
+  wins over its layer's, and a layer's role is only the fallback for a series
+  that has none.  Explained detections draw in the PULSE hue, because an
+  explained detection is a played pulse heard back and not a third thing.
+* **Treatment is a letter, not a hue.**  `V` / `B` / `S` knocked out of a chip
+  at the span's start edge, from a fixed pool of `pg.TextItem` that is built
+  once and driven with `setText` / `setPos`.  Always present, subordinate,
+  behind no mode switch.  Every per-treatment and per-type layer still has its
+  own toggle: the letters answer *which treatment is this*, and soloing
+  answers *show me only that treatment*, which are different questions.
 * **A span** is an interior fill drawn *under* the trace plus two full-height
   edge lines drawn *over* it.  The fill shifts the ground, so the waveform
   keeps its own pen; the edges carry the extent when the fill is washed out
@@ -118,15 +129,15 @@ SURFACE_LABELS: dict[str, str] = {
 #: meaning instead is the dash pattern (`theme.annotation_pen`) and the hue.
 MARK_ALPHA = 1.0
 
-#: The roles that actually paint an interior fill: the three trial treatments
-#: and the localization runs.  Every other role in `theme.ANNOTATION_ROLES`
-#: -- `detection.novel`, `session`, `fault`, `control` -- belongs to a point
-#: layer or to the control track, which draw a line or a staircase and never
-#: wash a ground.  Auditing a fill over those measures a composite that is
-#: never rendered, so the measurement on `SPAN_FILL_ALPHA` is taken over this
-#: set alone; a test pins it to the span layers a bundle actually builds, so
-#: a new one cannot quietly fall outside it.
-FILL_ROLES: frozenset[str] = frozenset({"volley", "resting", "silence", "run"})
+#: The roles that actually paint an interior fill: the trials -- all three
+#: treatments, one role -- and the localization runs.  Every other role in
+#: `theme.ANNOTATION_ROLES` -- `pulse`, `detection.novel`, `session`, `fault`,
+#: `control` -- belongs to a point layer or to the control track, which draw a
+#: line or a staircase and never wash a ground.  Auditing a fill over those
+#: measures a composite that is never rendered, so the measurement on
+#: `SPAN_FILL_ALPHA` is taken over this set alone; a test pins it to the span
+#: layers a bundle actually builds, so a new one cannot quietly fall outside it.
+FILL_ROLES: frozenset[str] = frozenset({"trial", "run"})
 
 #: Interior fill of a span, per theme.  This is the one place annotation ink
 #: is laid across the waveform, so it is the one number that had to be
@@ -139,10 +150,15 @@ FILL_ROLES: frozenset[str] = frozenset({"volley", "resting", "silence", "run"})
 #: `bg.lane` and leaves every other lane `bg.plot`, so both are audited.
 #:
 #:     ground                    a=0.00  a=0.05  a=0.10  a=0.14   floor
-#:     dark  other   (bg.plot)     3.09    2.91    2.69    2.51     3.0
-#:     dark  focused (bg.lane)     2.81    2.63    2.41    2.25     3.0
-#:     light other   (#FFFFFF)     4.62    4.18    3.81    3.48     4.5
-#:     light focused (bg.lane)     3.90    3.55    3.21    2.97     4.5
+#:     dark  other   (bg.plot)     3.09    2.96    2.82    2.70     3.0
+#:     dark  focused (bg.lane)     2.81    2.67    2.53    2.41     3.0
+#:     light other   (#FFFFFF)     4.62    4.21    3.85    3.54     4.5
+#:     light focused (bg.lane)     3.90    3.57    3.24    3.02     4.5
+#:
+#: Re-measured when the three treatment hues collapsed into one `trial` hue:
+#: the fill set went from four roles to two, so the worst composite is a
+#: different one and it is cheaper.  The old table read 2.69 / 2.41 / 3.81 /
+#: 3.21 at the committed alphas, against 2.82 / 2.53 / 4.21 / 3.57 now.
 #:
 #: Read the `a=0.00` column first.  With no annotation on screen at all the
 #: focused lane is already under its floor, in both themes: `theme.dim_color`
@@ -154,8 +170,8 @@ FILL_ROLES: frozenset[str] = frozenset({"volley", "resting", "silence", "run"})
 #:
 #: What 0.10/0.05 does claim, and what
 #: `test_a_span_fill_costs_at_most_half_a_ratio_point_on_either_ground`
-#: asserts, is that the fill is cheap: it costs the worst painted trace 0.41
-#: of a contrast ratio in dark and 0.44 in daylight, on either ground.  It
+#: asserts, is that the fill is cheap: it costs the worst painted trace 0.28
+#: of a contrast ratio in dark and 0.41 in daylight, on either ground.  It
 #: can afford to be that weak because a span's extent is carried by its two
 #: edge lines, drawn at `MARK_ALPHA` whatever the fill does.
 SPAN_FILL_ALPHA: dict[str, float] = {
@@ -171,6 +187,44 @@ SPAN_FILL_ALPHA: dict[str, float] = {
 LOW_FILL_LAYERS = frozenset({LAYER_RUNS})
 LOW_FILL_SCALE = 0.5
 
+#: A fixed pool of `pg.TextItem`, per overlay, for the treatment letters.
+#:
+#: Treatment is the THIRD-TIER refinement -- kind first (a trial happened
+#: here), pulses second, which treatment only third -- so it is carried by a
+#: letter at a span's start edge and never by hue.  The pool exists because
+#: `pg.TextItem` is ruinous to build and to detach: measured on this machine,
+#: **265 us per construction and 47 us per `removeItem`**, and superlinearly
+#: worse as the scene fills.  Twelve labels built and dropped per pan would
+#: cost more than the entire rest of the redraw, so nothing is ever
+#: constructed or removed on the draw path: the pool is built once and driven
+#: with `setText` / `setPos`, and a slot nobody needs is parked with
+#: `setVisible(False)`.
+#:
+#: 24 is 1.5x the measured worst case.  Sweeping every view width from 0.5 s
+#: to the whole session across both fixtures, at a 3840 px lane and
+#: `MIN_LABEL_PX`, the most trial spans ever wide enough to label at once is
+#: **16 (exp2, a 100 s view at 331 s) and 12 (exp3, a 100 s view at its
+#: start)**.  Wider views hold more trials but each one narrower than the
+#: glyph; narrower views hold fewer.
+LABEL_POOL = 24
+
+#: A span narrower than this many device pixels is left unlabelled: the chip
+#: hangs from the span's start edge, so on a bar narrower than itself it would
+#: reach over the gap and into the NEXT span, saying that one was a volley
+#: when it was a silence.
+#:
+#: The chip measures 9.8 x 20 px with `theme.font_mono(SIZE_SMALL_PT,
+#: bold=True)` at a 1 px document margin, measured offscreen on this machine.
+#: 14 leaves four pixels of bar visible past the glyph, which is what keeps
+#: the two edges legible as edges rather than as the sides of the chip.
+MIN_LABEL_PX = 14
+
+#: Above `LABEL_POOL` labelable spans the pool labels NOTHING.  Filling 24
+#: slots out of 30 candidates would leave six spans bare with nothing to say
+#: which six, and a reader who saw `V V V` would read the unlabelled ones as
+#: the same treatment.  No labels at all is a state the reader can see; an
+#: arbitrary subset is one they cannot.
+#:
 #: Above this many drawn points the diamond caps on predicted marks are
 #: dropped: at that density they merge into a bar and say nothing the dashed
 #: line does not already say.
@@ -239,12 +293,27 @@ NAV_MARK_Z = NAV_REGION_Z + 10
 #:   the whole luminance range, so no alpha over it can be measured safe.
 #:   The edges are above the image already and carry the extent there, which
 #:   is the same thing they do outdoors on the trace.
+#: `labels` is the treatment letter.  Off on the navigator for the same reason
+#: `caps` is: that strip always shows the whole session, so at 3621 s across
+#: 3840 px a 1 s trial is one pixel wide and no span could ever clear
+#: `MIN_LABEL_PX` there -- the pool would be 24 items per navigator row that
+#: are built, never used, and repainted with the rest of the scene.
 SURFACE_STYLE: dict[str, dict] = {
-    SURFACE_TRACE: {"fill": 1.0, "caps": True, "mark_z": MARK_Z},
-    SURFACE_SPECTROGRAM: {"fill": 0.0, "caps": True, "mark_z": MARK_Z},
+    SURFACE_TRACE: {"fill": 1.0, "caps": True, "labels": True, "mark_z": MARK_Z},
+    SURFACE_SPECTROGRAM: {
+        "fill": 0.0,
+        "caps": True,
+        "labels": True,
+        "mark_z": MARK_Z,
+    },
     # a navigator row is about 60 px and a hollow diamond in it is a smudge
     # rather than a symbol
-    SURFACE_NAVIGATOR: {"fill": 1.0, "caps": False, "mark_z": NAV_MARK_Z},
+    SURFACE_NAVIGATOR: {
+        "fill": 1.0,
+        "caps": False,
+        "labels": False,
+        "mark_z": NAV_MARK_Z,
+    },
 }
 
 #: Fallback width in device pixels when a view box has not been laid out yet.
@@ -534,6 +603,39 @@ class AnnotationLayer(QObject):
             cache[key] = hit
         return hit
 
+    def label_window(self, layer_id: str, t0: float, t1: float, pixels: int):
+        """Start times of the spans in this view wide enough to hold a letter.
+
+        Cached beside the span arrays and for the same reason: every plot in
+        the stack shows the same time range, so a sixteen channel file would
+        otherwise run this comparison 32 times over identical inputs.  Measured
+        at the whole-session view of exp3, where the merge leaves ~1200 bars a
+        layer and no bar is wide enough to label, doing it per overlay cost
+        20 us of a 390 us redraw; doing it once costs that to the first plot
+        and a dict hit to the other 31.
+
+        Taken over the MERGED bars, not the raw spans, because the merged bar
+        is what is drawn -- and a bar that stands for several spans still gets
+        the right letter, since every span in a trial layer is one treatment.
+        """
+        if self.bundle is None:
+            return _EMPTY
+        cache = self._window_cache(t0, t1, pixels)
+        key = ("label", layer_id)
+        hit = cache.get(key)
+        if hit is None:
+            fill_x, _edge_x, bars, _total = self.span_window(layer_id, t0, t1, pixels)
+            if bars == 0 or t1 <= t0 or pixels <= 0:
+                hit = _EMPTY
+            else:
+                # compared in SECONDS rather than scaling every bar into
+                # pixels: one subtraction over the array instead of two
+                min_dt = MIN_LABEL_PX * (t1 - t0) / pixels
+                starts = fill_x[0::2]
+                hit = starts[(fill_x[1::2] - starts) >= min_dt]
+            cache[key] = hit
+        return hit
+
     # --- appearance -------------------------------------------------------
 
     def role(self, layer: Layer, series: int = 0) -> str:
@@ -743,9 +845,16 @@ class EventOverlay:
         #: fill; see `SURFACE_STYLE`.  No fill item is built at all then.
         self.fill_scale = float(style["fill"])
         self.wants_caps = bool(style["caps"])
+        #: whether this surface draws the third-tier treatment letters
+        self.wants_labels = bool(style["labels"])
         #: z of this surface's point lines and span edges
         self.mark_z = float(style["mark_z"])
         self.cap_z = self.mark_z + 1.0
+        #: The letters ride above every other annotation.  They are the only
+        #: mark that has to be READ rather than seen, and a point line drawn
+        #: through the glyph costs the reading; still under the crosshair and
+        #: the playback marker at 100.
+        self.label_z = self.cap_z + 1.0
         #: point marks, keyed ``(layer id, series index)``
         self.marks: dict[tuple[str, int], pg.PlotCurveItem] = {}
         #: hollow diamond caps on the predicted series, same keys
@@ -753,6 +862,16 @@ class EventOverlay:
         #: span interiors and span edges, keyed by layer id
         self.fills: dict[str, pg.PlotCurveItem] = {}
         self.edges: dict[str, pg.PlotCurveItem] = {}
+        #: the fixed `LABEL_POOL` of treatment letters, built once
+        self.labels: list[pg.TextItem] = []
+        #: what each pool slot currently says, so `setText` -- which relays a
+        #: whole QTextDocument -- is called only when the letter changes.  A
+        #: slot keeps its layer from pan to pan, so it usually does not.
+        self._label_text: list[str] = []
+        #: how many pool slots are visible right now; the rest are parked
+        self._labels_live = 0
+        #: ``(layer id, letter)`` for every span layer that carries one
+        self._letter_keys: tuple = ()
         self._keys: tuple = ()
         #: what was last drawn: view range, pixel budget, layer revision
         self._drawn: Optional[tuple] = None
@@ -792,11 +911,29 @@ class EventOverlay:
     def rebuild(self) -> None:
         """Match the item set to the loaded bundle."""
         keys = self._wanted()
+        bundle = self.layer.bundle
+        # Re-read on every rebuild, including the early-out one.  The draw
+        # keys are layer IDs, so two bundles can match on them; the letters
+        # are the treatments, and nothing guarantees a second bundle spells
+        # them the same way.
+        letters = (
+            ()
+            if bundle is None
+            else tuple(
+                (layer.id, layer.letter)
+                for layer in bundle
+                if isinstance(layer, SpanLayer) and layer.letter
+            )
+        )
+        self._letter_keys = letters
+        self._ensure_labels()
         if keys == self._keys:
             self.polish()
             return
+        # `clear` parks the pool and drops the letters with everything else,
+        # so they are put back after it rather than before
         self.clear()
-        bundle = self.layer.bundle
+        self._letter_keys = letters
         for kind, layer_id, series in keys:
             layer = bundle[layer_id]
             if kind == "point":
@@ -844,6 +981,34 @@ class EventOverlay:
         self._blank = set()
         self.polish()
 
+    def _ensure_labels(self) -> None:
+        """Build the treatment-letter pool, once per overlay and never again.
+
+        Deliberately outside `rebuild`'s clear-and-recreate cycle.  A pool
+        slot carries no identity -- it is a rectangle that is told what to say
+        each pan -- so loading a second bundle has nothing to rebuild, and
+        rebuilding one anyway would pay 24 x 265 us on every load, on every
+        one of a sixteen channel file's 32 lanes.
+        """
+        if self.labels or not self.wants_labels or not self._letter_keys:
+            return
+        font = theme.font_mono(theme.SIZE_SMALL_PT, bold=True)
+        for _ in range(LABEL_POOL):
+            item = pg.TextItem(text="", anchor=(0.0, 0.0))
+            item.setFont(font)
+            # QGraphicsTextItem defaults to a 4 px document margin on every
+            # side, which is 8 px of chip around a 7 px glyph -- wide enough
+            # that a 1 s trial would need a 22 px bar to be labelled.  1 px
+            # keeps the knockout readable and the width test honest.
+            item.textItem.document().setDocumentMargin(1)
+            item.setZValue(self.label_z)
+            _passive(item)
+            _passive(item.textItem)
+            item.setVisible(False)
+            self.plot.addItem(item, ignoreBounds=True)
+            self.labels.append(item)
+        self._label_text = [""] * LABEL_POOL
+
     def polish(self) -> None:
         """Re-resolve every pen and brush from the active theme and trust state.
 
@@ -878,6 +1043,20 @@ class EventOverlay:
             fill = self.fills.get(layer_id)
             if fill is not None:
                 fill.setBrush(self.layer.fill_brush(layer, self.surface))
+        if self.labels and self._letter_keys:
+            # One colour for the whole pool, because every lettered layer is a
+            # trial and every trial is one hue -- that is the ruling the
+            # letters exist to serve.  So a slot can be handed from a `V` to
+            # an `S` between pans without touching a brush.
+            chip, glyph = theme.annotation_letter(bundle[self._letter_keys[0][0]].role)
+            brush = theme.brush(chip)
+            color = theme.qcolor(glyph)
+            for item in self.labels:
+                # `fill` is a plain attribute pyqtgraph reads in paint(), so
+                # it takes an explicit update() where setColor() schedules one
+                item.fill = brush
+                item.setColor(color)
+                item.update()
 
     def clear(self) -> None:
         for item in (
@@ -891,6 +1070,14 @@ class EventOverlay:
         self.caps = {}
         self.fills = {}
         self.edges = {}
+        # The label pool is PARKED, not removed.  Its slots belong to the
+        # overlay and not to the bundle, so unloading one and loading another
+        # has nothing to rebuild -- and `removeItem` is 47 us an item, the
+        # very cost the pool exists to avoid paying.
+        for item in self.labels:
+            item.setVisible(False)
+        self._labels_live = 0
+        self._letter_keys = ()
         self._keys = ()
         self._drawn = None
         self._blank = set()
@@ -966,6 +1153,7 @@ class EventOverlay:
                 self._draw_points(key, series, live, t0, t1, y0, y1, pixels)
             else:
                 self._draw_spans(key, live, t0, t1, y0, y1, pixels)
+        self._draw_labels(on, t0, t1, y1, pixels)
 
     def _draw_points(self, key, series, live, t0, t1, y0, y1, pixels) -> None:
         layer_id = key[1]
@@ -994,6 +1182,62 @@ class EventOverlay:
                 cap.setData(xpairs[::2], np.full(drawn, self.cap_y(y0, y1)))
             else:
                 cap.setData([], [])
+
+    def _label_plan(self, t0, t1, pixels) -> list:
+        """``[(letter, starts)]`` for the spans wide enough to be labelled.
+
+        Empty when more spans qualify than the pool can seat: labelling 24 of
+        30 would leave six bare with nothing on screen to say which six, and a
+        reader who saw `V V V` over three of four adjacent bars would read the
+        fourth as a `V` too.  Nothing is a state they can see.
+
+        The width test itself lives in `AnnotationLayer.label_window`, shared
+        with every other plot showing the same range, so all this does per
+        overlay is a dict hit per lettered layer.
+        """
+        plan = []
+        seated = 0
+        for layer_id, letter in self._letter_keys:
+            if not self.layer.is_enabled(layer_id):
+                continue
+            starts = self.layer.label_window(layer_id, t0, t1, pixels)
+            if starts.size == 0:
+                continue
+            seated += int(starts.size)
+            if seated > LABEL_POOL:
+                return []
+            plan.append((letter, starts))
+        return plan
+
+    def _draw_labels(self, on, t0, t1, y1, pixels) -> None:
+        """Seat the treatment letters for this view, and park the rest.
+
+        Nothing here constructs a `pg.TextItem` and nothing removes one: the
+        pool was built by `_ensure_labels` and every slot is driven by
+        `setPos`, `setVisible` and -- only when the letter in that slot
+        actually changes -- `setText`.  Slots are handed out in bundle order,
+        so on a pan the same slot usually keeps the same letter and `setText`
+        is not called at all.
+        """
+        if not self.labels:
+            return
+        plan = self._label_plan(t0, t1, pixels) if on and self._letter_keys else []
+        used = 0
+        for letter, starts in plan:
+            for start in starts:
+                item = self.labels[used]
+                if self._label_text[used] != letter:
+                    item.setText(letter)
+                    self._label_text[used] = letter
+                # the top of the view, at the span's own start edge: the chip
+                # hangs down INTO the span it belongs to, never over the gap
+                # before it
+                item.setPos(float(start), y1)
+                item.setVisible(True)
+                used += 1
+        for i in range(used, self._labels_live):
+            self.labels[i].setVisible(False)
+        self._labels_live = used
 
     def _draw_spans(self, key, live, t0, t1, y0, y1, pixels) -> None:
         layer_id = key[1]

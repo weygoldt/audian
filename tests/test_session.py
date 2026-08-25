@@ -1261,15 +1261,96 @@ def test_the_layer_ids_and_tracks_are_the_ten_the_overlay_expects(tmp_path):
 
 
 def test_localization_and_baseline_pulses_share_one_layer(tmp_path):
-    """The user's ruling: one hue for the resting rate, both pulse types."""
+    """The user's ruling: one layer for the resting rate, both pulse types."""
     rows = [pulse(1.0, "localization"), pulse(2.0, "baseline")]
     bundle = simple(tmp_path, pulses=rows)
     layer = bundle["pulses.resting"]
     assert len(layer) == 2
-    assert layer.role == "resting" == bundle["trials.baseline"].role
     # and the distinction is still in the data, and still in the readout
     assert layer.series[0].frame["pulse_type"].to_list() == ["localization", "baseline"]
     assert "baseline" in layer.describe(0, 1)
+
+
+def test_colour_carries_the_kind_and_never_the_treatment(tmp_path):
+    """The encoding ruling, stated where the roles are assigned.
+
+    The reading order is the user's: any trial's onset and offset first, every
+    played pulse second, which treatment it was only third.  So all three
+    treatments share one role and both pulse types share another -- three hues
+    in the default view instead of seven -- and treatment moves to the letter.
+    """
+    bundle = simple(
+        tmp_path,
+        pulses=[pulse(1.0), pulse(3.0, "volley")],
+        trials=[
+            trial(1, "volley", 2.9, 3.1, 1),
+            trial(2, "baseline", 4.0, 4.5, 0),
+            trial(3, "silence", 5.0, 5.6, 0),
+        ],
+    )
+    trials = ["trials.volley", "trials.baseline", "trials.silence"]
+    assert {bundle[i].role for i in trials} == {"trial"}
+    assert {bundle[i].role for i in ("pulses.resting", "pulses.volley")} == {"pulse"}
+    # three, and the third is the ink of an unexplained detection
+    assert bundle["detections.unexplained"].role == "detection.novel"
+    assert len({bundle[i].role for i in [*trials, "pulses.volley"]}) == 2
+
+
+def test_every_treatment_and_type_keeps_its_own_layer_and_switch(tmp_path):
+    """Sharing a hue is not sharing a layer.
+
+    Stage 3 of the field workflow is "solo one treatment", so collapsing the
+    palette must not collapse the layer set: filtering is a toggle concern
+    where colour is an encoding one.  This is the test that fails if a future
+    tidy-up merges the three trial layers because they look the same.
+    """
+    bundle = simple(
+        tmp_path,
+        pulses=[pulse(1.0), pulse(3.0, "volley")],
+        trials=[
+            trial(1, "volley", 2.9, 3.1, 1),
+            trial(2, "baseline", 4.0, 4.5, 0),
+            trial(3, "silence", 5.0, 5.6, 0),
+        ],
+    )
+    ids = {layer.id for layer in bundle}
+    assert {
+        "trials.volley",
+        "trials.baseline",
+        "trials.silence",
+        "pulses.resting",
+        "pulses.volley",
+    } <= ids
+    assert len(bundle["trials.silence"]) == 1
+    assert len(bundle["trials.volley"]) == 1
+
+
+def test_each_trial_layer_carries_the_letter_that_names_its_treatment(tmp_path):
+    """Treatment is third tier and is carried by a letter, not by a hue.
+
+    Per LAYER, because a trial layer is one treatment by construction -- which
+    is what keeps the drawing path free of per-row Python and lets a merged
+    bar standing for several trials still carry the right letter.
+    """
+    bundle = simple(
+        tmp_path,
+        trials=[
+            trial(1, "volley", 2.9, 3.1, 1),
+            trial(2, "baseline", 4.0, 4.5, 0),
+            trial(3, "silence", 5.0, 5.6, 0),
+        ],
+    )
+    letters = {
+        layer.id: layer.letter for layer in bundle if layer.id.startswith("trials.")
+    }
+    assert letters == {
+        "trials.volley": "V",
+        "trials.baseline": "B",
+        "trials.silence": "S",
+    }
+    # and nothing else claims one: a letter refines a hue that carries a kind,
+    # and the localization runs are a kind of their own
+    assert bundle["localization"].letter == ""
 
 
 def test_an_explained_detection_takes_the_hue_of_the_pulse_that_explains_it(tmp_path):
@@ -1291,13 +1372,19 @@ def test_an_explained_detection_takes_the_hue_of_the_pulse_that_explains_it(tmp_
         },
     ]
     layer = simple(tmp_path, pulses=rows, detections=detections)["detections.explained"]
-    roles = {s.role: s.times.tolist() for s in layer.series}
-    assert roles == {"volley": [3.0], "resting": [1.0]}
+    # ONE hue for both, because an explained detection IS the played pulse
+    # heard back -- volley or resting, it is the same claim as the pulse train
+    # beside it and not a third category.
+    assert {s.role for s in layer.series} == {"pulse"}
+    assert sorted(t for s in layer.series for t in s.times.tolist()) == [1.0, 3.0]
+    # the join to the parent pulse still happened, and is still what tells a
+    # detection with no pulse behind it from one with
+    assert len(layer.series) == 2
     assert layer.unjoined == 0
     # The layer's own role is now the CHIP's colour, and it has to be one of
     # the hues the layer draws.  It was `detection.novel`, which this layer
     # never draws once every series has a parent -- see the test below.
-    assert layer.role == "volley"
+    assert layer.role == "pulse"
 
 
 def test_the_explained_chip_takes_a_colour_that_layer_actually_draws(tmp_path):
@@ -1428,16 +1515,37 @@ def exp2() -> SessionBundle:
 
 
 @needs_data
-def test_exp2_loads_ten_layers_and_says_nothing_is_wrong(exp2):
+def test_exp2_loads_ten_layers_and_reports_exactly_what_the_file_says(exp2):
+    """The warnings must be the file's, neither invented nor swallowed.
+
+    This asserted `warnings == ()` until the bundle was refit twice in one
+    afternoon and picked up a `fit_warnings` entry both times.  Pinning the
+    file's current content makes the suite fail whenever the writer improves,
+    which trains everyone to edit the number rather than read it.  What must
+    hold is the relationship: every warning on the bundle traces to something
+    the TOML actually says, and nothing the TOML says is dropped.
+    """
     assert len(exp2.layers) == 10
-    assert exp2.warnings == ()
     assert exp2.missing == frozenset()
     assert exp2.dropped == dict.fromkeys(session.CSV_KINDS, 0)
+    declared = tuple(exp2.meta.alignment.fit_warnings) + tuple(
+        exp2.meta.alignment.validation_warnings
+    )
+    for text in declared:
+        assert any(text in w for w in exp2.warnings), (
+            f"the TOML declares {text!r} and the bundle never surfaced it"
+        )
 
 
 @needs_data
 def test_exp2_is_validated_and_names_the_recording_that_is_open(exp2):
-    assert exp2.trust == TRUST_OK
+    # trust follows the file, not a snapshot of it: `validated = true` with a
+    # fit warning is TRUST_WARN, and exp2 has been refit into and out of that
+    # state twice.  What is pinned is the rule.
+    alignment = exp2.meta.alignment
+    assert alignment.validated is True
+    expected = TRUST_OK if not alignment.warnings else TRUST_WARN
+    assert exp2.trust == expected
     check = exp2.recording_check
     assert (check.name, check.rate, check.frames, check.channel) == (True,) * 4
     assert check.sha256 is None, "tier 3 must never run on load"
@@ -1630,8 +1738,10 @@ def test_every_explained_detection_is_bit_identical_to_its_parent_pulse(exp2):
     assert matched_t.size == explained.size == 2179
     assert np.abs(matched_t - explained).max() == 0.0
     assert exp2["detections.explained"].unjoined == 0
-    roles = {s.role: len(s) for s in exp2["detections.explained"].series}
-    assert roles == {"volley": 1278, "resting": 901}
+    # 1278 with a volley pulse behind them and 901 with a resting one, drawn
+    # in one hue because both are the played pulse heard back
+    assert sorted(len(s) for s in exp2["detections.explained"].series) == [901, 1278]
+    assert {s.role for s in exp2["detections.explained"].series} == {"pulse"}
 
 
 # --- exp3: the split recording ----------------------------------------------
@@ -1708,13 +1818,23 @@ def test_exp3_measures_its_residual_once_per_file(exp3):
             ]
         )
     )
-    # The reason a per-region figure is worth having at all: the last file
-    # confirms 259 of its 874 pulses while the session-wide match_fraction is
-    # 0.881, so what the badge promises is not what that quarter delivers.
-    last = stats.regions[-1]
-    assert last.match_fraction < 0.5
-    assert last.match_fraction < exp3.meta.alignment.match_fraction
-    assert stats.at(3000.0) is last
+    # The reason a per-region figure is worth having at all is that a
+    # session-wide match_fraction is not a promise about the region on
+    # screen -- in either direction.  When this was written the last file
+    # confirmed 259 of its 874 pulses against a session figure of 0.881; a
+    # refit the same afternoon took that region to 0.82.  Pinning either
+    # number would make the suite fail whenever the alignment changes, which
+    # is exactly the thing this statistic exists to observe rather than to
+    # legislate.  What is pinned is that the regions are measured separately
+    # and can therefore disagree with the whole.
+    fractions = [r.match_fraction for r in stats.regions]
+    assert all(0.0 <= f <= 1.0 for f in fractions)
+    assert len(set(round(f, 6) for f in fractions)) > 1, (
+        "four regions reporting one identical fraction means they are not "
+        "being measured apart"
+    )
+    # and the lookup a readout would use lands in the right region
+    assert stats.at(3000.0) is stats.regions[-1]
 
 
 @needs_exp3
@@ -1823,11 +1943,18 @@ def test_every_volley_trial_brackets_a_dense_burst(exp2):
 def test_a_silence_trial_holds_no_pulse_the_stimulator_can_be_blamed_for(exp2):
     """The control really is silent, to within the fit's own tolerance.
 
-    One of the 2179 explained detections lands inside a silence span: the
-    pulse just after trial 3 closes has its detection at 146.107479 s, which
-    falls 70 µs inside the bracket.  That is the fit residual crossing a
-    bracket edge, not the stimulator firing during the control, so the
-    assertion is bounded by ``match_tolerance_s`` rather than being zero.
+    A handful of the 2179 explained detections land inside a silence span --
+    two on the fit as it stands, 63 µs and 10 µs inside their brackets -- and
+    every one of them is a pulse just outside the bracket whose detection the
+    fit residual carried across the edge.  So the claim is not "zero", it is
+    "within ``match_tolerance_s`` of an edge", and that is what is asserted:
+    an exact count would be an anchor on the FIT rather than on the session,
+    and it moves whenever the bundle is refitted.
+
+    The count is still bounded, because the bound is what carries the meaning.
+    A stimulator that really fired during the control would not leave two
+    detections at the rim: the volley trials next door run 90-320 detections
+    per second, so a control that had fired at all would hold dozens.
     """
     tolerance = exp2.meta.alignment.match_tolerance_s
     silence = exp2["trials.silence"]
@@ -1841,8 +1968,9 @@ def test_a_silence_trial_holds_no_pulse_the_stimulator_can_be_blamed_for(exp2):
         i1 = int(np.searchsorted(explained, t1, side="right"))
         for t in explained[i0:i1]:
             intruders.append(min(t - t0, t1 - t))
-    assert len(intruders) == 1
+    assert intruders, "no explained detection at all is a broken join, not silence"
     assert max(intruders) <= tolerance
+    assert len(intruders) <= 5, intruders
 
     # and the animal is unbothered by the control: 7 unexplained in there
     novel = exp2["detections.unexplained"].series[0].times

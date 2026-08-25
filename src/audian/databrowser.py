@@ -68,7 +68,15 @@ from .eventoverlay import (
     swatch_icon,
 )
 from .controlpanel import ControlPanel
-from .layers import KIND_POINT, KIND_SPAN, TRACK_PULSES, TRACK_TRIALS
+from .alignment import SplitCoverage
+from .layers import (
+    KIND_POINT,
+    KIND_SPAN,
+    LAYER_DET_EXPLAINED,
+    LAYER_DET_UNEXPLAINED,
+    TRACK_PULSES,
+    TRACK_TRIALS,
+)
 from .analyzer import PlainAnalyzer, style_result_table
 from .statisticsanalyzer import StatisticsAnalyzer
 
@@ -913,6 +921,11 @@ class DataBrowser(QWidget):
         self.annotation_group = None
         self.annotation_sourcew = None
         self.annotation_badgew = None
+        #: `SplitCoverage` of the loaded bundle against the files the loader
+        #: actually opened, or None while nothing is loaded.  It is what the
+        #: badge says when only part of a split recording is open
+        #: (`check_recording_coverage`).
+        self.annotation_coverage = None
         #: one container per row of ANNOTATION_CHIP_ROWS, each an HBox the
         #: chips are inserted into ahead of a trailing stretch
         self.annotation_rowboxes = []
@@ -2866,6 +2879,65 @@ class DataBrowser(QWidget):
             channels=int(getattr(loader, "channels", 0) or 0),
         )
 
+    def open_file_names(self) -> list[str]:
+        """The file names the loader actually opened, in the order it has them.
+
+        Off the LOADER, not off `Data.file_path`: the latter is what this
+        browser was asked to open, and a file that was asked for and not
+        opened is precisely the case a provenance check must not read past
+        (`audian.data.open_files` drops one and raises about it).
+
+        An empty list means the loader could not say -- and unknown is not
+        wrong: `check_recording_coverage` makes no claim from it.
+        """
+        loader = getattr(self.data, "data", None)
+        return [Path(p).name for p in getattr(loader, "file_paths", ()) or ()]
+
+    def check_recording_coverage(self, bundle) -> Optional[SplitCoverage]:
+        """Refuse to draw a bundle when only part of its recording is open.
+
+        The failure this exists for passed every other guard.  Opening exp3's
+        DR0000_0090.wav alone -- file 3 of the 4 the bundle names -- gave
+        ``RecordingCheck(name=True, rate=True, frames=True, channel=True,
+        problems=())``, a badge reading WARNINGS about something else, and a
+        lane full of marks at 100-105 s over audio whose real content is
+        recording seconds 1863.936-1868.936.  Measured on that file: 260 mark
+        segments drawn on the trace lane and 4982 on the navigator, every one
+        of them 1863.936 s from where it belongs and every one of them looking
+        exactly like a mark in the right place.  With this check: 0 and 0.
+
+        The name check cannot catch it: the open file IS one of the four.  The
+        frame check cannot catch it: it accepts either the whole recording's
+        frame count or one file's own, deliberately, so a caller may hand it a
+        single WAV header or the loader over all four.  What was missing is
+        the one fact this browser has always had and never asked -- how many
+        of the declared files it opened.  Matched by NAME, never by frame
+        count, for the same reason as every other provenance check here.
+
+        The refusal is `AnnotationLayer.recording_mismatch`, because that is
+        the viewer's one gate on drawing at all, and this is the same class of
+        wrong: every position on screen would come from a fit against
+        something other than what is open.  The badge then says which files
+        are open, which are missing and what to do about it
+        (`update_annotation_badge`).  Nothing is re-based to fit -- see
+        `SplitCoverage`.
+        """
+        self.annotation_coverage = None
+        names = self.open_file_names()
+        if bundle is None or not names:
+            return None
+        coverage = bundle.meta.alignment.coverage(names)
+        if not coverage.partial:
+            return None
+        self.annotation_coverage = coverage
+        self.annotations.recording_mismatch = coverage.subject()
+        # The bundle was loaded before this could run, so a redraw and a badge
+        # have already gone out against the state that let it draw.  One more
+        # pass puts every lane and the badge on the refusal.
+        self.annotations.invalidate()
+        self.rebuild_annotations()
+        return coverage
+
     def bundle_problems(self, bundle) -> list[str]:
         """Everything the bundle has to say, with its own frame check redone.
 
@@ -2941,10 +3013,14 @@ class DataBrowser(QWidget):
                 "warning",
                 f"{lost} annotation rows have no recording_time_s and were dropped",
             )
-        # An unvalidated fit or the wrong recording is not a detail for a
-        # tool tip: it invalidates every position on screen, so it goes
-        # through the same channel as an error would.
-        if self.annotations.recording_mismatch:
+        # An unvalidated fit, the wrong recording, or only part of the
+        # recording is not a detail for a tool tip: each invalidates every
+        # position on screen, so it goes through the same channel as an error
+        # would.
+        coverage = self.check_recording_coverage(bundle)
+        if coverage is not None:
+            self.notify("error", f"{Path(path).name}: {coverage.summary()}")
+        elif self.annotations.recording_mismatch:
             self.notify(
                 "error",
                 f"{Path(path).name} was fitted against "
@@ -2982,6 +3058,7 @@ class DataBrowser(QWidget):
         if not self.annotations.loaded:
             return
         self.annotations.clear()
+        self.annotation_coverage = None
         # the joins stay -- they are the loader's -- but a gap the bundle
         # declared goes with the bundle
         self.update_join_markers()
@@ -3292,6 +3369,14 @@ class DataBrowser(QWidget):
         nearest instant says what it is next to.  The spans that already
         answered are left out of the second question so the same layer
         cannot be reported twice, once rightly and once as far away.
+
+        Every covering span carries its OWN counts, right after its own
+        description (`marks_in`).  Spans nest -- a trial runs inside a
+        localization run -- and one count list at the end of the line would
+        have no stated subject: 312 detections inside a 1 s trial and inside
+        the 58 s run around it are different measurements, and a reader who
+        cannot tell which one is shown has been handed the wrong one half the
+        time.
         """
         bundle = self.annotations.bundle
         if bundle is None or not self.annotations.drawable:
@@ -3302,8 +3387,19 @@ class DataBrowser(QWidget):
         parts = []
         covering = bundle.spans_at(time, ids)
         for layer, index in covering:
-            inside = time - float(layer.starts[index])
-            parts.append(f"{layer.describe(index)}  (inside, {inside:.3f} s in)")
+            # Identity, then contents, then bounds -- in that order, because
+            # the field is 627 px (about 78 characters) at a 1920 px window
+            # and the line runs past it.  Whatever is last is what elision
+            # eats, and the bounds are the part the reader needs least: the
+            # span is drawn on screen with both its edges, so its extent is
+            # already visible, while the counts are the reason the readout was
+            # asked for.  Ordered the other way round -- bounds, then
+            # contents -- the counts were cut off mid-number at every window
+            # width this application is given.
+            parts.append(
+                f"{layer.name_of(index)}  {self.marks_in(layer, index)}"
+                f"  {layer.bounds_of(index)}  inside"
+            )
         rest = [i for i in ids if i not in {x.id for x, _i in covering}]
         found = bundle.nearest(time, rest) if rest else None
         if found is not None:
@@ -3313,6 +3409,112 @@ class DataBrowser(QWidget):
                 f"{describe_mark(layer, series, index)}  (Δ {gap_text(delta)})"
             )
         return "   ·   ".join(parts)
+
+    def marks_in(self, layer, index: int) -> str:
+        """What the switched-on point layers hold inside one span.
+
+        The stage-2 question of the field workflow -- *how many unexplained
+        detections fell inside THIS trial, against a silence one* -- answered
+        where the reader is already looking rather than in a panel they have
+        to go and find.  On exp2 it reads out the asymmetry directly: the
+        baseline trials carry 8.3 unexplained detections per second against
+        1.27/s outside any trial, and 76 of them sit in one span.
+
+        The counting is `SessionBundle.pulses_in` and nothing else.  It is two
+        `searchsorted` calls per series against arrays that are already
+        sorted; walking rows in Python here would put a per-row loop on the
+        mouse-move path, where it runs on every pixel of every pan.  Measured
+        on exp3 with all ten layers switched on -- 7863 unexplained
+        detections, 4423 volley pulses, a 58 s run to stand inside -- the
+        whole of `annotation_under` costs 0.042 ms a call.
+
+        **Only the layers that are switched on are counted**, because the
+        readout is a statement about what is on screen.  A count for a hidden
+        layer is a number about something the reader cannot see, cannot step
+        through and cannot check against the waveform -- and the layer
+        toggles are how the reader narrows the question in the first place,
+        so a total that ignored them would answer a question nobody asked.
+        Solo a layer and this line counts that layer alone.
+
+        Observed and predicted rows are never added together, for the same
+        reason `pulses_in` keys its result by series: a bundle's predicted
+        pulses are positions nothing in the recording confirms, and a total
+        that mixed them would report a measurement that was never made.
+
+        The layers are named by their own `short` word -- the same word on
+        their chip -- and counted in the bundle's order, which is the order
+        the chips are in: Sent before Heard.  No word here is this viewer's:
+        `explained_by_log` is a fact the writer recorded, and what an
+        unexplained detection *is* stays the reader's to decide.
+        """
+        bundle = self.annotations.bundle
+        if bundle is None:
+            return ""
+        ids = self.annotation_keys()
+        totals: dict[tuple[str, bool], int] = {}
+        for key, (series, i0, i1) in bundle.pulses_in(layer, index, ids).items():
+            point = bundle.get(key.split("#")[0])
+            if point is None:
+                continue
+            observed = bool(point.series[series].observed)
+            totals[(point.id, observed)] = totals.get((point.id, observed), 0) + (
+                i1 - i0
+            )
+        # Grouped by what the count MEANS, not by which layer produced it.
+        #
+        # Listing the layers one after another put "Resting 1, Explained 1" in
+        # a single comma list, which reads as one axis and is two: a pulse is
+        # something the stimulator SENT, a detection is something the
+        # recording HEARD, and "explained" is a property only the second kind
+        # can have.  A reader who saw a resting pulse with no explained
+        # detection beside it concluded, reasonably, that the viewer was
+        # contradicting itself.  It was not -- those pulses were emitted and
+        # never heard back, which is exactly why their detected_time_s is
+        # empty -- but nothing on the line said so.
+        #
+        # `sent`, `not heard`, `heard` and `unexplained` say it.  The grouping
+        # is read off Layer.track, the same axis the chip rows are captioned
+        # by, so it is the data model's own vocabulary rather than this
+        # method's opinion.
+        sent = notheard = 0
+        for point in bundle:
+            if point.track != TRACK_PULSES:
+                continue
+            sent += totals.get((point.id, True), 0)
+            notheard += totals.get((point.id, False), 0)
+        heard = totals.get((LAYER_DET_EXPLAINED, True), 0)
+        unexplained = totals.get((LAYER_DET_UNEXPLAINED, True), 0)
+
+        parts = []
+        if sent or notheard:
+            # the parenthetical is the whole answer to "why is sent > heard"
+            gap = f" ({notheard} not heard)" if notheard else ""
+            parts.append(f"sent {sent + notheard}{gap}")
+        if heard or self.annotations.is_enabled(LAYER_DET_EXPLAINED):
+            parts.append(f"heard {heard}")
+        if unexplained or self.annotations.is_enabled(LAYER_DET_UNEXPLAINED):
+            parts.append(f"unexplained {unexplained}")
+        # anything that is neither sent nor heard -- session events, and any
+        # layer a future bundle adds -- keeps its own name rather than being
+        # forced into an axis it is not on
+        for point in bundle:
+            if point.track in (TRACK_PULSES,) or point.id in (
+                LAYER_DET_EXPLAINED,
+                LAYER_DET_UNEXPLAINED,
+            ):
+                continue
+            for observed in (True, False):
+                count = totals.get((point.id, observed))
+                if count:
+                    name = point.short if observed else f"{point.short} pred"
+                    parts.append(f"{name} {count}")
+        if parts:
+            return ", ".join(parts)
+        # Three different sentences, and a reader who cannot tell them apart
+        # cannot tell an empty trial from a switched-off layer.
+        if not any(getattr(bundle.get(i), "kind", "") == KIND_POINT for i in ids):
+            return "nothing -- no point layer is switched on"
+        return "no mark of the layers on screen"
 
     def show_annotation_under(self, time: float) -> None:
         """Name the annotation nearest the pointer in the parameter bar.
@@ -3398,20 +3600,32 @@ class DataBrowser(QWidget):
             where.addWidget(chip)
             self.annotation_surfacew[surface] = chip
 
-        # The pointer readout rides at the end of this row rather than in a
-        # row of its own: a row of the parameter bar is 24 px off every lane
-        # in the stack, and what the pointer happens to be near is an aside,
-        # not a parameter.
-        self.annotation_hoverw = QLabel("", wherebox)
+        group.add_row("Show", "F8", wherebox)
+
+        # The pointer readout gets a row of its own, spanning the group.
+        #
+        # It rode at the end of the Show row to save a row of the parameter
+        # bar, which is 24 px off every lane in the stack -- a real cost, and
+        # the right trade while the readout was one clause.  It is not one
+        # clause any more.  Since the trial summary landed the line runs to
+        # ~227 characters, and measured in the running app the leftover of the
+        # Show row is a flat 271 px from a 1280 px window all the way to 3200:
+        # 34 characters, elided before the counts begin.  The counts only
+        # became visible at a 6000 px window, which is not a window anybody
+        # has.  A readout nobody can read is worth less than the 24 px it was
+        # saving, and the counts are the whole reason the readout was asked
+        # for -- they answer "how many unexplained detections fell inside THIS
+        # trial", which is the question the second stage of the field workflow
+        # is made of.
+        self.annotation_hoverw = QLabel("", self.parambar)
         self.annotation_hoverw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         self.annotation_hoverw.setWordWrap(False)
-        # Ignored, not Preferred: the label takes the width that is left over
-        # and never asks for more, so what the pointer is near cannot change
-        # the geometry of the bar (see show_annotation_under).
+        # Ignored, not Preferred: the label takes the width the row has and
+        # never asks for more, so what the pointer is near cannot change the
+        # geometry of the bar (see show_annotation_under).
         self.annotation_hoverw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         theme.tint(self.annotation_hoverw, "fg.muted")
-        where.addWidget(self.annotation_hoverw, 1)
-        group.add_row("Show", "F8", wherebox)
+        group.add_row("Pointer", "", self.annotation_hoverw)
 
         # One chip per layer, in the two captioned rows of
         # ANNOTATION_CHIP_ROWS.  The chips are the legend as well as the
@@ -3622,6 +3836,15 @@ class DataBrowser(QWidget):
             )
         )
         text, token, tip = self.annotations.badge()
+        if self.annotation_coverage is not None:
+            # Not "WRONG RECORDING": it is the right recording, and saying so
+            # wrongly is how a reader learns to click past the badge.  What is
+            # wrong is that only part of it is open, and the count is the
+            # whole diagnosis -- 1 OF 4 is a state a reader can act on.
+            coverage = self.annotation_coverage
+            text = f"{len(coverage.opened)} OF {len(coverage.declared)} FILES"
+            token = "danger"
+            tip = coverage.message()
         # The reader's own per-region residuals ride on the badge, because
         # "how far can I trust what is on screen" is the question the badge
         # exists to answer and a global median does not answer it.

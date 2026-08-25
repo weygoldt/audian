@@ -29,7 +29,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # offscreen has no compositor; keep Qt from probing for one:
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 
-from PyQt5.QtCore import QEvent, qInstallMessageHandler  # noqa: E402
+from PyQt5.QtCore import QEvent, QSettings, qInstallMessageHandler  # noqa: E402
 from PyQt5.QtCore import QtCriticalMsg, QtFatalMsg, QtWarningMsg  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
@@ -234,6 +234,37 @@ def run_interactions(app, main_win):
     print(f"interactions: {clean}/{len(steps)} clean")
 
 
+def redirect_persistence(scratch: Path) -> None:
+    """Point every channel a smoke run writes to at `scratch`.
+
+    There are TWO, not one, and redirecting only the first is how this
+    harness came to claim more than it did:
+
+    * ``audian.audian.settings_path()`` -- the JSON file holding the theme
+      choice and the annotation layer switches.  It resolves through
+      platformdirs at import, so no environment variable isolates it and the
+      function itself has to be replaced.
+    * ``QSettings("audian", "audian")`` -- Qt's own store, at
+      ``~/.config/audian/audian.conf``, which `settings_path` never covered.
+      The spectrogram colour map is written there today, and whatever reaches
+      for QSettings tomorrow lands there too, which is why the whole store is
+      moved rather than the one key.
+
+    `QSettings.setPath` only affects objects constructed afterwards, so this
+    runs before the application is built.  Both formats are redirected: the
+    native format IS the ini format on Linux, and pinning the default as well
+    means a QSettings built with no arguments cannot escape through the other
+    one.
+    """
+    import audian.audian as A
+
+    A.settings_path = lambda: scratch / "settings.json"
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
+        for scope in (QSettings.UserScope, QSettings.SystemScope):
+            QSettings.setPath(fmt, scope, os.fspath(scratch))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -302,12 +333,10 @@ def main(argv=None):
     from audian import theme
     from audian.plugins import Plugins
 
-    # The harness clicks every annotation toggle and every theme switch there
-    # is, and both are persisted.  Pointed at a scratch file, or a smoke run
-    # would leave the user's own preferences wherever the last step happened
-    # to stop.
-    scratch = tempfile.mkdtemp(prefix="audian-smoke-")
-    A.settings_path = lambda: Path(scratch) / "settings.json"
+    # The harness clicks every annotation toggle, every theme switch and
+    # every colour map there is, and all of them are persisted.  A smoke run
+    # must leave the user's own preferences exactly where it found them.
+    redirect_persistence(Path(tempfile.mkdtemp(prefix="audian-smoke-")))
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     theme.apply(app)
