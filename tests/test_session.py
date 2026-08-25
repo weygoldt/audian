@@ -24,7 +24,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from audian import session  # noqa: E402
+from audian import session, windowing  # noqa: E402
 from audian.session import (  # noqa: E402
     TRUST_OK,
     TRUST_UNVALIDATED,
@@ -277,8 +277,11 @@ def test_the_alignment_carries_no_detector_field_that_nothing_reads(tmp_path):
     """Spec 9.6(b)'s WAV burst check is not reproducible, so its fields are gone.
 
     `detect_absolute_floor` and `detect_refractory_s` were parsed for a
-    ground-truth re-check that cannot be written honestly.  Measured on exp2 at
-    the TOML's own numbers (floor 0.018043927, refractory 0.002 s, SNR 8.0):
+    ground-truth re-check that cannot be written honestly.  Measured on the
+    exp2 bundle of 2026-08-24, at the TOML's own numbers then (floor
+    0.018043927, refractory 0.002 s, SNR 8.0; the 08-25 refit moved the floor
+    to 0.004995961 and the count to 3398, and none of the reasoning below
+    turns on either):
     8 x the file's noise floor is 0.0011, sixteen times BELOW the absolute
     floor, so the SNR threshold never binds and adds nothing; forward-scanning
     above the floor yields 5263 peaks against the TOML's own 3022 detections,
@@ -689,6 +692,306 @@ def test_a_clean_bundle_produces_no_warnings_at_all(tmp_path):
     assert simple(tmp_path).warnings == ()
 
 
+# --- a recording written as several files -----------------------------------
+
+#: The shape exp3 (PULS0005) is written in: four WAVs treated as one recording,
+#: 10 s of 48 kHz each, with the three joins the recorder lost time at.
+SPLIT_NAMES = ("part0.wav", "part1.wav", "part2.wav", "part3.wav")
+SPLIT_FILE_FRAMES = 480000
+SPLIT_DIGESTS = tuple(c * 64 for c in "0123")
+
+
+def split_alignment(**overrides) -> dict:
+    """``[alignment]`` as the writer of a split session writes it: plural keys."""
+    fit = {
+        # The writer of a split session emits no singular key at all, which is
+        # what left this bundle with no name to check.
+        "recording_file": None,
+        "recording_files": "[" + ", ".join(f'"{n}"' for n in SPLIT_NAMES) + "]",
+        "recording_sha256": "[" + ", ".join(f'"{d}"' for d in SPLIT_DIGESTS) + "]",
+        "recording_file_frames": "[" + ", ".join(["480000"] * 4) + "]",
+        "recording_join_gaps_s": "[0.032, 0.032, -0.12]",
+        "recording_frames": str(4 * SPLIT_FILE_FRAMES),
+    }
+    fit.update(overrides)
+    return fit
+
+
+class _Header:
+    """A soundfile header, without a file: what `check_recording` reads."""
+
+    def __init__(self, frames, samplerate=48000, channels=2):
+        self.frames = frames
+        self.samplerate = samplerate
+        self.channels = channels
+
+
+def test_a_recording_written_as_four_files_parses_from_the_plural_keys(tmp_path):
+    """`recording_files` and `recording_file` are the same fact, one shape.
+
+    Reading only the singular key left exp3's `recording_file` as None, and
+    the provenance guard -- the one that exists so a stray bundle cannot put
+    every mark in the wrong place -- then did not fail, it had no opinion.
+    """
+    fit = simple(tmp_path, alignment=split_alignment()).meta.alignment
+    assert fit.recording_files == SPLIT_NAMES
+    assert fit.is_split is True
+    assert fit.recording_file == "part0.wav"
+    assert fit.recording_file_frames == (SPLIT_FILE_FRAMES,) * 4
+    assert fit.recording_sha256s == SPLIT_DIGESTS
+
+
+def test_a_single_file_bundle_is_the_same_shape_with_one_entry(tmp_path):
+    fit = simple(tmp_path).meta.alignment
+    assert fit.recording_files == ("rec.wav",)
+    assert fit.is_split is False
+    assert fit.recording_file == "rec.wav"
+
+
+def test_the_provenance_check_has_an_opinion_about_a_split_recording(tmp_path):
+    """The guard that refuses a bundle belonging to a different recording.
+
+    It could not run at all while only the singular key was read: `name` came
+    back None, which `RecordingCheck.ok` counts as passing.
+    """
+    meta = simple(tmp_path, alignment=split_alignment()).meta
+    for name in SPLIT_NAMES:
+        check = meta.check_recording(tmp_path / name, info=_Header(SPLIT_FILE_FRAMES))
+        assert check.name is True, name
+        assert check.frames is True, name
+        assert check.ok is True, name
+    stray = meta.check_recording(tmp_path / "elsewhere.wav", info=_Header(480000))
+    assert stray.name is False
+    assert stray.ok is False
+    assert any("part3.wav" in problem for problem in stray.problems)
+
+
+def test_a_split_recording_checks_against_one_file_or_against_the_whole(tmp_path):
+    """The caller may hand over one WAV's header or the loader over all four.
+
+    Both are true statements about the same recording, so both pass and
+    anything else is a bundle that does not belong to what is on screen.
+    """
+    meta = simple(tmp_path, alignment=split_alignment()).meta
+    one = meta.check_recording(tmp_path / "part1.wav", info=_Header(SPLIT_FILE_FRAMES))
+    assert one.frames is True
+    whole = meta.check_recording(
+        tmp_path / "part1.wav", info=_Header(4 * SPLIT_FILE_FRAMES)
+    )
+    assert whole.frames is True
+    wrong = meta.check_recording(tmp_path / "part1.wav", info=_Header(123456))
+    assert wrong.frames is False
+    assert any("123456" in problem for problem in wrong.problems)
+
+
+def test_the_digest_of_a_split_recording_is_looked_up_by_file(tmp_path):
+    """One digest per file.  Hashing file 3 against file 0's is a false alarm,
+    and a false alarm is how a provenance check gets switched off."""
+    fit = simple(tmp_path, alignment=split_alignment()).meta.alignment
+    assert fit.sha256_for("part0.wav") == SPLIT_DIGESTS[0]
+    assert fit.sha256_for("part3.wav") == SPLIT_DIGESTS[3]
+    assert fit.sha256_for("elsewhere.wav") is None
+
+
+def test_the_join_gaps_are_carried_through_as_a_declared_fact(tmp_path):
+    """Position from the loader, gap from the bundle -- and never a correction.
+
+    exp3 declares +32 ms, +32 ms, -120 ms, and 120 ms is about thirty pulses
+    of a 4 ms volley interval.  This viewer states it and shifts nothing.
+    """
+    fit = simple(tmp_path, alignment=split_alignment()).meta.alignment
+    assert fit.recording_join_gaps_s == (0.032, 0.032, -0.12)
+    assert fit.join_times_s == (10.0, 20.0, 30.0)
+    assert fit.joins() == ((10.0, 0.032), (20.0, 0.032), (30.0, -0.12))
+
+
+def test_a_single_file_recording_declares_no_joins(tmp_path):
+    fit = simple(tmp_path).meta.alignment
+    assert fit.join_times_s == () and fit.joins() == ()
+
+
+def test_split_keys_that_disagree_with_each_other_are_reported(tmp_path):
+    """Four keys describe one recording from four directions.
+
+    When they disagree the fit was made against something other than what the
+    TOML describes, and every check below is then checking the wrong thing
+    while looking like it passed.
+    """
+    bundle = simple(
+        tmp_path,
+        alignment=split_alignment(
+            recording_sha256='["' + SPLIT_DIGESTS[0] + '"]',
+            recording_join_gaps_s="[0.032]",
+            recording_frames="999999",
+        ),
+    )
+    joined = " | ".join(bundle.warnings)
+    assert "4 recording file(s) and 1 SHA-256" in joined
+    assert "3 join(s), and 1 join gap" in joined
+    assert "sum to 1920000" in joined and "999999" in joined
+
+
+def test_discovery_offers_a_split_bundle_for_any_of_its_files(tmp_path):
+    for name in SPLIT_NAMES:
+        _wav(tmp_path / name)
+    write_bundle(tmp_path, alignment=split_alignment(), pulses=[pulse(1.0)])
+    for name in SPLIT_NAMES:
+        ref = find_bundle(tmp_path / name)
+        assert ref is not None, name
+        assert ref.recording_files == SPLIT_NAMES
+        assert ref.recording_file == "part0.wav"
+    _wav(tmp_path / "stranger.wav")
+    assert find_bundle(tmp_path / "stranger.wav") is None
+
+
+# --- the writer's own warnings ----------------------------------------------
+
+
+def test_the_writers_fit_warnings_reach_the_bundles_warning_list(tmp_path):
+    """The badge said `warn` and nothing said why.
+
+    `fit_warnings` already reached `trust`, so exp3's badge warned, while
+    `bundle.warnings` stayed empty and the status bar had nothing to show.
+    """
+    bundle = simple(
+        tmp_path,
+        alignment={"fit_warnings": '["segment 9 correlates +1339.762 s"]'},
+    )
+    assert bundle.trust == TRUST_WARN
+    assert any("segment 9 correlates" in w for w in bundle.warnings)
+
+
+def test_a_clean_fit_adds_no_warning_of_its_own(tmp_path):
+    bundle = simple(tmp_path)
+    assert bundle.trust == TRUST_OK
+    assert not any("warned about this fit" in w for w in bundle.warnings)
+
+
+# --- residuals, per region --------------------------------------------------
+
+
+def _split_pulses(times, shift=0.0):
+    """Resting pulses at `times`, heard `shift` seconds from where the fit says."""
+    return [pulse(t, detected_time_s=t + shift) for t in times]
+
+
+def test_residuals_are_measured_per_file_when_the_bundle_declares_joins(tmp_path):
+    """A join is where the recorder lost time, so it is where the fit stops
+    holding: exp3's residual steps at every one of its three."""
+    times = [6.0, 7.0, 16.0, 17.0, 26.0, 27.0, 36.0, 37.0]
+    bundle = simple(
+        tmp_path,
+        alignment=split_alignment(),
+        pulses=_split_pulses(times),
+        trials=[trial(1, "silence", 39.0, 39.5)],
+    )
+    stats = bundle.residuals
+    assert stats.split is True
+    assert [r.label for r in stats] == [f"file {i} of 4" for i in (1, 2, 3, 4)]
+    assert [(r.t0, r.t1) for r in stats] == [
+        (0.0, 10.0),
+        (10.0, 20.0),
+        (20.0, 30.0),
+        (30.0, 40.0),
+    ]
+    assert [r.total for r in stats] == [2, 2, 2, 2]
+    assert [r.matched for r in stats] == [2, 2, 2, 2]
+
+
+def test_residuals_fall_back_to_a_fixed_number_of_bins_without_joins(tmp_path):
+    bundle = simple(tmp_path, pulses=_split_pulses([1.0, 2.0, 3.0]))
+    stats = bundle.residuals
+    assert stats.split is False
+    assert len(stats) == session.RESIDUAL_BINS
+    assert stats.regions[0].label == "region 1 of 8"
+    assert stats.regions[0].t0 == 0.0
+    assert stats.regions[-1].t1 == pytest.approx(10.0)  # 480000 frames / 48 kHz
+
+
+def test_a_region_far_outside_the_match_tolerance_says_so_at_load(tmp_path):
+    """The whole reason this exists.
+
+    exp3's header reported a session-wide residual median of 0.95 us, true
+    only because its first two files hold 3203 of the 4652 matched pulses.  A
+    global median is not a promise about the region on screen, so the region
+    that is off is named at load rather than averaged away.
+    """
+    clean = [6.0, 7.0, 16.0, 17.0, 26.0, 27.0]
+    bundle = simple(
+        tmp_path,
+        alignment=split_alignment(),
+        pulses=_split_pulses(clean) + _split_pulses([36.0, 37.0], shift=0.02),
+        trials=[trial(1, "silence", 39.0, 39.5)],
+    )
+    stats = bundle.residuals
+    assert stats.regions[3].median_s == pytest.approx(0.02)
+    assert stats.regions[3].iqr_s == pytest.approx(0.0, abs=1e-9)
+    # 0.02 s is 40x the fit's own 0.5 ms match tolerance, well past the 10x
+    # gate; the other three files sit at zero and say nothing.
+    assert len(stats.warnings) == 1
+    assert "file 4 of 4" in stats.warnings[0]
+    assert "40x" in stats.warnings[0]
+    assert any("file 4 of 4" in w for w in bundle.warnings)
+
+
+def test_a_region_inside_the_match_tolerance_is_not_worth_a_warning(tmp_path):
+    """10x, not 2x: a median of one match tolerance still puts every mark on
+    the pulse it names, just early within it."""
+    bundle = simple(
+        tmp_path,
+        alignment=split_alignment(),
+        pulses=_split_pulses([6.0, 7.0, 16.0, 26.0, 36.0], shift=0.001),
+        trials=[trial(1, "silence", 39.0, 39.5)],
+    )
+    assert bundle.residuals.warnings == ()
+
+
+def test_the_residual_lookup_answers_for_the_region_on_screen(tmp_path):
+    bundle = simple(
+        tmp_path,
+        alignment=split_alignment(),
+        pulses=_split_pulses([6.0, 16.0, 26.0]) + _split_pulses([36.0], shift=0.02),
+        trials=[trial(1, "silence", 39.0, 39.5)],
+    )
+    stats = bundle.residuals
+    assert stats.at(0.0).label == "file 1 of 4"
+    assert stats.at(9.999).label == "file 1 of 4"
+    assert stats.at(10.0).label == "file 2 of 4"
+    assert stats.at(35.0).label == "file 4 of 4"
+    assert stats.at(-1.0) is None
+    assert stats.at(40.0) is None, "past the end of the recording is not a region"
+    assert stats.worst.label == "file 4 of 4"
+
+
+def test_a_region_where_nothing_matched_reports_that_instead_of_a_median(tmp_path):
+    """A NaN median is an answer.  A region can also have a lovely median over
+    the few of its pulses that matched, so the counts travel with it."""
+    bundle = simple(
+        tmp_path,
+        alignment=split_alignment(),
+        pulses=[
+            pulse(6.0),
+            pulse(
+                36.0, detected_time_s=None, residual_s=None, match_status="unmatched"
+            ),
+        ],
+        trials=[trial(1, "silence", 39.0, 39.5)],
+    )
+    last = bundle.residuals.regions[3]
+    assert (last.total, last.matched) == (1, 0)
+    assert np.isnan(last.median_s)
+    assert last.match_fraction == 0.0
+    assert "none of its 1 pulses matched" in last.summary()
+    assert bundle.residuals.warnings == ()
+
+
+def test_a_bundle_with_no_pulses_still_carries_a_residual_answer(tmp_path):
+    bundle = simple(tmp_path, pulses=None)
+    assert len(bundle.residuals) == 0
+    assert bundle.residuals.at(1.0) is None
+    assert bundle.residuals.warnings == ()
+
+
 # --- the recording check ----------------------------------------------------
 
 
@@ -935,7 +1238,7 @@ def test_the_summary_names_every_populated_layer(tmp_path):
     assert "Silence 1" in text and "Volley 1" in text
 
 
-def test_the_layer_ids_and_tracks_are_the_ten_the_ribbon_expects(tmp_path):
+def test_the_layer_ids_and_tracks_are_the_ten_the_overlay_expects(tmp_path):
     bundle = simple(tmp_path)
     assert [layer.id for layer in bundle] == [
         session.LAYER_TRIALS_VOLLEY,
@@ -950,7 +1253,11 @@ def test_the_layer_ids_and_tracks_are_the_ten_the_ribbon_expects(tmp_path):
         session.LAYER_CONTROLS,
     ]
     off = {layer.id for layer in bundle if not layer.default_on}
-    assert off == {session.LAYER_SESSION_EVENTS, session.LAYER_CONTROLS}
+    assert off == {
+        session.LAYER_RUNS,
+        session.LAYER_SESSION_EVENTS,
+        session.LAYER_CONTROLS,
+    }
 
 
 def test_localization_and_baseline_pulses_share_one_layer(tmp_path):
@@ -987,7 +1294,101 @@ def test_an_explained_detection_takes_the_hue_of_the_pulse_that_explains_it(tmp_
     roles = {s.role: s.times.tolist() for s in layer.series}
     assert roles == {"volley": [3.0], "resting": [1.0]}
     assert layer.unjoined == 0
-    assert layer.role == "detection.novel"  # the fallback for an orphan
+    # The layer's own role is now the CHIP's colour, and it has to be one of
+    # the hues the layer draws.  It was `detection.novel`, which this layer
+    # never draws once every series has a parent -- see the test below.
+    assert layer.role == "volley"
+
+
+def test_the_explained_chip_takes_a_colour_that_layer_actually_draws(tmp_path):
+    """The chips are the only legend, so two layers must not share one.
+
+    `detections.explained` carried `role="detection.novel"` -- the ink whose
+    meaning is "the log does not account for this" -- while every series it
+    holds draws in its parent pulse's hue.  The chip was therefore painted in
+    a colour no mark of the layer uses, and pixel-identical to the Unexplained
+    chip beside it.
+    """
+    bundle = simple(tmp_path)
+    explained = bundle["detections.explained"]
+    unexplained = bundle["detections.unexplained"]
+    drawn = {s.role or explained.role for s in explained.series}
+    assert explained.role in drawn
+    assert explained.role != unexplained.role
+
+
+def test_an_explained_detection_with_no_parent_pulse_keeps_the_unexplained_ink(
+    tmp_path,
+):
+    """An orphan says "nothing accounts for this" whatever the chip shows.
+
+    Its series states the role rather than inheriting it, so giving the layer
+    a chip colour cannot recolour the one class that must not move.
+    """
+    detections = [
+        {
+            "recording_time_s": 400.0,
+            "device_time_s": 371.1,
+            "amplitude": 0.05,
+            "explained_by_log": "true",
+            "source_row": 3,
+        }
+    ]
+    bundle = simple(tmp_path, detections=detections)
+    layer = bundle["detections.explained"]
+    assert layer.unjoined == 1
+    assert [s.role for s in layer.series] == ["detection.novel"]
+    assert any("no matched pulse" in w for w in bundle.warnings)
+
+
+def test_the_unexplained_layer_names_the_fact_and_not_an_interpretation(tmp_path):
+    """`explained_by_log` is what the bundle states; a fish is a reading of it.
+
+    The recording holds the playback and whatever was really in the water, so
+    a detection the log does not account for is normal content -- and which
+    animal, if any, made it is the reader's call, not this layer's label.
+    """
+    layer = simple(tmp_path)["detections.unexplained"]
+    for text in (layer.label, layer.short, layer.micro, layer.tip):
+        low = text.lower()
+        for forbidden in ("animal", "fish", "eel", "response", "novel", "anomal"):
+            assert forbidden not in low, (text, forbidden)
+    assert "no log row accounts for" in layer.tip
+
+
+def test_an_inverted_trial_is_findable_at_the_zoom_that_would_show_it(tmp_path):
+    """It was drawn zoomed out and vanished zoomed in -- the worst of both.
+
+    `_build_trials` keeps a trial whose ``recording_ended_s`` precedes its
+    ``recording_time_s`` as written, and says so; `windowing.merge_spans` puts
+    its bar at ``[start, start + one pixel]``.  `SpanLayer.max_end` therefore
+    has to carry the REACH rather than the end, or the slice disagrees with
+    the draw and the mark exists only at the zoom where it cannot be read.
+    """
+    bundle = simple(
+        tmp_path,
+        pulses=[pulse(1.0)],
+        trials=[trial(1, "volley", 5.0, 2.0)],
+    )
+    assert any("end before they start" in w for w in bundle.warnings)
+    layer = bundle["trials.volley"]
+    assert layer.max_end.tolist() == [5.0], "the reach, not the earlier end"
+    assert layer.t_max == 5.0
+    for t0, t1 in ((0.0, 8.0), (4.5, 5.5), (4.9, 5.2)):
+        _, _, _, total = windowing.window_spans(
+            layer.starts, layer.ends, layer.max_end, t0, t1, layer.disjoint
+        )
+        assert total == 1, (t0, t1)
+    for t0, t1 in ((1.0, 3.0), (5.5, 6.0)):
+        _, _, _, total = windowing.window_spans(
+            layer.starts, layer.ends, layer.max_end, t0, t1, layer.disjoint
+        )
+        assert total == 0, (t0, t1)
+
+
+def test_an_ordinary_span_layer_still_reaches_exactly_as_far_as_its_ends(tmp_path):
+    layer = simple(tmp_path)["trials.silence"]
+    assert layer.max_end.tolist() == np.maximum.accumulate(layer.ends).tolist()
 
 
 # --- performance ------------------------------------------------------------
@@ -1078,23 +1479,25 @@ def test_exp2_pulses_split_into_the_measured_evidence_classes(exp2):
     assert [len(s) for s in resting.series] == [901, 7]
     assert [s.observed for s in resting.series] == [True, False]
     volley = exp2["pulses.volley"]
-    assert [len(s) for s in volley.series] == [1279]
-    assert volley.series[0].observed is True
+    assert [len(s) for s in volley.series] == [1278, 1]
+    assert [s.observed for s in volley.series] == [True, False]
     # the amplitude ruling: the resting train is one level, volleys are 3.6x it
     amplitudes = np.concatenate(
         [s.frame["amplitude"].to_numpy() for s in resting.series]
     )
     assert amplitudes.size == 908
     assert np.all(amplitudes == 0.25)
-    volley_amp = volley.series[0].frame["amplitude"].to_numpy()
+    volley_amp = np.concatenate(
+        [s.frame["amplitude"].to_numpy() for s in volley.series]
+    )
     assert (volley_amp.min(), volley_amp.max()) == (0.6, 1.0)
     assert np.median(volley_amp) == pytest.approx(0.91)
 
 
 @needs_data
-def test_exp2_detections_split_into_explained_and_the_eel(exp2):
-    assert len(exp2["detections.explained"]) == 2180
-    assert len(exp2["detections.unexplained"]) == 842
+def test_exp2_detections_split_into_explained_and_unexplained(exp2):
+    assert len(exp2["detections.explained"]) == 2179
+    assert len(exp2["detections.unexplained"]) == 1219
     assert exp2["detections.explained"].unjoined == 0
 
 
@@ -1142,7 +1545,7 @@ def test_exp2_pins_every_dtype_the_head_would_get_wrong(exp2):
 
     novel = exp2["detections.unexplained"].series[0].frame
     assert novel["source_row"].dtype == pl.Int64
-    assert novel["source_row"].null_count() == 842
+    assert novel["source_row"].null_count() == 1219
     assert novel["explained_by_log"].dtype == pl.Boolean
 
     controls = exp2["controls"].frame
@@ -1183,7 +1586,7 @@ def test_the_treatment_partition_that_lets_one_hue_serve_a_span_and_its_pulses(e
     kinds = resting["pulse_type"].to_numpy()[order]
     localization = resting_t[kinds == "localization"]
     baseline = resting_t[kinds == "baseline"]
-    volley_t = exp2["pulses.volley"].series[0].times
+    volley_t = np.sort(np.concatenate([s.times for s in exp2["pulses.volley"].series]))
 
     trials = [exp2[i] for i in ("trials.volley", "trials.baseline", "trials.silence")]
     all_starts = np.concatenate([t.starts for t in trials])
@@ -1224,11 +1627,106 @@ def test_every_explained_detection_is_bit_identical_to_its_parent_pulse(exp2):
     explained = np.sort(
         np.concatenate([s.times for s in exp2["detections.explained"].series])
     )
-    assert matched_t.size == explained.size == 2180
+    assert matched_t.size == explained.size == 2179
     assert np.abs(matched_t - explained).max() == 0.0
     assert exp2["detections.explained"].unjoined == 0
     roles = {s.role: len(s) for s in exp2["detections.explained"].series}
-    assert roles == {"volley": 1279, "resting": 901}
+    assert roles == {"volley": 1278, "resting": 901}
+
+
+# --- exp3: the split recording ----------------------------------------------
+
+#: exp3 (PULS0005) is four WAVs treated as one recording, and it is the better
+#: regression fixture: 629 of its 5281 pulses are predicted (11.9%) against
+#: exp2's 7 of 2187 (0.3%), which is the difference between a rendering path
+#: that is exercised and one that is technically covered.
+EXP3 = Path("/home/weygoldt/wrk/analyses/fakefish/experiments/exp3")
+METADATA3 = EXP3 / "PULS0005_metadata.toml"
+
+needs_exp3 = pytest.mark.skipif(
+    not METADATA3.is_file(),
+    reason="the paired exp3 session is not on this machine",
+)
+
+
+@pytest.fixture(scope="module")
+def exp3() -> SessionBundle:
+    return SessionBundle.load(METADATA3)
+
+
+@needs_exp3
+def test_exp3_names_all_four_of_its_files(exp3):
+    fit = exp3.meta.alignment
+    assert fit.is_split is True
+    assert len(fit.recording_files) == 4
+    assert len(fit.recording_sha256s) == 4
+    assert len(set(fit.recording_sha256s)) == 4, "one digest per file, not four copies"
+    assert sum(fit.recording_file_frames) == fit.recording_frames
+
+
+@needs_exp3
+def test_exp3_can_be_asked_whether_a_bundle_belongs_to_what_is_open(exp3):
+    """The check that had no opinion at all while only the singular key was read."""
+    for name in exp3.meta.alignment.recording_files:
+        wav = EXP3 / name
+        if not wav.is_file():
+            pytest.skip("the exp3 recordings are not on this machine")
+        check = exp3.meta.check_recording(wav)
+        assert check.name is True, name
+        assert check.frames is True, name
+        assert check.ok is True, name
+
+
+@needs_exp3
+def test_exp3_declares_a_gap_at_every_join_and_this_viewer_only_states_it(exp3):
+    joins = exp3.meta.alignment.joins()
+    assert len(joins) == 3
+    assert [round(t, 3) for t, _ in joins] == [931.968, 1863.936, 2795.904]
+    assert [gap for _, gap in joins] == [0.032, 0.032, -0.12]
+
+
+@needs_exp3
+def test_exp3_says_out_loud_why_its_badge_warns(exp3):
+    assert exp3.trust == TRUST_WARN
+    assert exp3.meta.alignment.fit_warnings
+    for warning in exp3.meta.alignment.fit_warnings:
+        assert any(warning in w for w in exp3.warnings)
+
+
+@needs_exp3
+def test_exp3_measures_its_residual_once_per_file(exp3):
+    stats = exp3.residuals
+    assert stats.split is True
+    assert [r.label for r in stats] == [f"file {i} of 4" for i in (1, 2, 3, 4)]
+    assert [round(r.t0, 3) for r in stats] == [0.0, 931.968, 1863.936, 2795.904]
+    assert sum(r.total for r in stats) == len(
+        np.concatenate(
+            [
+                s.times
+                for i in ("pulses.resting", "pulses.volley")
+                for s in exp3[i].series
+            ]
+        )
+    )
+    # The reason a per-region figure is worth having at all: the last file
+    # confirms 259 of its 874 pulses while the session-wide match_fraction is
+    # 0.881, so what the badge promises is not what that quarter delivers.
+    last = stats.regions[-1]
+    assert last.match_fraction < 0.5
+    assert last.match_fraction < exp3.meta.alignment.match_fraction
+    assert stats.at(3000.0) is last
+
+
+@needs_exp3
+def test_exp3_builds_every_layer_and_exercises_the_predicted_path(exp3):
+    assert len(exp3.layers) == 10
+    predicted = [
+        s
+        for i in ("pulses.resting", "pulses.volley")
+        for s in exp3[i].series
+        if not s.observed
+    ]
+    assert sum(len(s) for s in predicted) > 500, "the dashed path is really exercised"
 
 
 # --- ground truth against the WAV -------------------------------------------
@@ -1290,8 +1788,8 @@ def test_every_matched_pulse_lands_on_a_deflection_in_the_recording(exp2):
 def test_every_volley_trial_brackets_a_dense_burst(exp2):
     """A volley bracket is not a label, it is a claim about the recording.
 
-    Inside a volley span the microphone hears 96-304 detections per second
-    against a session-wide 5.0/s -- 19x to 61x.  The gate is 15x: enough
+    Inside a volley span the microphone hears 94-305 detections per second
+    against a session-wide 5.6/s -- 17x to 54x.  The gate is 15x: enough
     headroom that a single mispositioned bracket fails it, and far enough
     below the measured minimum that a quieter session does not.
     """
@@ -1306,7 +1804,7 @@ def test_every_volley_trial_brackets_a_dense_burst(exp2):
     )
     duration = exp2.meta.alignment.duration_s
     session_rate = detections.size / duration
-    assert session_rate == pytest.approx(4.98, abs=0.05)
+    assert session_rate == pytest.approx(5.60, abs=0.05)
 
     volley = exp2["trials.volley"]
     rates = []
@@ -1325,11 +1823,11 @@ def test_every_volley_trial_brackets_a_dense_burst(exp2):
 def test_a_silence_trial_holds_no_pulse_the_stimulator_can_be_blamed_for(exp2):
     """The control really is silent, to within the fit's own tolerance.
 
-    One of the 2180 explained detections lands inside a silence span: the
-    pulse at 146.107541 s starts 20 µs AFTER trial 3 closes, and its detection
-    at 146.107458 s therefore falls 63 µs inside it.  That is the fit residual
-    crossing a bracket edge, not the stimulator firing during the control, so
-    the assertion is bounded by ``match_tolerance_s`` rather than being zero.
+    One of the 2179 explained detections lands inside a silence span: the
+    pulse just after trial 3 closes has its detection at 146.107479 s, which
+    falls 70 µs inside the bracket.  That is the fit residual crossing a
+    bracket edge, not the stimulator firing during the control, so the
+    assertion is bounded by ``match_tolerance_s`` rather than being zero.
     """
     tolerance = exp2.meta.alignment.match_tolerance_s
     silence = exp2["trials.silence"]
@@ -1346,11 +1844,11 @@ def test_a_silence_trial_holds_no_pulse_the_stimulator_can_be_blamed_for(exp2):
     assert len(intruders) == 1
     assert max(intruders) <= tolerance
 
-    # and the eel is unbothered by the control: 6 novel detections in there
+    # and the animal is unbothered by the control: 7 unexplained in there
     novel = exp2["detections.unexplained"].series[0].times
     heard = sum(
         int(np.searchsorted(novel, float(silence.ends[i]), side="right"))
         - int(np.searchsorted(novel, float(silence.starts[i]), side="left"))
         for i in range(len(silence))
     )
-    assert heard == 6
+    assert heard == 7

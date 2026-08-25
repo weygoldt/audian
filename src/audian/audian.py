@@ -33,11 +33,7 @@ from audioio import available_formats, PlayAudio, AudioLoader
 from . import theme
 from .version import __version__, __year__, audian_dirs
 from .databrowser import ANNOTATION_SURFACE_TIPS, DataBrowser
-from .eventoverlay import (
-    SURFACE_NAVIGATOR,
-    SURFACE_SPECTROGRAM,
-    SURFACE_TRACE,
-)
+from .eventoverlay import SURFACE_LABELS, SURFACE_ORDER
 from .fulltraceplot import OVERVIEW_ACTIVITY, secs_to_str
 from .plugins import Plugins
 from .panels import Panel
@@ -1112,6 +1108,7 @@ class CheatSheet(QDialog):
             "Annotations",
             (
                 "toggle_annotations",
+                "show_all_annotation_layers",
                 "next_annotation",
                 "previous_annotation",
                 "load_annotations",
@@ -1306,10 +1303,10 @@ class Audian(QMainWindow):
         self.channels = channels
         self.highpass_cutoff = highpass_cutoff
         self.lowpass_cutoff = lowpass_cutoff
-        # An explicit --events file names one recording, so it is handed to
-        # the first browser and then dropped.  Every other file opened in
-        # the same run looks for an alignment beside itself instead, which
-        # is what the header check in events.find_alignment() is for.
+        # An explicit --events bundle names one recording, so it is handed to
+        # the first browser and then dropped.  Every other file opened in the
+        # same run looks for a bundle beside itself instead, which is what the
+        # [alignment] name check in session.find_bundle() is for.
         self.events_path = events_path
 
         self.audio = PlayAudio()
@@ -3534,12 +3531,65 @@ class Audian(QMainWindow):
         if browser is not None:
             browser.set_annotation_surface(surface, on)
 
+    def set_annotation_layer(self, layer_id, on):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.set_annotation_layer(layer_id, on)
+
+    def show_all_annotation_layers(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.show_all_annotation_layers()
+
+    def build_annotation_layer_actions(self, layer) -> None:
+        """One checkable entry per layer of the loaded bundle.
+
+        Walked from the bundle, exactly as the chips are, so that the menu
+        and the parameter bar carry the same set of toggles by construction
+        and a layer can never end up with a chip and no menu entry.  Rebuilt
+        only when what the entries SAY changes -- a load, a clear, a tab
+        switch onto a different bundle -- so a solo does not rebuild a menu
+        ten times.
+
+        What they say is the name and the count, so both are in the key.
+        The layer ids alone are the same ten strings in every bundle this
+        reader can open, so keying on those left a second session showing the
+        first one's counts -- 'Volley trials (11)' over a bundle holding two
+        -- while the chips beside them, which are rebuilt outright, showed
+        the new ones.
+        """
+        if getattr(self, "annotation_layer_menu", None) is None:
+            # the View menu is not built yet; it will build itself from the
+            # browser when it is
+            return
+        states = layer.layer_states() if layer is not None else []
+        entries = tuple((state.id, state.label, state.count) for state in states)
+        if entries == self.annotation_layer_entries:
+            return
+        self.annotation_layer_entries = entries
+        # parented to the menu, so clear() destroys them: parented to the
+        # window they would pile up on it, one dead set per file opened
+        self.annotation_layer_menu.clear()
+        self.acts.annotation_layers = {}
+        if not states:
+            empty = self.annotation_layer_menu.addAction("no annotations loaded")
+            empty.setEnabled(False)
+            return
+        for state in states:
+            act = QAction(f"{state.label}  ({state.count})", self.annotation_layer_menu)
+            act.setCheckable(True)
+            act.setChecked(state.enabled)
+            act.setToolTip(state.tip)
+            act.toggled.connect(lambda on, i=state.id: self.set_annotation_layer(i, on))
+            self.annotation_layer_menu.addAction(act)
+            self.acts.annotation_layers[state.id] = act
+
     def sync_annotation_actions(self, browser) -> None:
         """Point the menu checks at what the browser is actually doing.
 
-        The same three switches live on the parameter bar, and a tab switch
-        changes which browser they belong to, so the menu is never the
-        source of truth -- it is told.
+        The same switches live on the parameter bar, and a tab switch changes
+        which browser they belong to, so the menu is never the source of
+        truth -- it is told.
         """
         layer = getattr(browser, "annotations", None)
         if layer is None or browser is not self.browser():
@@ -3549,6 +3599,11 @@ class Audian(QMainWindow):
         for surface, act in self.acts.annotation_surfaces.items():
             blocked = act.blockSignals(True)
             act.setChecked(layer.surfaces.get(surface, True))
+            act.blockSignals(blocked)
+        self.build_annotation_layer_actions(layer)
+        for layer_id, act in self.acts.annotation_layers.items():
+            blocked = act.blockSignals(True)
+            act.setChecked(layer.layers.get(layer_id, False))
             act.blockSignals(blocked)
 
     def next_annotation(self):
@@ -3565,7 +3620,7 @@ class Audian(QMainWindow):
         self.acts.load_annotations = QAction("&Load annotations…", self)
         self.acts.load_annotations.setShortcut("Ctrl+Shift+A")
         self.acts.load_annotations.setToolTip(
-            "Read events from an alignment CSV and draw them over every lane"
+            "Read a session bundle and draw its layers over every lane"
         )
         self.acts.load_annotations.triggered.connect(self.load_annotations)
 
@@ -3573,17 +3628,25 @@ class Audian(QMainWindow):
         self.acts.toggle_annotations.setShortcut("F8")
         self.acts.toggle_annotations.triggered.connect(self.toggle_annotations)
 
-        # one check per surface, mirroring the chips on the parameter bar
+        self.acts.show_all_annotation_layers = QAction("Show &all layers", self)
+        self.acts.show_all_annotation_layers.setShortcut("Shift+F8")
+        self.acts.show_all_annotation_layers.setToolTip(
+            "Undo a solo: draw every layer of the bundle again"
+        )
+        self.acts.show_all_annotation_layers.triggered.connect(
+            self.show_all_annotation_layers
+        )
+
+        # One check per surface, walked from the surface table rather than
+        # written out here: a surface that exists as a chip on the parameter
+        # bar and not as an entry in the menu is a switch the reader can only
+        # find by accident.
         self.acts.annotation_surfaces = {}
-        for surface, label, enabled in (
-            (SURFACE_TRACE, "Show on &traces", True),
-            (SURFACE_SPECTROGRAM, "Show on &spectrograms", True),
-            (SURFACE_NAVIGATOR, "Show on the &navigator", True),
-        ):
-            act = QAction(label, self)
+        for surface in SURFACE_ORDER:
+            act = QAction(f"Show on &{SURFACE_LABELS[surface].lower()}", self)
             act.setCheckable(True)
-            act.setChecked(enabled)
-            act.setToolTip(ANNOTATION_SURFACE_TIPS[surface])
+            act.setChecked(True)
+            act.setToolTip(ANNOTATION_SURFACE_TIPS.get(surface, ""))
             act.toggled.connect(
                 lambda on, name=surface: self.set_annotation_surface(name, on)
             )
@@ -3595,7 +3658,7 @@ class Audian(QMainWindow):
         self.acts.next_annotation = QAction("&Next annotation", self)
         self.acts.next_annotation.setShortcut("n")
         self.acts.next_annotation.setToolTip(
-            "Centre the view on the next annotation of a class that is shown"
+            "Centre the view on the next annotation of a layer that is shown"
         )
         self.acts.next_annotation.triggered.connect(self.next_annotation)
 
@@ -3607,6 +3670,16 @@ class Audian(QMainWindow):
         annotation_menu.addAction(self.acts.load_annotations)
         annotation_menu.addAction(self.acts.toggle_annotations)
         annotation_menu.addAction(self.acts.clear_annotations)
+        annotation_menu.addSeparator()
+        # One entry per layer, filled in from whatever bundle is open.  The
+        # sub menu is built empty and stays in the same place whether a
+        # bundle is loaded or not, so the reader learns where the layers are
+        # rather than watching a menu change shape.
+        self.annotation_layer_menu = annotation_menu.addMenu("&Layers")
+        self.annotation_layer_entries = None
+        self.acts.annotation_layers = {}
+        self.build_annotation_layer_actions(None)
+        annotation_menu.addAction(self.acts.show_all_annotation_layers)
         annotation_menu.addSeparator()
         for act in self.acts.annotation_surfaces.values():
             annotation_menu.addAction(act)
@@ -4139,10 +4212,11 @@ def audian_cli(cargs=[], plugins=None):
         dest="events_path",
         default=None,
         type=str,
-        metavar="CSV",
-        help="alignment or event CSV to draw over the recording; without it "
-        "an alignment file sitting beside the recording and naming it in its "
-        "#recording= header is picked up automatically",
+        metavar="BUNDLE",
+        help="session bundle to draw over the recording: a *_metadata.toml "
+        "or the directory holding it and its CSVs; without it a bundle "
+        "sitting beside the recording and naming it in [alignment] is picked "
+        "up automatically",
     )
     parser.add_argument(
         "--theme",

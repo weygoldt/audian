@@ -20,8 +20,10 @@ import argparse
 import faulthandler
 import os
 import sys
+import tempfile
 import time
 import traceback
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # offscreen has no compositor; keep Qt from probing for one:
@@ -150,18 +152,28 @@ def run_interactions(app, main_win):
             ("y mode: per-channel", lambda: main_win.set_y_mode(1)),
             ("y mode: fixed", lambda: main_win.set_y_mode(2)),
             ("y mode: shared", lambda: main_win.set_y_mode(0)),
+            # through the browser, not through the layer: the solo and the
+            # set it restores are the browser's gesture, and the round trip
+            # is what must not quietly switch a default-off layer on
             (
-                "hide an event class",
-                lambda: browser.annotations.set_event("LOC", False),
-            ),
-            ("show an event class", lambda: browser.annotations.set_event("LOC", True)),
-            (
-                "hide predicted events",
-                lambda: browser.annotations.set_status("unmatched", False),
+                "solo one annotation layer",
+                lambda: browser.solo_annotation_layer("pulses.volley"),
             ),
             (
-                "show predicted events",
-                lambda: browser.annotations.set_status("unmatched", True),
+                "un-solo it, back to the set that was showing",
+                lambda: browser.solo_annotation_layer("pulses.volley"),
+            ),
+            (
+                "show every annotation layer",
+                lambda: browser.show_all_annotation_layers(),
+            ),
+            (
+                "hide one annotation layer",
+                lambda: browser.annotations.set_layer("pulses.volley", False),
+            ),
+            (
+                "show one annotation layer",
+                lambda: browser.annotations.set_layer("pulses.volley", True),
             ),
             (
                 "annotations off the traces",
@@ -170,6 +182,14 @@ def run_interactions(app, main_win):
             (
                 "annotations back on the traces",
                 lambda: browser.set_annotation_surface("trace", True),
+            ),
+            (
+                "show the control track panel",
+                lambda: browser.annotations.set_layer("controls", True),
+            ),
+            (
+                "hide the control track panel",
+                lambda: browser.annotations.set_layer("controls", False),
             ),
             (
                 "annotations off the navigator",
@@ -216,7 +236,12 @@ def run_interactions(app, main_win):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("wav", nargs="?", help="audio file to open")
+    ap.add_argument(
+        "wav",
+        nargs="*",
+        help="audio file(s) to open; several are opened as ONE recording, "
+        "which is the case the join markers exist for",
+    )
     ap.add_argument("-o", "--output", help="write a PNG screenshot here")
     ap.add_argument("--empty", action="store_true", help="start with no file")
     ap.add_argument("--width", type=int, default=1600)
@@ -248,7 +273,8 @@ def main(argv=None):
     )
     ap.add_argument(
         "--events",
-        help="alignment CSV to draw over the recording (see audian.events)",
+        help="session bundle to draw over the recording: a *_metadata.toml "
+        "or the directory holding one (see audian.session)",
     )
     ap.add_argument(
         "--goto",
@@ -276,13 +302,20 @@ def main(argv=None):
     from audian import theme
     from audian.plugins import Plugins
 
+    # The harness clicks every annotation toggle and every theme switch there
+    # is, and both are persisted.  Pointed at a scratch file, or a smoke run
+    # would leave the user's own preferences wherever the last step happened
+    # to stop.
+    scratch = tempfile.mkdtemp(prefix="audian-smoke-")
+    A.settings_path = lambda: Path(scratch) / "settings.json"
+
     app = QApplication.instance() or QApplication(sys.argv[:1])
     theme.apply(app)
 
     plugins = Plugins()
     plugins.load_plugins()
 
-    files = [] if (args.empty or not args.wav) else [args.wav]
+    files = [] if (args.empty or not args.wav) else list(args.wav)
 
     t_build = time.monotonic()
     main_win = A.Audian(files, {}, plugins, [], 0, None, False, 0, args.events)
@@ -315,30 +348,49 @@ def main(argv=None):
             pump(app, 2.0)
             layer = browser.annotations
             if layer.loaded:
-                table = layer.table
+                bundle = layer.bundle
+                source = bundle.ref.metadata_path.name if bundle.ref else "?"
                 print(
-                    f"annotations: {table.name} -- {table.summary()}\n"
+                    f"annotations: {source} -- {bundle.summary()}\n"
                     f"             trust={layer.trust} "
-                    f"channel={table.header.recording_channel} "
-                    f"dropped={table.dropped}"
+                    f"channel={bundle.meta.alignment.recording_channel} "
+                    f"dropped={sum(bundle.dropped.values())}"
                 )
                 trange = browser.plot_ranges["t"]
                 t0, t1 = trange.r0[0], trange.r1[0]
-                shown = sum(
-                    table[key].count_between(t0, t1) for key in layer.active_keys()
-                )
-                print(f"             {shown} events in view {t0:.3f}..{t1:.3f} s")
+                print(f"             layers on: {', '.join(layer.active_ids())}")
+                print(f"             view {t0:.3f}..{t1:.3f} s")
                 per_surface = {}
                 for overlay in browser.annotation_overlays:
                     drawn = sum(
-                        c.getData()[0].size // 2 for c in overlay.curves.values()
-                    )
+                        c.getData()[0].size // 2 for c in overlay.marks.values()
+                    ) + sum(c.getData()[0].size // 2 for c in overlay.edges.values())
                     per_surface[overlay.surface] = (
                         per_surface.get(overlay.surface, 0) + drawn
                     )
                 print(f"             marks drawn: {per_surface}")
                 if not any(per_surface.values()):
                     faults.append("annotations loaded but nothing was drawn")
+                worst = bundle.residuals.worst
+                if worst is not None:
+                    print(f"             worst residual: {worst.summary()}")
+
+    browser = main_win.browser()
+    if browser is not None:
+        # The joins are the loader's own knowledge, so they are reported
+        # whether or not a bundle was loaded -- a split recording with no
+        # annotations still has to show where its files butt together.
+        joins = browser.recording_joins()
+        if joins:
+            gaps = browser.declared_join_gaps()
+            stated = ", ".join(f"{g:+.3f} s" for g in gaps) if gaps else "not declared"
+            print(
+                f"joins: {len(joins)} at "
+                + ", ".join(f"{t:.3f} s" for t in joins)
+                + f"; declared gaps: {stated}"
+            )
+            if not browser.join_markers:
+                faults.append("a split recording drew no join markers")
 
     if args.theme:
         from audian import theme as _theme

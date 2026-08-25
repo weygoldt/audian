@@ -1,41 +1,60 @@
-"""Drawing an `EventTable` over the traces and the spectrograms.
+"""Drawing a `SessionBundle` over the traces and the spectrograms.
 
 Two objects, with a deliberate split:
 
 `AnnotationLayer`
-    One per browser.  Owns the loaded table, which classes are switched on,
-    and -- the part that makes this scale -- the *shared* window cache.  A
-    sixteen channel file has 32 plots showing the same time range, so the
-    windowing and decimation are done once and every plot reads the same
-    arrays back.
+    One per browser.  Owns the loaded bundle, which of its ten layers are
+    switched on, and -- the part that makes this scale -- the *shared* window
+    cache.  A sixteen channel file has 32 plots showing the same time range,
+    so the windowing, the decimation and the span merge are done once and
+    every plot reads the same arrays back.
 
 `EventOverlay`
-    One per plot.  Turns those arrays into vertical lines.  It holds one
-    `pg.PlotCurveItem` per event class, drawn with ``connect='pairs'``: the
-    whole class is a single item and a single numpy array, so a redraw never
-    walks a row from Python.
+    One per plot.  Turns those arrays into geometry.  It holds one
+    `pg.PlotCurveItem` per drawn thing -- one per point series, two per span
+    layer -- so a redraw never walks a row from Python.
+
+The one rule everything here obeys
+----------------------------------
+**Every annotation occupies the full height of the lane it is drawn in, and
+is bounded only in x.**  There is no y-allocation per layer, no tracks, no
+sub-rows.  Layers overlap, and that is expected: the reader runs one or two
+at a time, so *toggling* is the interaction this is built around, not
+simultaneous legibility of all ten.
 
 What the drawing says
 ---------------------
-* **Colour** is the ``event`` label -- LOC, BASE, VOLLEY, MARKER -- from the
-  theme's categorical marker palette, so it survives a theme switch and each
-  hue is contrast-checked against both plot grounds.
-* **Shape** is whether the event was *observed*.  A ``matched`` row was seen
-  in the recording and is drawn as a solid line across the whole lane.  An
-  ``unmatched`` or ``outside`` row was not: its time is what the fit
-  predicts, and it is drawn as a short dashed stub near the top of the lane
-  with a hollow diamond cap.  The two never look alike, at any zoom.
-* **Dashing everything** is what an *unvalidated* header buys.  If the fit
-  was never checked, every position on screen is a guess, and the overlay
-  says so on its own rather than relying on a badge the reader may not look
-  at.  The badge is there too (`AnnotationLayer.badge`).
+* **Colour** is the evidence *category*, resolved per series through
+  :func:`audian.theme.annotation_color` -- volley, resting, silence, the ink
+  of an unexplained detection.  A series' own role wins over its layer's; a
+  layer's role is only the fallback for a series that has none.
+* **A span** is an interior fill drawn *under* the trace plus two full-height
+  edge lines drawn *over* it.  The fill shifts the ground, so the waveform
+  keeps its own pen; the edges carry the extent when the fill is washed out
+  by daylight -- and on the spectrogram, where an opaque image leaves no
+  ground to shift, the edges carry it alone.  See :data:`SPAN_FILL_ALPHA` for
+  the measurement and :data:`SURFACE_STYLE` for what each surface does with
+  it.
+* **A point** is a full-height vertical at full opacity, over the trace.
+* **Predicted is not observed.**  A predicted point -- the fit says it is
+  there, the recording never confirmed it -- is drawn at the same full height
+  in the same hue, but dashed and with a hollow diamond cap.  Colour is never
+  the difference: a predicted volley pulse in another hue would read as
+  another stimulus.
+* **Dashing everything** is what an *unvalidated* fit buys, and hatching every
+  fill with it.  If the fit was never checked, every position on screen is a
+  guess, and the drawing says so on its own rather than relying on a badge the
+  reader may not look at.  The badge is there too (`AnnotationLayer.badge`).
+* **A bundle fitted against another recording draws nothing at all.**  Every
+  mark would land somewhere plausible and wrong, and a plausible wrong mark is
+  worse than no mark.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import numpy as np
 import pyqtgraph as pg
@@ -48,14 +67,20 @@ try:
 except ImportError:  # pragma: no cover - PyQt5 always has pyqtSignal
     from PyQt5.QtCore import pyqtSignal as Signal
 
-from . import theme
-from .events import (
+from . import theme, windowing
+from .layers import (
+    LAYER_RUNS,
+    Layer,
+    PointLayer,
+    SpanLayer,
+    StepTrack,
+)
+from .session import (
     TRUST_OK,
     TRUST_UNVALIDATED,
     TRUST_WARN,
-    EventClass,
-    EventTable,
-    find_alignment,
+    SessionBundle,
+    find_bundle,
 )
 
 
@@ -86,71 +111,140 @@ SURFACE_LABELS: dict[str, str] = {
     SURFACE_NAVIGATOR: "Navigator",
 }
 
-#: Opacity of an event line over a waveform.  Well below 1: the point of the
-#: overlay is to say where an event is *on the trace*, and an opaque line
-#: hides the pulse it is pointing at.
-TRACE_ALPHA = 0.62
+#: Every mark -- point line, span edge -- is drawn at full opacity, in both
+#: themes.  Opacity is not available as a channel here: under direct sun a
+#: daylight mark at any alpha below 1.0 collapses to 1.5:1 against the plot
+#: ground, so anything said with it is said only indoors.  What carries
+#: meaning instead is the dash pattern (`theme.annotation_pen`) and the hue.
+MARK_ALPHA = 1.0
 
-#: Over a spectrogram the same line competes with an image rather than with
-#: an empty ground, so it needs more of it.
-SPECTROGRAM_ALPHA = 0.8
+#: The roles that actually paint an interior fill: the three trial treatments
+#: and the localization runs.  Every other role in `theme.ANNOTATION_ROLES`
+#: -- `detection.novel`, `session`, `fault`, `control` -- belongs to a point
+#: layer or to the control track, which draw a line or a staircase and never
+#: wash a ground.  Auditing a fill over those measures a composite that is
+#: never rendered, so the measurement on `SPAN_FILL_ALPHA` is taken over this
+#: set alone; a test pins it to the span layers a bundle actually builds, so
+#: a new one cannot quietly fall outside it.
+FILL_ROLES: frozenset[str] = frozenset({"volley", "resting", "silence", "run"})
 
-#: On the navigator the mark is a short tick rather than a line down the
-#: lane, so it has less to hide -- but a whole session of events packs about
-#: one tick per pixel, and at full opacity that is a solid bar.
-NAVIGATOR_ALPHA = 0.8
-
-#: Everything is scaled by this when the alignment was never validated.
-UNVALIDATED_ALPHA = 0.6
-
-#: Vertical extent of a line, as a fraction of the lane, per kind.
-MEASURED_SPAN = (0.0, 1.0)
-PREDICTED_SPAN = (0.60, 0.90)
-
-#: The navigator shows the whole session in one strip, so a line down the
-#: lane would bury the very waveform the strip exists to show.  The marks sit
-#: in a band along the top edge instead, and read as a ruler of events.
+#: Interior fill of a span, per theme.  This is the one place annotation ink
+#: is laid across the waveform, so it is the one number that had to be
+#: measured rather than chosen.
 #:
-#: Observed and predicted get *separate stripes* rather than long and short
-#: marks in one.  A navigator row is about 60 px, so the band is eight pixels
-#: and a "half length" mark would be four -- neither a dash pattern nor a
-#: length difference survives that.  Two stripes do, and they answer the
-#: question the strip is actually good for: is there a stretch of this
-#: session where the fit predicted pulses and nothing was ever found?  That
-#: reads as a lower stripe with nothing above it.
-NAVIGATOR_MEASURED_SPAN = (0.88, 1.0)
-NAVIGATOR_PREDICTED_SPAN = (0.76, 0.86)
+#: Measured with `theme.contrast_ratio`, worst case over :data:`FILL_ROLES` x
+#: every colour in `theme.painted_trace_colors`, the fill composited UNDER
+#: the trace so only the ground shifts, and onto the ground each lane is
+#: really painted: `databrowser.update_current_plot` paints the focused lane
+#: `bg.lane` and leaves every other lane `bg.plot`, so both are audited.
+#:
+#:     ground                    a=0.00  a=0.05  a=0.10  a=0.14   floor
+#:     dark  other   (bg.plot)     3.09    2.91    2.69    2.51     3.0
+#:     dark  focused (bg.lane)     2.81    2.63    2.41    2.25     3.0
+#:     light other   (#FFFFFF)     4.62    4.18    3.81    3.48     4.5
+#:     light focused (bg.lane)     3.90    3.55    3.21    2.97     4.5
+#:
+#: Read the `a=0.00` column first.  With no annotation on screen at all the
+#: focused lane is already under its floor, in both themes: `theme.dim_color`
+#: clamps a receded trace against `bg.plot`, while the lane that trace lands
+#: in is painted `bg.lane`.  That is a pre-existing defect, it lives in
+#: `theme`/`databrowser` and not here, and no fill alpha can repair it -- so
+#: this constant does not claim to hold any lane above its floor, and nothing
+#: in `tests/test_eventoverlay.py` asserts that it does.
+#:
+#: What 0.10/0.05 does claim, and what
+#: `test_a_span_fill_costs_at_most_half_a_ratio_point_on_either_ground`
+#: asserts, is that the fill is cheap: it costs the worst painted trace 0.41
+#: of a contrast ratio in dark and 0.44 in daylight, on either ground.  It
+#: can afford to be that weak because a span's extent is carried by its two
+#: edge lines, drawn at `MARK_ALPHA` whatever the fill does.
+SPAN_FILL_ALPHA: dict[str, float] = {
+    theme.THEME_DARK: 0.10,
+    theme.THEME_LIGHT: 0.05,
+}
 
-#: Above this many drawn events the diamond caps on predicted events are
+#: Layers whose interior fill is cut to `LOW_FILL_SCALE`.  A legibility
+#: calibration for one layer, not a category encoding: the localization runs
+#: reach 58 s each and cover 59% of the exp2 session, so at the trials' alpha
+#: the whole overview greys over and the fill stops meaning anything.  The
+#: edges are untouched -- a run's extent still reads exactly like a trial's.
+LOW_FILL_LAYERS = frozenset({LAYER_RUNS})
+LOW_FILL_SCALE = 0.5
+
+#: Above this many drawn points the diamond caps on predicted marks are
 #: dropped: at that density they merge into a bar and say nothing the dashed
-#: stub does not already say.
+#: line does not already say.
 CAP_LIMIT = 400
 
-#: How each surface draws: opacity, the span of an observed and of a
-#: predicted mark, and whether predicted marks get their hollow cap.  Keeping
-#: it in one table means the three surfaces are the same code path with
-#: different numbers rather than three drawing routines that can drift apart.
+#: How far below the top of the view box a diamond cap is centred, in logical
+#: pixels, on top of half the symbol's own height.  A cap centred exactly on
+#: `y1` is clipped by the view box and renders as a chevron: measured on the
+#: predicted mark at 138.432 s, nothing was painted above the first interior
+#: row and only the lower four rows of the symbol survived.  Half of
+#: `theme.S8` clears the symbol, this clears the pen that strokes it.
+CAP_INSET_PX = 1.0
+
+#: z of a trace, a spectrogram image or a navigator envelope.  pyqtgraph gives
+#: every data item 0 and audian never sets one (`timeplot.py` sets z only on
+#: its caption, its zero line and its playback marker), so 0 is the number the
+#: two annotation z's are placed either side of.
+TRACE_Z = 0
+
+#: The span interior goes BELOW the data.  Drawn over it, the same fill costs
+#: the trace 3 dB of contrast and the measurement in `SPAN_FILL_ALPHA` does
+#: not hold; drawn under it, only the ground shifts and the waveform keeps its
+#: own pen.  Below the zero line (-10) as well, so the y reference survives a
+#: span too.
+FILL_Z = -20
+
+#: Marks -- point lines and span edges -- go above the traces and below the
+#: crosshair and the playback cursor: an annotation must not hide where the
+#: sound is playing.  Caps ride one above their own mark.
+MARK_Z = 15
+CAP_Z = 16
+
+#: z of the navigator's selection region: `fulltraceplot.build_channel` calls
+#: `region.setZValue(50)` on it.  Written down rather than imported, because
+#: `fulltraceplot` pulls the whole browser in and this is one integer.
+NAV_REGION_Z = 50
+
+#: What a mark costs on the navigator.  The selection region above is a
+#: translucent `pg.LinearRegionItem`, so at `MARK_Z` every mark inside the
+#: window the reader is actually looking at was painted through it -- a
+#: silence edge sampled (215,121,255) where its own colour is (245,117,255).
+#: `MARK_ALPHA` says a mark is drawn at full opacity; on this surface that
+#: costs a z above the region.  Still under the crosshair and the playback
+#: marker, which are at 100.
+NAV_MARK_Z = NAV_REGION_Z + 10
+
+#: How each surface draws.  Geometry is the full lane on all three -- that is
+#: the rule -- so what varies is the fill and the z a mark needs to reach full
+#: opacity against that surface's own furniture.
+#:
+#: `fill` scales `SPAN_FILL_ALPHA`:
+#:
+#: * The trace lane is 1.0.  That is the ground the alpha was measured on.
+#: * The navigator is 1.0 too.  It was doubled, on the claim that its ground
+#:   is not `bg.plot`; it is exactly `bg.plot` -- read off the running app,
+#:   the navigator view box brush is `#0D1219`, the same token an unfocused
+#:   trace lane gets -- so the measured alpha applies to it unchanged, and the
+#:   doubling was an un-measured 1.36:1 against a 3.0 floor.
+#: * The spectrogram is 0.0: it draws no interior fill at all.  `SpecItem` is
+#:   a `pg.ImageItem` at pyqtgraph's default z=0 with a fully opaque LUT
+#:   covering the lane, so a fill at `FILL_Z` is painted straight over and
+#:   never composited -- measured in the app, an interior column inside a
+#:   soloed span changed 0 pixels across the spectrogram's 121 rows while the
+#:   trace lane below it changed 96.  Lifting the fill above the image
+#:   instead would tint the spectrogram's own values, and its colormap spans
+#:   the whole luminance range, so no alpha over it can be measured safe.
+#:   The edges are above the image already and carry the extent there, which
+#:   is the same thing they do outdoors on the trace.
 SURFACE_STYLE: dict[str, dict] = {
-    SURFACE_TRACE: {
-        "alpha": TRACE_ALPHA,
-        "measured": MEASURED_SPAN,
-        "predicted": PREDICTED_SPAN,
-        "caps": True,
-    },
-    SURFACE_SPECTROGRAM: {
-        "alpha": SPECTROGRAM_ALPHA,
-        "measured": MEASURED_SPAN,
-        "predicted": PREDICTED_SPAN,
-        "caps": True,
-    },
-    SURFACE_NAVIGATOR: {
-        "alpha": NAVIGATOR_ALPHA,
-        "measured": NAVIGATOR_MEASURED_SPAN,
-        "predicted": NAVIGATOR_PREDICTED_SPAN,
-        # a 12 px band has no room for a cap, and a diamond that small is a
-        # smudge rather than a symbol
-        "caps": False,
-    },
+    SURFACE_TRACE: {"fill": 1.0, "caps": True, "mark_z": MARK_Z},
+    SURFACE_SPECTROGRAM: {"fill": 0.0, "caps": True, "mark_z": MARK_Z},
+    # a navigator row is about 60 px and a hollow diamond in it is a smudge
+    # rather than a symbol
+    SURFACE_NAVIGATOR: {"fill": 1.0, "caps": False, "mark_z": NAV_MARK_Z},
 }
 
 #: Fallback width in device pixels when a view box has not been laid out yet.
@@ -163,29 +257,40 @@ DEFAULT_PIXELS = 1200
 MIN_PIXELS = 16
 
 
-class AnnotationLayer(QObject):
-    """The annotation state of one browser: table, toggles, window cache."""
+class LayerState(NamedTuple):
+    """What a chip needs to draw itself and say what it toggles."""
 
-    #: the set of drawn classes changed and every overlay must rebuild
+    id: str
+    label: str
+    short: str
+    micro: str
+    kind: str
+    count: int
+    color: str
+    enabled: bool
+    tip: str
+
+
+class AnnotationLayer(QObject):
+    """The annotation state of one browser: bundle, toggles, window cache."""
+
+    #: the set of layers changed and every overlay must rebuild its items
     sigTableChanged = Signal()
     #: only visibility changed; overlays redraw but keep their items
     sigVisibilityChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.table: Optional[EventTable] = None
+        self.bundle: Optional[SessionBundle] = None
         self.visible = True
-        # Toggles are held on the two axes a reader actually thinks in --
-        # *what* an event is and *whether it was seen* -- rather than on the
-        # cross product.  Four event chips and two status chips cover twelve
-        # classes, and the two questions stay separable: "hide the volleys"
-        # and "hide everything that was only predicted" are one click each.
-        self.events: dict[str, bool] = {}
-        self.statuses: dict[str, bool] = {}
-        #: which surfaces draw at all.  A third axis alongside the event and
-        #: the status: *where* to show them, not *which* to show.
+        #: one switch per layer, keyed by layer id.  Ten of them, and the
+        #: reader runs one or two at a time, so this is the control that
+        #: matters -- not a cross product of facets nobody thinks in.
+        self.layers: dict[str, bool] = {}
+        #: which surfaces draw at all.  A second axis alongside the layers:
+        #: *where* to show them, not *which* to show.
         self.surfaces: dict[str, bool] = dict.fromkeys(SURFACE_ORDER, True)
-        #: set when the file's ``#recording=`` names a different recording
+        #: set when the bundle was fitted against a different recording
         self.recording_mismatch: Optional[str] = None
         #: bumped whenever anything an overlay draws from changes.  An
         #: overlay compares it against what it last drew and skips the whole
@@ -193,48 +298,46 @@ class AnnotationLayer(QObject):
         #: calls, because a pan delivers sigRangeChanged to every plot *and*
         #: goes through Panels.update_plots().
         self.revision = 0
-        # shared window cache: (t0, t1, pixels) -> {key: (x pairs, drawn, total)}
+        # shared window cache: (t0, t1, pixels) -> {draw key: arrays}
         self._cache_key: Optional[tuple] = None
-        self._cache: dict[tuple[str, str], tuple] = {}
+        self._cache: dict[tuple, tuple] = {}
 
     # --- loading ---------------------------------------------------------
 
-    def load(self, path, recording=None) -> EventTable:
-        """Read `path` and make it the current table.
+    def load(self, path, recording=None) -> SessionBundle:
+        """Read the bundle at `path` and make it the current one.
 
-        `recording` is the file the browser has open.  When the header names
-        a different recording the table is still loaded -- refusing to show
-        it would help nobody -- but `recording_mismatch` is set and the
-        caller is expected to say so loudly.  A fit belongs to exactly one
-        recording; used against another, every line lands somewhere plausible
+        `path` is a ``*_metadata.toml``, a bundle directory, or a `BundleRef`.
+        `recording` is the file the browser has open.  When the fit names a
+        different one the bundle is still loaded -- its warnings and its
+        summary are worth reading -- but `recording_mismatch` is set and
+        nothing is drawn until it is cleared.  A fit belongs to exactly one
+        recording; used against another, every mark lands somewhere plausible
         and wrong.
         """
-        table = EventTable.from_csv(path)
-        self.table = table
-        self.events = {}
-        self.statuses = {}
-        for event_class in table:
-            self.events.setdefault(event_class.event, True)
-            self.statuses.setdefault(event_class.status, True)
+        bundle = SessionBundle.load(path, recording=recording)
+        self.bundle = bundle
+        self.layers = {layer.id: bool(layer.default_on) for layer in bundle}
         self.visible = True
         self.recording_mismatch = None
-        if recording is not None and table.matches_recording(recording) is False:
-            self.recording_mismatch = table.header.recording
+        if bundle.recording_check.name is False:
+            named = bundle.meta.alignment.recording_file
+            self.recording_mismatch = Path(named).name if named else "another recording"
         self.invalidate()
         self.sigTableChanged.emit()
-        return table
+        return bundle
 
     def discover(self, recording) -> Optional[Path]:
-        """Find an alignment file that names `recording`, without loading it."""
+        """Find a bundle that names `recording`, without loading it."""
         try:
-            return find_alignment(recording)
+            ref = find_bundle(recording)
         except OSError:
             return None
+        return ref.metadata_path if ref is not None else None
 
     def clear(self) -> None:
-        self.table = None
-        self.events = {}
-        self.statuses = {}
+        self.bundle = None
+        self.layers = {}
         self.recording_mismatch = None
         self.invalidate()
         self.sigTableChanged.emit()
@@ -243,19 +346,30 @@ class AnnotationLayer(QObject):
 
     @property
     def loaded(self) -> bool:
-        return self.table is not None
+        return self.bundle is not None
 
     @property
     def trust(self) -> str:
-        return self.table.trust if self.table is not None else TRUST_OK
+        return self.bundle.trust if self.bundle is not None else TRUST_OK
 
     @property
     def unvalidated(self) -> bool:
         return self.trust == TRUST_UNVALIDATED
 
+    @property
+    def drawable(self) -> bool:
+        """Whether anything may be drawn anywhere.
+
+        The wrong recording is not a detail for a tool tip.  Every position in
+        the bundle comes from a fit against another file, so every mark would
+        be misplaced by an amount nobody can see -- which looks exactly like
+        data.  The badge says so and the lanes stay clean.
+        """
+        return self.visible and self.recording_mismatch is None
+
     def surface_enabled(self, surface: str) -> bool:
         """Whether annotations are drawn on `surface` at all."""
-        return self.visible and self.surfaces.get(surface, True)
+        return self.drawable and self.surfaces.get(surface, True)
 
     def set_surface(self, surface: str, on: bool) -> None:
         if self.surfaces.get(surface) == bool(on):
@@ -271,68 +385,63 @@ class AnnotationLayer(QObject):
             for name in SURFACE_ORDER
         ]
 
-    def is_enabled(self, key) -> bool:
-        event, status = key
-        return (
-            self.visible
-            and self.events.get(event, False)
-            and self.statuses.get(status, False)
-        )
+    def is_enabled(self, layer_id: str) -> bool:
+        return self.drawable and self.layers.get(layer_id, False)
 
-    def active_keys(self) -> list:
-        if self.table is None or not self.visible:
+    def active_ids(self) -> list[str]:
+        if self.bundle is None or not self.drawable:
             return []
-        return [c.key for c in self.table if self.is_enabled(c.key)]
+        return [x.id for x in self.bundle if self.layers.get(x.id, False)]
 
-    def set_event(self, event: str, on: bool) -> None:
-        if self.events.get(event) == bool(on):
+    def set_layer(self, layer_id: str, on: bool) -> None:
+        if self.layers.get(layer_id) == bool(on):
             return
-        self.events[event] = bool(on)
+        self.layers[layer_id] = bool(on)
         self.revision += 1
         self.sigVisibilityChanged.emit()
 
-    def set_status(self, status: str, on: bool) -> None:
-        if self.statuses.get(status) == bool(on):
+    def toggle_layer(self, layer_id: str) -> None:
+        self.set_layer(layer_id, not self.layers.get(layer_id, False))
+
+    def solo(self, layer_id: str) -> None:
+        """Leave `layer_id` on and switch every other layer off.
+
+        The primary gesture, because the reader looks at one or two layers at
+        a time.  It is one bump of `revision` and one signal however many
+        layers change, so a solo costs a stack one redraw rather than ten.
+        """
+        wanted = {i: (i == layer_id) for i in self.layers}
+        if wanted == self.layers:
             return
-        self.statuses[status] = bool(on)
+        self.layers = wanted
         self.revision += 1
         self.sigVisibilityChanged.emit()
 
-    def event_counts(self) -> list:
-        """``(event, count, colour, enabled)`` per event label, in file order."""
-        if self.table is None:
-            return []
-        counts: dict[str, int] = {}
-        colors: dict[str, str] = {}
-        for event_class in self.table:
-            counts[event_class.event] = counts.get(event_class.event, 0) + len(
-                event_class
-            )
-            colors.setdefault(event_class.event, self.color(event_class))
-        return [
-            (event, counts[event], colors[event], self.events.get(event, True))
-            for event in counts
-        ]
+    def show_all(self) -> None:
+        """The one obvious way back from a solo."""
+        if self.bundle is None or all(self.layers.values()):
+            return
+        self.layers = dict.fromkeys(self.layers, True)
+        self.revision += 1
+        self.sigVisibilityChanged.emit()
 
-    def status_counts(self) -> list:
-        """``(status, count, measured, enabled)`` per status, in file order."""
-        if self.table is None:
+    def layer_states(self) -> list[LayerState]:
+        """One `LayerState` per layer of the bundle, in bundle order."""
+        if self.bundle is None:
             return []
-        counts: dict[str, int] = {}
-        measured: dict[str, bool] = {}
-        for event_class in self.table:
-            counts[event_class.status] = counts.get(event_class.status, 0) + len(
-                event_class
-            )
-            measured.setdefault(event_class.status, event_class.measured)
         return [
-            (
-                status,
-                counts[status],
-                measured[status],
-                self.statuses.get(status, True),
+            LayerState(
+                id=layer.id,
+                label=layer.label,
+                short=layer.short,
+                micro=layer.micro,
+                kind=layer.kind,
+                count=len(layer),
+                color=theme.annotation_color(layer.role),
+                enabled=self.layers.get(layer.id, False),
+                tip=layer.tip,
             )
-            for status in counts
+            for layer in self.bundle
         ]
 
     def set_visible(self, on: bool) -> None:
@@ -353,78 +462,178 @@ class AnnotationLayer(QObject):
 
     # --- the shared window ------------------------------------------------
 
-    def window(self, key, t0: float, t1: float, pixels: int) -> tuple:
-        """``(x pairs, drawn, total)`` for one class in one view.
+    def _window_cache(self, t0: float, t1: float, pixels: int) -> dict:
+        """The cache for one view, emptied when the view moves.
 
-        Every plot in the stack shows the same time range, so the first one
-        to ask pays for the search and the decimation and the other 31 read
-        the answer.  ``x pairs`` is already interleaved for
-        ``connect='pairs'`` -- ``[t0, t0, t1, t1, ...]`` -- because that too
-        is identical in every plot.
+        Every plot in the stack shows the same time range, so the first one to
+        ask pays for the search, the decimation and the merge, and the other
+        31 read the answer.  Points and spans share the cache because they
+        share the view: one dict per browser per window, not one per kind.
         """
-        if self.table is None:
-            return _EMPTY, 0, 0
-        cache_key = (round(float(t0), 9), round(float(t1), 9), int(pixels))
-        if cache_key != self._cache_key:
-            self._cache_key = cache_key
+        key = (round(float(t0), 9), round(float(t1), 9), int(pixels))
+        if key != self._cache_key:
+            self._cache_key = key
             self._cache = {}
-        hit = self._cache.get(key)
+        return self._cache
+
+    def point_window(
+        self, layer_id: str, series: int, t0: float, t1: float, pixels: int
+    ) -> tuple:
+        """``(x pairs, drawn, total)`` for one point series in one view.
+
+        ``x pairs`` is already interleaved for ``connect='pairs'`` --
+        ``[t, t, t', t', ...]`` -- because that too is identical in every plot.
+        `total` is the true number in the window, so a readout can report the
+        density it is looking at rather than the number of lines that survived.
+        """
+        if self.bundle is None:
+            return _EMPTY, 0, 0
+        cache = self._window_cache(t0, t1, pixels)
+        key = ("point", layer_id, series)
+        hit = cache.get(key)
         if hit is None:
-            event_class = self.table.get(key)
-            if event_class is None:
+            layer = self.bundle.get(layer_id)
+            if not isinstance(layer, PointLayer) or series >= len(layer.series):
                 hit = (_EMPTY, 0, 0)
             else:
-                times, total = event_class.window(t0, t1, pixels)
+                times, total = windowing.window_points(
+                    layer.series[series].times, t0, t1, pixels
+                )
                 hit = (np.repeat(times, 2), int(times.size), total)
-            self._cache[key] = hit
+            cache[key] = hit
+        return hit
+
+    def span_window(self, layer_id: str, t0: float, t1: float, pixels: int) -> tuple:
+        """``(fill x, edge x, bars, total)`` for one span layer in one view.
+
+        `fill x` is the ``2n`` bin-edge array a ``stepMode='center'`` curve
+        wants: ``[s0, e0, s1, e1, ...]``, so bin `2k` is a span and bin
+        ``2k+1`` is the gap after it.  `edge x` is the ``4n`` array
+        ``connect='pairs'`` wants, two verticals per bar.
+
+        Spans are **merged** at one device pixel, never decimated with the
+        point path's keep-first pass: at the 607 s view one pixel is 0.43 s
+        against a 0.544 s median trial, so keeping the first span per column
+        drops most of the 12 silence trials and the control condition
+        disappears from the overview.  Merging turns a cluster into one bar
+        that still covers everywhere a trial was running, and it bounds the
+        drawn bars by the pixel width whatever the file holds.  `total` is the
+        TRUE pre-merge count in the window and is what a readout must report.
+        """
+        if self.bundle is None:
+            return _EMPTY, _EMPTY, 0, 0
+        cache = self._window_cache(t0, t1, pixels)
+        key = ("span", layer_id)
+        hit = cache.get(key)
+        if hit is None:
+            layer = self.bundle.get(layer_id)
+            if not isinstance(layer, SpanLayer):
+                hit = (_EMPTY, _EMPTY, 0, 0)
+            else:
+                hit = _span_arrays(layer, t0, t1, pixels)
+            cache[key] = hit
         return hit
 
     # --- appearance -------------------------------------------------------
 
-    def color(self, event_class: EventClass):
-        return theme.marker_color(event_class.color_index)
+    def role(self, layer: Layer, series: int = 0) -> str:
+        """The colour role of one drawn thing.
 
-    def line_pen(self, event_class: EventClass, alpha: float):
-        """Pen for one class: hue from the event, dashes from the evidence."""
-        if self.unvalidated:
-            alpha *= UNVALIDATED_ALPHA
-            # Both patterns become broken, but they stay different from each
-            # other: an unvalidated file must still let a reader tell an
-            # observed row from a predicted one.
-            style = Qt.DashLine if event_class.measured else Qt.DotLine
-        else:
-            style = Qt.SolidLine if event_class.measured else Qt.DashLine
-        width = theme.LW_THIN if event_class.measured else theme.LW_HAIRLINE
-        return theme.pen(self.color(event_class), width=width, alpha=alpha, style=style)
+        Resolved per SERIES, never per layer: an explained detection takes the
+        hue of the pulse that explains it, and a layer's own role is only the
+        fallback for a series that carries none.
+        """
+        if isinstance(layer, PointLayer) and series < len(layer.series):
+            return layer.series[series].role or layer.role
+        return layer.role
+
+    def mark_pen(self, layer: Layer, series: int = 0):
+        """Pen for a full-height point line: hue from the category, dash from
+        the evidence."""
+        observed = True
+        if isinstance(layer, PointLayer) and series < len(layer.series):
+            observed = layer.series[series].observed
+        return theme.annotation_pen(
+            self.role(layer, series),
+            width=theme.LW_THIN,
+            observed=observed,
+            unvalidated=self.unvalidated,
+            alpha=MARK_ALPHA,
+        )
+
+    def edge_pen(self, layer: Layer):
+        """Pen for a span's two full-height edges.
+
+        Solid and opaque whatever the fill does.  In direct sun the fill is
+        near-invisible and these lines are the whole reading of where the span
+        starts and stops.
+        """
+        return theme.annotation_pen(
+            layer.role,
+            width=theme.LW_THIN,
+            unvalidated=self.unvalidated,
+            alpha=MARK_ALPHA,
+        )
+
+    def fill_alpha(self, layer_id: str, surface: str = SURFACE_TRACE) -> float:
+        base = SPAN_FILL_ALPHA[theme.current_theme()]
+        base *= float(SURFACE_STYLE[surface]["fill"])
+        if layer_id in LOW_FILL_LAYERS:
+            base *= LOW_FILL_SCALE
+        return base
+
+    def fill_brush(self, layer: Layer, surface: str = SURFACE_TRACE):
+        return theme.annotation_brush(
+            layer.role,
+            self.fill_alpha(layer.id, surface),
+            unvalidated=self.unvalidated,
+        )
+
+    def color(self, layer: Layer, series: int = 0) -> str:
+        return theme.annotation_color(self.role(layer, series))
+
+    # --- what the reader asks of a position -------------------------------
+
+    def nearest(self, t: float):
+        """``(layer, series, row)`` closest to `t` among the switched-on layers."""
+        if self.bundle is None or not self.drawable:
+            return None
+        return self.bundle.nearest(t, self.active_ids())
+
+    def step(self, t: float, forward: bool = True):
+        """``(layer, series, row)`` first after (or before) `t`."""
+        if self.bundle is None:
+            return None
+        return self.bundle.step(t, forward, self.active_ids())
 
     # --- what the badge has to say ---------------------------------------
 
     def badge(self) -> tuple[str, str, str]:
         """``(text, token, tooltip)`` for the annotation status chip.
 
-        This is the other half of the promise that an unvalidated alignment
-        is never shown quietly.  The chip is always present while a table is
-        loaded -- there is no state in which the overlay is on screen and the
-        reader has to go looking for its provenance.
+        This is the other half of the promise that an unvalidated fit is never
+        shown quietly.  The chip is always present while a bundle is loaded --
+        there is no state in which annotations are on screen and the reader has
+        to go looking for their provenance.
         """
-        if self.table is None:
+        if self.bundle is None:
             return ("", "fg.muted", "")
-        header = self.table.header
-        fit = header.fit_summary() or "no fit parameters in the header"
+        fit_line = self.bundle.meta.alignment
+        fit = fit_line.fit_summary() or "no fit parameters in the metadata"
         if self.recording_mismatch:
             return (
                 "WRONG RECORDING",
                 "danger",
-                f"This alignment was fitted against {self.recording_mismatch}, "
-                f"not against the open file.\nEvery annotation is in the wrong "
-                f"place.\n{fit}",
+                f"This bundle was fitted against {self.recording_mismatch}, "
+                f"not against the open file.\nEvery annotation would be in the "
+                f"wrong place, so none is drawn.\n{fit}",
             )
-        trust = header.trust
+        trust = self.trust
         if trust == TRUST_UNVALIDATED:
             why = (
-                "validated=0 in the header"
-                if header.validated is not None
-                else "no validated key in the header"
+                "validated is not an explicit true"
+                if fit_line.validated is not None
+                else "no validated key in [alignment]"
             )
             return (
                 "UNVALIDATED",
@@ -432,14 +641,14 @@ class AnnotationLayer(QObject):
                 f"The alignment fit was never validated ({why}).\n"
                 f"Every annotation is positioned by that fit, so if it is "
                 f"wrong they are all wrong and still look plausible.\n"
-                f"Lines are drawn broken to say so.\n{fit}",
+                f"Lines are drawn broken and fills hatched to say so.\n{fit}",
             )
         if trust == TRUST_WARN:
             return (
                 "WARNINGS",
                 "accent",
                 "The alignment is validated but the writer recorded warnings:\n"
-                + "\n".join(f"• {w}" for w in header.warnings)
+                + "\n".join(f"• {w}" for w in fit_line.warnings)
                 + f"\n{fit}",
             )
         return ("validated", "success", f"Alignment validated.\n{fit}")
@@ -447,13 +656,64 @@ class AnnotationLayer(QObject):
 
 _EMPTY = np.empty(0, dtype=np.float64)
 
+#: What a `stepMode='center'` curve is handed when it has nothing to draw.
+#: pyqtgraph requires ``len(x) == len(y) + 1`` in that mode, so a pair of
+#: empty arrays raises rather than clearing.
+_EMPTY_STEP_X = np.zeros(1, dtype=np.float64)
+
+
+def _span_arrays(layer: SpanLayer, t0: float, t1: float, pixels: int) -> tuple:
+    """Window and merge one span layer into the two x arrays a plot draws."""
+    s, e, _rows, _n = windowing.window_spans(
+        layer.starts, layer.ends, layer.max_end, t0, t1, layer.disjoint
+    )
+    if s.size == 0:
+        return _EMPTY, _EMPTY, 0, 0
+    tol = (t1 - t0) / pixels if pixels > 0 and t1 > t0 else 0.0
+    out_s, out_e, _first, total = windowing.merge_spans(s, e, tol)
+    bars = int(out_s.size)
+    fill_x = np.empty(2 * bars, dtype=np.float64)
+    fill_x[0::2] = out_s
+    fill_x[1::2] = out_e
+    edge_x = np.empty(4 * bars, dtype=np.float64)
+    edge_x[0::4] = out_s
+    edge_x[1::4] = out_s
+    edge_x[2::4] = out_e
+    edge_x[3::4] = out_e
+    return fill_x, edge_x, bars, total
+
+
+def mark_time(layer: Layer, series: int, row: int) -> float:
+    """The time of one row of one layer, whatever kind the layer is.
+
+    One shape for every kind, so the hover readout and the step key do not
+    each need a type switch.  A span reports where it *starts*: that is the
+    edge the step key should put on screen.
+    """
+    if isinstance(layer, PointLayer):
+        return float(layer.series[series].times[row])
+    if isinstance(layer, SpanLayer):
+        return float(layer.starts[row])
+    if isinstance(layer, StepTrack):
+        return float(layer.times[row])
+    raise TypeError(f"{type(layer).__name__} carries no times")
+
+
+def describe_mark(layer: Layer, series: int, row: int) -> str:
+    """One line about one row, for the pointer readout or a tool tip."""
+    if isinstance(layer, PointLayer):
+        return layer.describe(series, row)
+    if isinstance(layer, SpanLayer):
+        return layer.describe(row)
+    return f"{layer.label}, t {mark_time(layer, series, row):.6f} s"
+
 
 def _passive(item) -> None:
     """Make a plot item invisible to the mouse.
 
     pyqtgraph hands every `PlotCurveItem` and `ScatterPlotItem` the full set
-    of accepted mouse buttons, so an annotation line lying under the pointer
-    is an item the scene will offer the press to before the view box sees it
+    of accepted mouse buttons, so an annotation lying under the pointer is an
+    item the scene will offer the press to before the view box sees it
     -- and a rubber band drag that starts on an event is exactly the drag a
     reader is most likely to make.  An annotation states where something is;
     it is not a control.
@@ -463,12 +723,13 @@ def _passive(item) -> None:
 
 
 class EventOverlay:
-    """The annotation lines of one plot.
+    """The annotations of one plot.
 
-    Not a `pg.GraphicsObject`: it is a small controller over one curve item
-    (plus, for predicted classes, one scatter item) per event class.  Letting
-    pyqtgraph own the items means the numpy array goes straight into
-    ``arrayToQPath`` and no Python loop ever sees an event.
+    Not a `pg.GraphicsObject`: it is a small controller over pyqtgraph's own
+    items -- one curve per point series, one fill and one edge curve per span
+    layer, one scatter per predicted series.  Letting pyqtgraph own them means
+    the numpy array goes straight into ``arrayToQPath`` and no Python loop
+    ever sees a row.
     """
 
     def __init__(self, plot, layer: AnnotationLayer, surface: str = SURFACE_TRACE):
@@ -478,89 +739,158 @@ class EventOverlay:
         #: which of the three surfaces this overlay draws on; the layer's
         #: per-surface switch is read through it
         self.surface = surface
-        self.alpha = float(style["alpha"])
-        self.spans = (style["measured"], style["predicted"])
+        #: 0.0 on the spectrogram, where an opaque image would swallow the
+        #: fill; see `SURFACE_STYLE`.  No fill item is built at all then.
+        self.fill_scale = float(style["fill"])
         self.wants_caps = bool(style["caps"])
-        self.curves: dict[tuple[str, str], pg.PlotCurveItem] = {}
-        self.caps: dict[tuple[str, str], pg.ScatterPlotItem] = {}
+        #: z of this surface's point lines and span edges
+        self.mark_z = float(style["mark_z"])
+        self.cap_z = self.mark_z + 1.0
+        #: point marks, keyed ``(layer id, series index)``
+        self.marks: dict[tuple[str, int], pg.PlotCurveItem] = {}
+        #: hollow diamond caps on the predicted series, same keys
+        self.caps: dict[tuple[str, int], pg.ScatterPlotItem] = {}
+        #: span interiors and span edges, keyed by layer id
+        self.fills: dict[str, pg.PlotCurveItem] = {}
+        self.edges: dict[str, pg.PlotCurveItem] = {}
         self._keys: tuple = ()
         #: what was last drawn: view range, pixel budget, layer revision
         self._drawn: Optional[tuple] = None
-        #: classes whose curve is currently empty, so that clearing one that
-        #: is already clear costs nothing.  Most classes are off screen most
-        #: of the time, and setData() is not free even with nothing in it.
+        #: keys whose items are currently empty, so that clearing one that is
+        #: already clear costs nothing.  Most layers are off or off screen
+        #: most of the time, and setData() is not free even with nothing in it.
         self._blank: set = set()
         view = plot.getViewBox()
         if view is not None:
-            # a y-only zoom changes how tall every line has to be, and a
+            # a y-only zoom changes how tall every mark has to be, and a
             # resize changes the pixel budget the decimation is cut to
             view.sigRangeChanged.connect(self._view_changed)
             view.sigResized.connect(self._view_changed)
 
     # --- items ------------------------------------------------------------
 
+    def _wanted(self) -> tuple:
+        """The draw keys the loaded bundle asks for, in bundle order.
+
+        A `StepTrack` contributes none.  The control track is a held value,
+        not an instant or an interval, and a staircase across a waveform lane
+        would be a second y axis nobody asked for -- it belongs in its own
+        panel sharing the time axis.  It still has a toggle, so the chip can
+        say the layer exists.
+        """
+        bundle = self.layer.bundle
+        if bundle is None:
+            return ()
+        keys = []
+        for layer in bundle:
+            if isinstance(layer, PointLayer):
+                keys.extend(("point", layer.id, i) for i in range(len(layer.series)))
+            elif isinstance(layer, SpanLayer):
+                keys.append(("span", layer.id, 0))
+        return tuple(keys)
+
     def rebuild(self) -> None:
-        """Match the item set to the loaded table."""
-        table = self.layer.table
-        keys = tuple(c.key for c in table) if table is not None else ()
+        """Match the item set to the loaded bundle."""
+        keys = self._wanted()
         if keys == self._keys:
             self.polish()
             return
-        for key in list(self.curves):
-            if key in keys:
-                continue
-            self.plot.removeItem(self.curves.pop(key))
-            cap = self.caps.pop(key, None)
-            if cap is not None:
-                self.plot.removeItem(cap)
-        for key in keys:
-            if key in self.curves:
-                continue
-            event_class = table[key]
-            curve = pg.PlotCurveItem(
-                connect="pairs", antialias=False, skipFiniteCheck=True
-            )
-            # Above the traces, below the crosshair and the playback cursor:
-            # an annotation must not hide where the sound is playing.
-            curve.setZValue(15)
-            _passive(curve)
-            self.plot.addItem(curve, ignoreBounds=True)
-            self.curves[key] = curve
-            if self.wants_caps and not event_class.measured:
-                cap = pg.ScatterPlotItem(
-                    symbol="d", size=theme.S8, pxMode=True, hoverable=False
+        self.clear()
+        bundle = self.layer.bundle
+        for kind, layer_id, series in keys:
+            layer = bundle[layer_id]
+            if kind == "point":
+                curve = pg.PlotCurveItem(
+                    connect="pairs", antialias=False, skipFiniteCheck=True
                 )
-                cap.setZValue(16)
-                _passive(cap)
-                self.plot.addItem(cap, ignoreBounds=True)
-                self.caps[key] = cap
+                curve.setZValue(self.mark_z)
+                _passive(curve)
+                self.plot.addItem(curve, ignoreBounds=True)
+                self.marks[(layer_id, series)] = curve
+                if self.wants_caps and not layer.series[series].observed:
+                    cap = pg.ScatterPlotItem(
+                        symbol="d", size=theme.S8, pxMode=True, hoverable=False
+                    )
+                    cap.setZValue(self.cap_z)
+                    _passive(cap)
+                    self.plot.addItem(cap, ignoreBounds=True)
+                    self.caps[(layer_id, series)] = cap
+            else:
+                if self.fill_scale > 0.0:
+                    # pen=None is not decoration: a stepMode curve with a pen
+                    # strokes its baseline across every gap and leaves a rule
+                    # that reads as a grid line.  stepMode is set on the first
+                    # setData rather than here, because the constructor's empty
+                    # arrays fail its own len(x) == len(y) + 1 check.
+                    fill = pg.PlotCurveItem(
+                        pen=None,
+                        antialias=False,
+                        skipFiniteCheck=True,
+                        fillLevel=0.0,
+                    )
+                    fill.setZValue(FILL_Z)
+                    _passive(fill)
+                    self.plot.addItem(fill, ignoreBounds=True)
+                    self.fills[layer_id] = fill
+                edge = pg.PlotCurveItem(
+                    connect="pairs", antialias=False, skipFiniteCheck=True
+                )
+                edge.setZValue(self.mark_z)
+                _passive(edge)
+                self.plot.addItem(edge, ignoreBounds=True)
+                self.edges[layer_id] = edge
         self._keys = keys
         self._drawn = None
         self._blank = set()
         self.polish()
 
     def polish(self) -> None:
-        """Re-resolve every pen from the active theme and trust state."""
-        table = self.layer.table
-        if table is None:
+        """Re-resolve every pen and brush from the active theme and trust state.
+
+        Called on a theme switch and after a rebuild, never from `update_plot`:
+        resolving a colour is a dictionary walk and a QColor, and doing it per
+        redraw would put it on the pan path of all 32 lanes.
+        """
+        bundle = self.layer.bundle
+        if bundle is None:
             return
-        for key, curve in self.curves.items():
-            event_class = table.get(key)
-            if event_class is None:
+        for (layer_id, series), curve in self.marks.items():
+            layer = bundle.get(layer_id)
+            if layer is None:
                 continue
-            curve.setPen(self.layer.line_pen(event_class, self.alpha))
-            cap = self.caps.get(key)
+            curve.setPen(self.layer.mark_pen(layer, series))
+            cap = self.caps.get((layer_id, series))
             if cap is not None:
-                color = self.layer.color(event_class)
                 # hollow, always: a filled dot reads as a measurement
                 cap.setBrush(pg.mkBrush(None))
-                cap.setPen(theme.pen(color, width=theme.LW_THIN, alpha=self.alpha))
+                cap.setPen(
+                    theme.pen(
+                        self.layer.color(layer, series),
+                        width=theme.LW_THIN,
+                        alpha=MARK_ALPHA,
+                    )
+                )
+        for layer_id, edge in self.edges.items():
+            layer = bundle.get(layer_id)
+            if layer is None:
+                continue
+            edge.setPen(self.layer.edge_pen(layer))
+            fill = self.fills.get(layer_id)
+            if fill is not None:
+                fill.setBrush(self.layer.fill_brush(layer, self.surface))
 
     def clear(self) -> None:
-        for item in list(self.curves.values()) + list(self.caps.values()):
+        for item in (
+            list(self.marks.values())
+            + list(self.caps.values())
+            + list(self.fills.values())
+            + list(self.edges.values())
+        ):
             self.plot.removeItem(item)
-        self.curves = {}
+        self.marks = {}
         self.caps = {}
+        self.fills = {}
+        self.edges = {}
         self._keys = ()
         self._drawn = None
         self._blank = set()
@@ -580,9 +910,27 @@ class EventOverlay:
         pixels = int(view.width() * ratio)
         return pixels if pixels >= MIN_PIXELS else DEFAULT_PIXELS
 
+    def cap_y(self, y0: float, y1: float) -> float:
+        """Where the diamond cap on a predicted mark is centred.
+
+        Not `y1`.  A `pxMode` scatter is centred on its data point, so a cap
+        sitting on the top of the view box is cut in half by it and renders as
+        a chevron -- which is a different glyph, and the glyph is the whole
+        difference between predicted and observed.  Dropped by half the
+        symbol plus its pen, converted through the view box's own height so
+        the inset stays a fixed number of pixels at any zoom.
+        """
+        view = self.plot.getViewBox()
+        height = float(view.height()) if view is not None else 0.0
+        if height <= 0.0:
+            return y1
+        inset = (theme.S8 / 2.0 + CAP_INSET_PX) * (y1 - y0) / height
+        # a lane shorter than the symbol has no room for a cap anywhere; keep
+        # it inside rather than pushing it out the bottom
+        return y1 - min(inset, (y1 - y0) / 2.0)
+
     def update_plot(self) -> None:
-        table = self.layer.table
-        if table is None or not self.curves:
+        if self.layer.bundle is None or not self._keys:
             return
         # A hidden lane still gets its view box's sigRangeChanged, and
         # redrawing what nobody can see is the whole cost of hiding a channel
@@ -600,90 +948,169 @@ class EventOverlay:
         pixels = self.pixels()
         # A pan reaches an overlay twice -- once through the view box's own
         # sigRangeChanged and once through Panels.update_plots() -- and a
-        # y-only zoom reaches it without moving a single line's x.  setData()
+        # y-only zoom reaches it without moving a single mark's x.  setData()
         # invalidates a QPainterPath and schedules a repaint whatever it is
         # handed, so the cheapest redraw is the one that does not happen.
-        state = (t0, t1, y0, y1, pixels, self.layer.revision)
+        # the view box's own height is in here because `cap_y` is a *pixel*
+        # inset from the top: a lane resized vertically keeps its y range, so
+        # without this the cap would keep the inset of the old height.
+        state = (t0, t1, y0, y1, pixels, view.height(), self.layer.revision)
         if state == self._drawn:
             return
         self._drawn = state
         on = self.layer.surface_enabled(self.surface)
-        height = y1 - y0
-        for key, curve in self.curves.items():
-            cap = self.caps.get(key)
-            drawn = 0
-            if on and self.layer.is_enabled(key):
-                xpairs, drawn, _total = self.layer.window(key, t0, t1, pixels)
-            if drawn == 0:
-                if key not in self._blank:
-                    curve.setData(_EMPTY, _EMPTY)
-                    if cap is not None:
-                        cap.setData([], [])
-                    self._blank.add(key)
-                continue
-            self._blank.discard(key)
-            low, high = self.spans[0 if table[key].measured else 1]
-            segment = np.array([y0 + low * height, y0 + high * height])
-            # xpairs is the layer's cached array, shared with every other
-            # plot in the stack; pyqtgraph keeps a reference and never writes
-            # to it, so one window is one allocation for all 32 lanes.
-            curve.setData(xpairs, np.tile(segment, drawn), connect="pairs")
-            if cap is not None:
-                if drawn <= CAP_LIMIT:
-                    # every second entry of xpairs is one event time
-                    cap.setData(xpairs[::2], np.full(drawn, segment[1]))
-                else:
+        for key in self._keys:
+            kind, layer_id, series = key
+            live = on and self.layer.is_enabled(layer_id)
+            if kind == "point":
+                self._draw_points(key, series, live, t0, t1, y0, y1, pixels)
+            else:
+                self._draw_spans(key, live, t0, t1, y0, y1, pixels)
+
+    def _draw_points(self, key, series, live, t0, t1, y0, y1, pixels) -> None:
+        layer_id = key[1]
+        curve = self.marks[(layer_id, series)]
+        cap = self.caps.get((layer_id, series))
+        xpairs, drawn = _EMPTY, 0
+        if live:
+            xpairs, drawn, _total = self.layer.point_window(
+                layer_id, series, t0, t1, pixels
+            )
+        if drawn == 0:
+            if key not in self._blank:
+                curve.setData(_EMPTY, _EMPTY)
+                if cap is not None:
                     cap.setData([], [])
+                self._blank.add(key)
+            return
+        self._blank.discard(key)
+        # xpairs is the layer's cached array, shared with every other plot in
+        # the stack; pyqtgraph keeps a reference and never writes to it, so one
+        # window is one allocation for all 32 lanes.
+        curve.setData(xpairs, np.tile((y0, y1), drawn), connect="pairs")
+        if cap is not None:
+            if drawn <= CAP_LIMIT:
+                # every second entry of xpairs is one mark's time
+                cap.setData(xpairs[::2], np.full(drawn, self.cap_y(y0, y1)))
+            else:
+                cap.setData([], [])
+
+    def _draw_spans(self, key, live, t0, t1, y0, y1, pixels) -> None:
+        layer_id = key[1]
+        # None on the spectrogram, which paints no interior at all
+        fill = self.fills.get(layer_id)
+        edge = self.edges[layer_id]
+        fill_x, edge_x, bars = _EMPTY, _EMPTY, 0
+        if live:
+            fill_x, edge_x, bars, _total = self.layer.span_window(
+                layer_id, t0, t1, pixels
+            )
+        if bars == 0:
+            if key not in self._blank:
+                if fill is not None:
+                    fill.setData(_EMPTY_STEP_X, _EMPTY, stepMode="center", fillLevel=y0)
+                edge.setData(_EMPTY, _EMPTY)
+                self._blank.add(key)
+            return
+        self._blank.discard(key)
+        edge.setData(edge_x, np.tile((y0, y1), 2 * bars), connect="pairs")
+        if fill is None:
+            return
+        # 2n bin edges, 2n-1 bins: the odd bins are the gaps between spans and
+        # sit exactly at the fill level, so they enclose no area.
+        fill_y = np.full(2 * bars - 1, y0, dtype=np.float64)
+        fill_y[0::2] = y1
+        fill.setData(fill_x, fill_y, stepMode="center", fillLevel=y0)
 
 
 # --- legend ------------------------------------------------------------------
 #
-# The chips in the parameter bar are the only legend the overlay has, so their
-# icons are drawn with the same pens the plot uses rather than with a generic
-# swatch.  A reader can then match a line on screen to a chip by looking at
-# it, instead of by remembering a rule.
+# The chips in the parameter bar are the only legend the annotations have, so
+# their icons are drawn with the same pens and brushes the plot uses rather
+# than with a generic swatch.  A reader can then match a mark on screen to a
+# chip by looking at it, instead of by remembering a rule.
 
 #: Icon size of a legend chip, in logical pixels.
 LEGEND_W = 18
 LEGEND_H = 12
 
 
-def _legend_pixmap(color: str, measured: bool, unvalidated: bool) -> QPixmap:
+def _mark_style(observed: bool, unvalidated: bool):
+    if not observed:
+        return Qt.DashLine
+    return Qt.DashLine if unvalidated else Qt.SolidLine
+
+
+def _legend_pixmap(color: str, observed: bool, unvalidated: bool) -> QPixmap:
     pixmap = QPixmap(LEGEND_W, LEGEND_H)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing, False)
-    if unvalidated:
-        style = Qt.DashLine if measured else Qt.DotLine
-    else:
-        style = Qt.SolidLine if measured else Qt.DashLine
-    width = theme.LW_THIN if measured else theme.LW_HAIRLINE
-    painter.setPen(theme.pen(color, width=width, style=style, cosmetic=False))
+    painter.setPen(
+        theme.pen(
+            color,
+            width=theme.LW_THIN,
+            style=_mark_style(observed, unvalidated),
+            cosmetic=False,
+        )
+    )
     x = LEGEND_W // 2
-    if measured:
-        # full height, exactly as it is drawn in the lane
-        painter.drawLine(x, 0, x, LEGEND_H - 1)
-    else:
-        # the stub, with its hollow cap
-        painter.drawLine(x, 3, x, LEGEND_H - 1)
+    # Full height for BOTH, top row to bottom row.  The chip is the only
+    # legend the marks have, so a short predicted line here would teach the
+    # reader a stub the lane never draws -- and a per-kind y allocation is
+    # exactly what the drawing rule forbids.  Predicted is told apart by the
+    # dash and the cap, never by height.
+    painter.drawLine(x, 0, x, LEGEND_H - 1)
+    if not observed:
         painter.setPen(theme.pen(color, width=theme.LW_HAIRLINE, cosmetic=False))
         painter.drawRect(QRect(x - 2, 1, 4, 4))
     painter.end()
     return pixmap
 
 
-def legend_icon(color: str, measured: bool, unvalidated: bool = False) -> QIcon:
-    """A chip icon drawn with the pen the overlay itself uses."""
-    return QIcon(_legend_pixmap(color, measured, unvalidated))
+def legend_icon(color: str, observed: bool = True, unvalidated: bool = False) -> QIcon:
+    """A point chip's icon, drawn with the pen the overlay itself uses."""
+    return QIcon(_legend_pixmap(color, observed, unvalidated))
+
+
+def _span_pixmap(color: str, alpha: float, unvalidated: bool) -> QPixmap:
+    pixmap = QPixmap(LEGEND_W, LEGEND_H)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, False)
+    inset = 3
+    # the chip says what the lane says: a weak interior between two full
+    # height edges, so a reader who can only see the edges outdoors still
+    # matches the chip to the mark
+    interior = theme.brush(color, alpha=alpha)
+    if unvalidated:
+        interior.setStyle(Qt.BDiagPattern)
+    painter.fillRect(QRect(inset, 0, LEGEND_W - 2 * inset, LEGEND_H), interior)
+    painter.setPen(
+        theme.pen(
+            color,
+            width=theme.LW_THIN,
+            style=Qt.DashLine if unvalidated else Qt.SolidLine,
+            cosmetic=False,
+        )
+    )
+    painter.drawLine(inset, 0, inset, LEGEND_H - 1)
+    painter.drawLine(LEGEND_W - inset - 1, 0, LEGEND_W - inset - 1, LEGEND_H - 1)
+    painter.end()
+    return pixmap
+
+
+def span_icon(color: str, alpha: float, unvalidated: bool = False) -> QIcon:
+    """A span chip's icon: two edges and the interior between them."""
+    return QIcon(_span_pixmap(color, alpha, unvalidated))
 
 
 def swatch_pixmap(color: str) -> QPixmap:
-    """A filled square in an event's colour, with a hairline ring.
+    """A filled square in a layer's colour, with a hairline ring.
 
     The ring is what makes a dark swatch visible on the dark theme's chrome
     and a light one visible on the daylight theme's.  Drawn on the same
-    canvas as `legend_icon`, so the event chips and the status chips sit on
-    one baseline instead of two.
+    canvas as `legend_icon`, so every chip sits on one baseline.
     """
     pixmap = QPixmap(LEGEND_W, LEGEND_H)
     pixmap.fill(Qt.transparent)

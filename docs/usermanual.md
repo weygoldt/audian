@@ -224,95 +224,185 @@ selected channels instead, which is what selecting a range of lanes with
 shift-click is for.
 
 
-## Annotations from an alignment CSV
+## Annotations from a session bundle
 
-An **alignment file** says when something happened during the recording —
-one row per emitted stimulus pulse, already mapped onto the recording's
-clock. Audian draws those rows as vertical lines over every trace and every
-spectrogram, so you can see whether an event lands where it should.
+A **session bundle** is what a fakefish run writes beside its recording: a
+`*_metadata.toml` naming the recording and carrying the fit that maps the
+device's clock onto it, plus one CSV per kind of row — the trials of the
+protocol, every pulse the stimulator emitted, every pulse the recording was
+found to hold, the localization runs, the session events, and the control
+settings. Audian reads the lot and draws it over the recording.
 
 ```sh
-audian -a alignment.csv DR0000_0087.wav
+audian -a PULS0002_metadata.toml DR0000_0087.wav
+audian -a /data/exp2/PULS0002 DR0000_0087.wav      # the directory works too
 ```
 
-Without `-a`, Audian looks for `<recording>.alignment.csv`,
-`<recording>-alignment.csv` or a plain `alignment.csv` next to the
-recording, and opens it only if its `#recording=` header names *that*
-recording. A stray alignment file from a neighbouring experiment is exactly
-the mistake that would put every line in the wrong place, so the check is
-not optional. It is never silent either: the status bar says what was
-opened and how many events it holds.
+Without `-a`, Audian looks beside the recording for a `*_metadata.toml` whose
+`[alignment]` block names *that* recording, and opens it only then. A stray
+bundle from a neighbouring experiment is exactly the mistake that would put
+every mark in the wrong place while looking entirely normal, so the check is
+not optional. It is never silent either: the status bar says what was opened,
+what it holds, and anything that did not add up.
 
-Only the `t_rec_s` column positions anything — seconds from frame 0 of the
-recording. Everything else is either provenance or the evidence behind one
-row.
+Positions come from the `recording_time_s` column — seconds from frame 0 of
+the recording — and from nothing else. Everything else in a row is either
+provenance or the evidence behind it, and both reach you through the pointer
+readout and the tool tips rather than through the drawing.
+
+**Every mark is full height.** A span is bounded in x and in x only: its
+interior is tinted under the waveform and its start and end are drawn as two
+full-height lines over it. A point is one full-height line. There are no
+tracks, no lanes within a lane and no stacking, on any surface — layers
+overlap, which is why switching them on and off is the gesture the panel is
+built around.
 
 ### The Annotations panel
 
-The bottom bar grows an **Annotations** group while a file is loaded:
+The bottom bar grows an **Annotations** group while a bundle is loaded:
 
-- **Source** — the file, the channel the fit was made against, and a badge
+- **Source** — the session, the channel the fit was made against, and a badge
   saying how far its positions may be believed. Hover the badge for the fit
   itself: scale, offset and drift.
 - **Show** — the master switch, then one chip per place the marks can go:
   **Traces**, **Spectrograms**, **Navigator**. The same three sit in
-  *View ▸ Annotations*, and the two always agree.
-- **Classes** — one chip per event label and one per status. Colour is the
-  event; the chips are drawn with the same pens the plot uses, so the strip
-  doubles as the legend. Click one to hide that class.
-- **Pointer** — the annotation nearest the mouse, with its sequence number,
-  trial, and how far the detection sat from the prediction.
+  *View ▸ Annotations*, and the two always agree. The rest of the row is the
+  **pointer readout**: the span the pointer is standing *inside* and how far
+  into it you are, then the nearest instant and how far away it is. A trial
+  you are in the middle of is reported as a trial you are in the middle of,
+  never as a mark tens of seconds away.
+- **Sent** and **Heard** — one chip per layer of the bundle. Sent is what the
+  stimulator was told to do, Heard is what the recording turned out to hold
+  and what the device logged about itself. The chips are drawn with the pens
+  and brushes the plot uses, so a span layer's chip looks like a span and a
+  point layer's like a tick, and the strip doubles as the legend. Their
+  counts are in the tool tips.
+
+You will usually want one or two layers at a time, so the chips work the way
+the channel rail does:
+
+- **Click** a chip and that layer is the only one drawn.
+- **Click it again** and the set you had before the solo comes back — exactly
+  that set, not every layer there is. Three of the ten are off to begin with
+  for good reasons (localization runs alone cover 59 % of a session), and a
+  round trip through a solo must not be the thing that switches them on.
+- **Ctrl- or shift-click** to switch one layer on or off beside the others.
+- **All**, at the head of the Sent row, is the way to every layer at once;
+  `Shift+F8` does the same from the keyboard, and its tool tip says how many
+  layers are currently hidden.
+
+Every layer also has an entry in *View ▸ Annotations ▸ Layers*, carrying its
+name and its row count, and the menu and the chips always agree.
+
+Which layers you left on is remembered between sessions, per layer, together
+with the three surface chips. A layer the settings have never seen — one a
+newer audian added, or one this bundle carries and the last one did not —
+comes up as the bundle says it should rather than silently off. The `F8`
+master is deliberately *not* remembered: it is a glance, not a setting.
 
 `F8` hides and shows the whole overlay. `n` and `Shift+N` step the view to
-the next and previous annotation of a class that is shown — which is how you
+the next and previous annotation of a layer that is shown — which is how you
 check the overlay against the audio: step to an event, zoom in, and see
 whether the line sits on the pulse.
 
+### The control track
+
+The **Controls** chip is not an overlay. The stimulator's settings are not
+events, they are values held between changes, so switching that chip on opens
+a strip of its own between the lanes and the time axis, sharing the same time
+axis and nothing else. It is off to begin with and takes no room at all until
+you ask for it.
+
+Each setting the session actually varied gets a band with its own scale, and
+the band's label carries the real numbers, because a tick rate and a
+randomness share no axis with each other or with a waveform. A setting that
+never changed gets no band and the line under the strip says which one and
+what it was held at — the difference between a channel the device never
+wrote and a channel that simply held still is worth seeing.
+
+The line is a **staircase**: a value stands until the next change row, however
+far away that is. A window in the middle of a quiet half-minute shows the
+setting that was in force there, not a blank. Where the line is **missing**,
+nothing was in force — at the very start, before the device had read the
+receiver, or wherever the log recorded no value. That is not the same as a
+setting of zero, and it is not drawn like one.
+
 ### The navigator strip
 
-The navigator shows the whole session at once, so a line down the lane there
-would bury the waveform it exists to show. The marks sit in a band along the
-top edge instead, and read as a ruler of events: where the stimulation was
-running, and where it stopped.
-
-Observed and predicted get **separate stripes** rather than long and short
-marks in one. A navigator row is about sixty pixels, so the band is eight,
-and neither a dash pattern nor a half-length mark survives that. Two stripes
-do — and they answer the question the strip is good for: *is there a stretch
-of this session where the fit predicted pulses and nothing was ever found?*
-That reads as a lower stripe with nothing above it.
+The navigator shows the whole session at once, and it draws exactly what the
+lanes draw: the same full-height marks, in the same hues, spanning the whole
+row. That is what makes it readable as a map — a stretch of session with no
+volley trials in it is a stretch with no volley ink in it, and the region
+handle tells you where you are looking.
 
 Turn it off with the **Navigator** chip if you would rather see the bare
 envelope.
 
 ### Observed and predicted are drawn differently
 
-A **matched** row was found in the recording. It is drawn as a solid line
-across the whole lane.
+A **matched** row was found in the recording. It is drawn as a solid
+full-height line.
 
-An **unmatched** or **outside** row was not. Its time is where the fit says
-the pulse should be, and nothing in the recording confirms it — which is
-exactly why its `t_det_s` column is empty. It is drawn as a short dashed
-stub near the top of the lane with a hollow diamond cap, so it can never be
-mistaken for something that was seen.
+An **unmatched** row was not. Its time is where the fit says the pulse should
+be and nothing in the recording confirms it — which is exactly why its
+`detected_time_s` column is empty. It is drawn full height as well, but
+**dashed**, with a hollow diamond cap at the top, so it can never be mistaken
+for something that was seen. Full height rather than a short stub: the marks
+are bounded in x and only in x, everywhere, and the difference is carried by
+the dash and the cap.
+
+exp2 has 7 predicted pulses out of 2187; exp3 has 629 out of 5281, so on a
+long session this is not a rare corner.
+
+### Where a recording's files are joined
+
+A long recording usually arrives as several files, and Audian opens them as
+one. Where two of them butt together it draws **one thin quiet rule down the
+lane**, in the same ink as the zero line, on every lane and on the navigator.
+It is chrome, not data: it sits under every annotation, and it is there
+whether or not any bundle is loaded, because a join is a fact about the files.
+
+Its position comes from the files themselves, never from a bundle. If the
+loaded bundle declares what the recorder lost at each join, that figure is
+printed beside the rule on the lane you are reading — exp3 declares +32 ms,
++32 ms and −120 ms, and 120 ms is about thirty pulses of a volley. Audian
+states the gap and does not correct for it: no mark is ever shifted by it, and
+a join the loader did not report is never invented. If the bundle names a
+different number of joins than the recording has, nothing is labelled and the
+status bar says why.
+
+### How far to trust the marks in front of you
+
+The badge in the **Source** row carries the fit, and its tool tip carries the
+fit's residual **per region of the recording** — per file where there are
+joins, in eight bins otherwise, with the spread and how many of that region's
+pulses the recording actually confirmed. The one number in the header is not a
+promise about the part you are looking at: exp3 reports a median residual of
+about a microsecond for the whole session, and only 259 of the 874 pulses in
+its last file matched at all. A region whose residual is far outside the fit's
+own match tolerance is said out loud in the status bar when the bundle is
+opened, as well as sitting in the tool tip afterwards.
 
 ### An unvalidated alignment is never shown quietly
 
-Every line's position comes from the scale/offset fit in the file's header.
-If that fit is wrong, every line is in the wrong place *and still looks
-fine*. So when the header says `validated=0` — or carries no `validated` key
-at all — Audian does two things: it badges the panel **UNVALIDATED** in red
-and warns in the status bar, and it draws every line broken instead of
-solid. Observed and predicted stay distinguishable from each other (dashes
-against dots); both stop looking like statements of fact.
+Every mark's position comes from the fit in `[alignment]`. If that fit is
+wrong, every mark is in the wrong place *and still looks fine*. So when
+`validated` is anything other than a real `true` — absent, `false`, or the
+string `"true"`, which is a writer that did not follow the format — Audian
+does two things: it badges the panel **UNVALIDATED** in red and warns in the
+status bar, and it draws every mark broken instead of solid. Observed and
+predicted stay distinguishable from each other; both stop looking like
+statements of fact. A bundle that is validated but whose writer recorded
+warnings badges **WARNINGS**, and the warnings themselves are in the tool tip
+and in the status bar.
 
-An alignment fitted against a different recording badges louder still, as
-**WRONG RECORDING**.
+A bundle fitted against a different recording badges louder still, as **WRONG
+RECORDING**, and nothing is drawn at all.
 
 ### Long sessions
 
-Only what is in the visible time range is drawn, and inside that range
-events closer together than one screen pixel are collapsed to the one line
-they would have painted anyway. A file with half a million events costs a
-few milliseconds a frame, and the count on each chip is always the number of
-events in the file, not the number of lines on screen.
+Only what is in the visible time range is drawn, and inside that range marks
+closer together than one screen pixel are collapsed to the one line they would
+have painted anyway. A session with half a million rows costs a few
+milliseconds a frame, and the count in a chip's tool tip is always the number
+of rows the layer holds, not the number of marks on screen.

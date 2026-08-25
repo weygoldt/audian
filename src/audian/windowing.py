@@ -1,7 +1,7 @@
 """Turning a whole session's annotation arrays into what one view shows.
 
 Every annotation the browser draws is a sorted numpy array that outlives the
-view by orders of magnitude: 2187 pulses, 3022 detections, 36 trials and 1373
+view by orders of magnitude: 2187 pulses, 3398 detections, 36 trials and 1373
 control rows against a 607.104 s recording that is normally shown 1 s at a
 time.  This module is the only place that goes from "the whole array" to "the
 arrays for this window", for each of the three shapes annotations come in --
@@ -18,9 +18,10 @@ reason they live here rather than inside the reader or the plot item.
 The three shapes, and why each needs its own function
 -----------------------------------------------------
 * **Points** (:func:`window_points`, :func:`count_columns`) are instants.
-  They may be decimated to one per pixel column because what is dropped had
-  no pixel of its own -- or, better, counted per column and drawn as density,
-  which drops nothing at all.
+  They are decimated to one per pixel column because what is dropped had no
+  pixel of its own -- or, where a draw path wants it, counted per column and
+  drawn as density, which drops nothing at all.  Only the first is wired up
+  today; :func:`count_columns` says so in its own docstring.
 * **Spans** (:func:`window_spans`, :func:`merge_spans`) have extent.  A span
   intersects the view when it *starts before the view ends and ends after the
   view begins*, which is not one ``searchsorted``, and decimating them is an
@@ -104,10 +105,13 @@ def window_points(
     report the density it is looking at rather than the number of lines
     that survived.
 
-    ``pixels=0`` disables the decimation entirely, which is how the ribbon
-    always calls it: the ribbon changes *representation* when a track gets
-    dense (:func:`count_columns`) instead of dropping marks, so that a count
-    read off the screen is the count in the file.
+    ``pixels=0`` disables the decimation entirely.  The overlay does NOT call
+    it that way -- ``eventoverlay.AnnotationLayer.point_window`` passes a real
+    pixel budget (2054 in a 1400 px window) and does decimate -- so what is on
+    screen is a mark per column, and the count a reader may believe is the
+    returned `total`, never the number of lines drawn.  A layer dense enough
+    for that to matter wants :func:`count_columns` instead, which drops
+    nothing; nothing draws that way yet.
     """
     i0 = int(np.searchsorted(times, t0, side="left"))
     i1 = int(np.searchsorted(times, t1, side="right"))
@@ -128,7 +132,17 @@ def window_points(
 def count_columns(
     times: np.ndarray, t0: float, t1: float, pixels: int
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Per-device-pixel-column event counts.  THE density primitive.
+    """Per-device-pixel-column event counts: the density reading, unbuilt.
+
+    **Nothing in the draw path calls this yet.**  It is the whole of spec §0.2
+    -- "a point layer is never decimated away; ticks when sparse, density when
+    dense", which the direction override still marks as applying -- and until
+    an overlay uses it, a dense layer is drawn by :func:`window_points`, which
+    keeps one mark per pixel column and silently drops the rest.  That is
+    latent on exp2, whose largest series is 1279 rows against a 2054 px
+    budget, and live on exp3, whose unexplained detections are 7912.  Kept
+    rather than deleted for that reason, and said out loud rather than left
+    reading like a primitive something already uses.
 
     Returns ``(columns, counts, total)``: `columns` are the occupied column
     indices (intp, ascending), `counts` the true count in each, `total` the
@@ -181,10 +195,19 @@ def window_spans(
       starts at or after the view's end.  This relies on **`starts` being
       ascending**, which is the load-time invariant for every span layer.
     * ``i0 = searchsorted(max_end, t0, "right")`` where
-      ``max_end = np.maximum.accumulate(ends)`` is computed once at load.
-      `max_end` is non-decreasing by construction *whatever the spans do*, so
-      it is always searchable, and everything before `i0` ends at or before
-      `t0`.
+      ``max_end = np.maximum.accumulate(np.maximum(ends, starts))`` is computed
+      once at load (`layers.SpanLayer.max_end`).  `max_end` is non-decreasing
+      by construction *whatever the spans do*, so it is always searchable, and
+      everything before `i0` reaches no further than `t0`.
+
+      It is the REACH, not the end, and the maximum against `starts` is what
+      makes an inverted row (``end < start``, kept as written by
+      `session._build_trials`) reachable at all: :func:`merge_spans` places its
+      bar at ``[start, start + one pixel]``, so a `max_end` that stopped at the
+      earlier `end` sliced it away at every view that contained it while the
+      whole-file view still drew it.  With ``start=5.0, end=2.0`` the bar was
+      drawn at ``[0, 8]`` and gone at ``[4.5, 5.5]`` -- visible only at the
+      zoom where it could not be read.
 
     When the layer is **disjoint** (``starts[1:] >= ends[:-1]``) `ends` is
     itself non-decreasing, `max_end` equals `ends`, and the slice is exact.
@@ -237,7 +260,9 @@ def window_spans(
     e = ends[i0:i1]
     rows = np.arange(i0, i1, dtype=np.intp)
     if not disjoint:
-        keep = e > t0
+        # `np.maximum` for the same reason `max_end` carries it: an inverted
+        # span reaches its own start, which is where its bar is drawn.
+        keep = np.maximum(e, s) > t0
         s, e, rows = s[keep], e[keep], rows[keep]
     return s, e, rows, int(s.size)
 

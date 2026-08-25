@@ -582,8 +582,8 @@ def test_every_exempt_pair_is_actually_below_the_floor():
 def test_annotation_colors_clear_the_graphic_floor():
     """Every annotation mark is a graphic on a plot ground, in both themes.
 
-    Checked against bg.raised as well as bg.plot: the ribbon's chips and the
-    rail stubs sit on the raised surface, and it is the deepest of the three.
+    Checked against bg.raised as well as bg.plot: the layer chips and the
+    legend icons sit on the raised surface, and it is the deepest of the three.
     """
     for name in theme.THEMES:
         theme.set_theme(name)
@@ -707,41 +707,3 @@ def test_dim_color_constants_are_untouched():
     assert theme.TRACE_DIM_MIX_SPARSE == 0.35
     assert theme.MIN_GRAPHIC_CONTRAST == 3.0
     assert theme.MIN_GRAPHIC_CONTRAST_DAYLIGHT == 4.5
-
-
-def test_the_default_ribbon_stack_fits_a_dense_sixteen_channel_window():
-    """The four default-open tracks, measured, against the 12 % budget.
-
-    Sparse: 1 + 18 + 1 + 18 + 2 + 18 + 1 + 8 = 67 px.
-    Dense:  1 + 12 + 1 + 12 + 2 + 12 + 1 + 6 = 47 px.
-    At sixteen channels in a 900 px stack the ribbon may take 108 px, and the
-    lanes must still clear CHANNEL_DENSE_HEIGHT.
-    """
-    sparse = (
-        theme.RIBBON_GAP
-        + theme.RIBBON_TRACK_H
-        + theme.RIBBON_GAP
-        + theme.RIBBON_TRACK_H
-        + theme.RIBBON_SENT_HEARD_H
-        + theme.RIBBON_TRACK_H
-        + theme.RIBBON_GAP
-        + theme.RIBBON_RULE_H
-    )
-    dense = (
-        theme.RIBBON_GAP
-        + theme.RIBBON_TRACK_H_DENSE
-        + theme.RIBBON_GAP
-        + theme.RIBBON_TRACK_H_DENSE
-        + theme.RIBBON_SENT_HEARD_H
-        + theme.RIBBON_TRACK_H_DENSE
-        + theme.RIBBON_GAP
-        + theme.RIBBON_RULE_H_DENSE
-    )
-    assert sparse == 67
-    assert dense == 47
-    budget = 900
-    assert dense <= theme.RIBBON_MAX_FRACTION * budget
-    assert (budget - dense) // 16 >= theme.CHANNEL_DENSE_HEIGHT
-    # a populated chromatic track is never shorter than the dense height it
-    # would otherwise be squeezed to -- the cap closes tracks, never shrinks
-    assert theme.RIBBON_MIN_CHROMATIC == theme.RIBBON_TRACK_H_DENSE

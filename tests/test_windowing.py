@@ -294,6 +294,50 @@ def test_a_span_that_only_touches_the_edge_is_outside_the_view():
     assert window_spans(starts, ends, max_end, 5.0, 10.1)[3] == 1
 
 
+def test_an_inverted_span_is_found_at_every_zoom_that_contains_its_bar():
+    """It was drawn zoomed out and gone zoomed in, which is the worst of both.
+
+    ``session._build_trials`` keeps a trial whose ``recording_ended_s``
+    precedes its ``recording_time_s`` as written -- swapping the two would
+    invent a bracket over a stretch in which nothing ran -- and `merge_spans`
+    puts its bar at ``[start, start + one pixel]``.  So `max_end` has to carry
+    the REACH, ``maximum.accumulate(maximum(ends, starts))``, or the slice
+    disagrees with the draw: with start 5.0 and end 2.0 the view ``[0, 8]``
+    drew a bar and the view ``[4.5, 5.5]`` -- the one a reader zooms to in
+    order to look at it -- came back empty.
+    """
+    starts = np.array([5.0])
+    ends = np.array([2.0])
+    reach = np.maximum.accumulate(np.maximum(ends, starts))
+    # Not a view starting exactly at 5.0: both edges of `window_spans` are
+    # exclusive, and a span reaching exactly t0 is outside the view whether it
+    # is inverted, zero-length or ordinary.  That rule is not what broke here.
+    for t0, t1 in ((0.0, 8.0), (4.5, 5.5), (4.9, 5.2), (4.999, 6.0)):
+        assert window_spans(starts, ends, reach, t0, t1)[3] == 1, (t0, t1)
+        bars = merge_spans(
+            *window_spans(starts, ends, reach, t0, t1)[:2], (t1 - t0) / 1000.0
+        )
+        assert bars[3] == 1 and float(bars[0][0]) == 5.0
+    for t0, t1 in ((1.0, 3.0), (5.5, 6.0), (0.0, 5.0)):
+        assert window_spans(starts, ends, reach, t0, t1)[3] == 0, (t0, t1)
+
+
+def test_an_inverted_span_does_not_reach_back_over_an_overlapping_neighbour():
+    """The reach fix must not turn a nested layer's mask into a superset.
+
+    ``disjoint=False`` filters on the same reach the slice uses, so a span
+    that really has finished is still dropped and only the inverted one --
+    whose bar is at its own start -- survives.
+    """
+    starts = np.array([0.0, 1.0, 2.0])
+    ends = np.array([100.0, 0.5, 3.0])  # row 1 is inverted, row 0 nests it
+    reach = np.maximum.accumulate(np.maximum(ends, starts))
+    _, _, rows, _ = window_spans(starts, ends, reach, 50.0, 60.0, disjoint=False)
+    assert rows.tolist() == [0]
+    _, _, rows, _ = window_spans(starts, ends, reach, 0.9, 1.1, disjoint=False)
+    assert rows.tolist() == [0, 1]
+
+
 def test_an_empty_layer_windows_to_nothing():
     s, e, rows, total = window_spans(EMPTY, EMPTY, EMPTY, 0.0, 10.0)
     assert s.size == e.size == rows.size == 0 and total == 0

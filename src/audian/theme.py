@@ -173,6 +173,7 @@ __all__ = [
     "trace_symbol_brush",
     "trace_symbol_pen",
     "zero_pen",
+    "join_pen",
     "grid_pen",
     "crosshair_pen",
     "cursor_pen",
@@ -217,17 +218,9 @@ __all__ = [
     "annotation_color",
     "annotation_pen",
     "annotation_brush",
-    "RIBBON_TRACK_H",
-    "RIBBON_TRACK_H_DENSE",
-    "RIBBON_RULE_H",
-    "RIBBON_RULE_H_DENSE",
-    "RIBBON_CTRL_H",
-    "RIBBON_CTRL_H_DENSE",
-    "RIBBON_GAP",
-    "RIBBON_SENT_HEARD_H",
-    "RIBBON_MIN_CHROMATIC",
-    "RIBBON_MAX_FRACTION",
-    "NAV_RIBBON_H",
+    "CONTROL_BAND_H",
+    "CONTROL_BAND_PAD",
+    "CONTROL_NOTE_H",
     # contrast
     "relative_luminance",
     "contrast_ratio",
@@ -495,89 +488,38 @@ sixteen of those beat eight comfortable ones plus a scrollbar.
 SPECTROGRAM_MIN_HEIGHT = 120
 AXIS_LEFT_WIDTH = 56
 
-# --- the annotation ribbon ------------------------------------------------
+# --- the control panel ----------------------------------------------------
 #
-# The ribbon is one session-global strip under the channel stack, holding one
-# row per open track.  Every value below is a device-pixel count, because the
-# ribbon plot's y range is pinned to [0, height_in_device_pixels]: a fraction
-# of a track is then literally a pixel count and the geometry is checkable in
-# a test rather than eyeballed.
-#
-# Two heights per track, sparse and dense, switched on `is_dense(n_visible)`.
-# Sparse is the comfortable case; dense is what sixteen channels leave.
+# The control track is a strip of its own under the channel stack, one band per
+# channel the bundle offers.  Every value below is a device-pixel count,
+# because the panel's y range is pinned to [0, height_in_device_pixels]: a
+# band boundary is then literally a pixel count and checkable in a test.
 
-RIBBON_TRACK_H = 18
-"""Height of a chromatic track (trials, pulses, heard) in a sparse stack, px.
+CONTROL_BAND_H = 28
+"""Height of one channel band in the control panel, px.
 
-Three positional sub-rows have to fit inside it -- see the ``bh`` rule in the
-ribbon geometry -- so 18 px buys 5 px per sub-row plus the gaps between them.
+Measured: a mono 9 pt line is 18 px tall (`mono_metrics(SIZE_SMALL_PT)`), and
+the band has to hold that scale label at its top-left corner *and* leave the
+staircase somewhere to travel.  At 28 px the label overlaps only the leftmost
+~140 px of the band -- under a tenth of a 1400 px plot -- and the staircase
+keeps 22 px of travel between its minimum and its maximum, which is enough for
+the 21 distinct tick rates of exp2 to land on distinguishable rows.
 """
 
-RIBBON_TRACK_H_DENSE = 12
-"""The same track at sixteen channels, px.  The floor, not a preference.
+CONTROL_BAND_PAD = 3
+"""Inset of a band's data range from its top and bottom edge, px.
 
-Below 12 px a hue in a bar is no longer namable: the sub-rows fall to 3 px
-each and a 3 px chip of colour is judged against its surround rather than
-identified, which is the whole reason the ribbon carries the category.
+Without it a value at the channel's maximum is drawn *on* the next band's
+floor rule and reads as belonging to that channel.
 """
 
-RIBBON_RULE_H = 8
-"""Height of an achromatic track (runs, log) in a sparse stack, px.
+CONTROL_NOTE_H = 18
+"""Height of the control panel's caption row, px: one mono 9 pt line.
 
-Half a chromatic track because it has no hue to name and no sub-rows to
-separate -- a bracket and a comb of ticks read fine at 8 px.
-"""
-
-RIBBON_RULE_H_DENSE = 6
-
-RIBBON_CTRL_H = 32
-"""Height of the control track, px.  It is the one track carrying a *value*.
-
-A staircase needs vertical room or every step lands in the same pixel; 32 px
-gives the tick-rate band about 24 px of travel between its two scale rules.
-"""
-
-RIBBON_CTRL_H_DENSE = 22
-
-RIBBON_GAP = 1
-"""Separation between two adjacent tracks, px.  One pixel, and no more.
-
-The tracks are meant to be read as one strip with internal structure, not as
-six stacked plots.  The only wider separator is the SENT|HEARD rule.
-"""
-
-RIBBON_SENT_HEARD_H = 2
-"""Height of the rule between what was commanded and what was recorded, px.
-
-Two pixels, drawn in `edge`, and it is the most important line in the ribbon:
-the pulse comb hangs down to it and the detection comb grows up to it, so a
-matched pulse is a tick answered by a tick across this gutter and a predicted
-one is a tick with nothing on the far side.
-"""
-
-RIBBON_MIN_CHROMATIC = 12
-"""A chromatic track that has data is never drawn shorter than this, px.
-
-The height cap closes whole tracks rather than squeezing them.  A 6 px trials
-track would still be *there*, which is worse than being honestly closed with
-its count showing in the rail stub.
-"""
-
-RIBBON_MAX_FRACTION = 0.12
-"""Largest share of the stack's height the ribbon may take.
-
-The waveform is the instrument; the log is the annotation on it.  At the
-16-channel case this leaves every lane above CHANNEL_DENSE_HEIGHT, which is
-the constraint that actually sets the number: the ribbon closes its
-lowest-priority tracks rather than push a channel below the scroll.
-"""
-
-NAV_RIBBON_H = 20
-"""Height of the navigator's mini-ribbon row, px.
-
-Drawn once for the whole session, not once per channel: the log is a fact
-about the recording, and sixteen copies of it would be sixteen claims where
-there is one.  Added to NAVIGATOR_HEIGHT only while a bundle is loaded.
+The row carries the track's own `tip`, which is where a channel the loader
+withheld says so -- exp2's `volley_amplitude` is constant at 1.0 for the whole
+session and gets no band.  A withheld channel that is simply absent looks like
+a channel the device never wrote.
 """
 
 MOTION_MS = 150  # 120-180 ms ease-out band; nothing animates the data
@@ -874,6 +816,18 @@ def trace_symbol_pen(role: str) -> QPen:
 
 def zero_pen() -> QPen:
     """Pen for the zero line of a waveform: quiet, never competing with data."""
+    return pen("trace.zero", width=LW_HAIRLINE)
+
+
+def join_pen() -> QPen:
+    """Pen for the rule where two files of one recording butt together.
+
+    The same ink and the same hairline as :func:`zero_pen`, deliberately: a
+    join is chrome, a fact about the FILES rather than about the session, and
+    it must read like the zero line rather than like an event.  Nothing about
+    it is an annotation, so it carries no annotation hue -- a coloured rule
+    at a join would be read as a mark somebody fitted.
+    """
     return pen("trace.zero", width=LW_HAIRLINE)
 
 
@@ -1318,7 +1272,7 @@ def annotation_pen(
         the fact that nothing answers it in the HEARD track).
     unvalidated
         ``True`` when ``[alignment].validated`` is not an explicit ``True``.
-        Every pen goes dashed so the whole ribbon reads as provisional.
+        Every pen goes dashed so every mark reads as provisional.
         Opacity is deliberately **not** reduced: under 640 nit veiling glare
         every daylight mark collapses to 1.48-1.62:1, so no alpha below 1.0
         can carry meaning in the light theme.
@@ -2867,11 +2821,12 @@ MIN_ANNOTATION_SEPARATION = 20.0
 paints, under normal vision.
 
 Higher than the category floor, and deliberately so.  Two annotation
-categories sit in adjacent tracks a few pixels apart, where the eye compares
-them directly.  An annotation hue and a trace colour are compared across the
-whole window with the ribbon's own structure in between, and a mark that
-merely *resembles* the waveform reads as part of the signal -- which is the
-one confusion this design cannot tolerate.
+categories can be switched on together and then overlap in the same lane,
+where the eye compares them directly.  An annotation hue and a trace colour
+are compared across the whole window with nothing between them -- every mark
+is drawn on the waveform itself -- and a mark that merely *resembles* the
+waveform reads as part of the signal, which is the one confusion this design
+cannot tolerate.
 """
 
 #: Annotation pairs excused from :data:`MIN_CATEGORY_SEPARATION`, with the
@@ -2881,17 +2836,17 @@ one confusion this design cannot tolerate.
 #:
 #: Two rules cover every entry.
 #:
-#: 1. A chromatic mark and a NEUTRAL mark never share a track.  `run` owns the
-#:    RUNS track, `session` owns LOG, `control` owns CTRL, and each is
-#:    separated from the chromatic tracks by a gap and by the SENT|HEARD rule.
-#:    They are also different *forms* -- a bracket, a comb, a staircase --
-#:    against a bar or a tick.
-#: 2. `fault` appears only in the trust badge and as a filled up-triangle
-#:    glyph inside the LOG track, two tracks away from any chromatic mark and
-#:    the only triangle anywhere in the ribbon.
+#: 1. A chromatic mark and a NEUTRAL mark are never the same *form*.  `run` is
+#:    a span the reader switches on to see 59% of the session at once,
+#:    `session` a sparse train of log lines, and `control` a staircase in a
+#:    panel of its own -- so a neutral ink is told from a chromatic one by
+#:    what it draws before its hue is ever judged.
+#: 2. `fault` is never drawn over the waveform at all: it appears only in the
+#:    trust badge, where nothing else it could be confused with is on screen.
 #:
 #: `session` and `control` are the same token by construction: one neutral ink
-#: used in two tracks that never touch.  Their 0.00 is not a collision.
+#: used by a point layer and by the control panel, which never draw in the
+#: same place.  Their 0.00 is not a collision.
 SEPARATION_EXEMPT: frozenset[tuple[str, str]] = frozenset(
     {
         ("volley", "fault"),  # 5.62 dark / 3.40 light   -- rule 2
@@ -2912,7 +2867,7 @@ SEPARATION_EXEMPT: frozenset[tuple[str, str]] = frozenset(
 #: The annotation roles that carry a CATEGORY claim, and therefore the ones
 #: that get cast into a lane as a tether or a span edge.
 #:
-#: The other four roles resolve to chrome tokens that predate the ribbon --
+#: The other four roles resolve to chrome tokens that predate the annotations --
 #: `fg.faint`, `fg.muted`, `danger` -- and those are governed by the contrast
 #: table above, not by :data:`MIN_ANNOTATION_SEPARATION`.  Holding grid-and-
 #: crosshair grey 20 dE2000 away from a dimmed blue trace is not a statement

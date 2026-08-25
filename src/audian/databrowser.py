@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from copy import deepcopy
 from math import fabs, floor, log10
-from typing import Optional
+from typing import NamedTuple, Optional
 from scipy.signal import butter, sosfiltfilt
 
 try:
@@ -60,9 +60,15 @@ from .eventoverlay import (
     SURFACE_TRACE,
     AnnotationLayer,
     EventOverlay,
+    _passive,
+    describe_mark,
     legend_icon,
+    mark_time,
+    span_icon,
     swatch_icon,
 )
+from .controlpanel import ControlPanel
+from .layers import KIND_POINT, KIND_SPAN, TRACK_PULSES, TRACK_TRIALS
 from .analyzer import PlainAnalyzer, style_result_table
 from .statisticsanalyzer import StatisticsAnalyzer
 
@@ -75,10 +81,77 @@ ANNOTATION_SURFACE_TIPS = {
     SURFACE_TRACE: "Draw the annotations over the waveform lanes",
     SURFACE_SPECTROGRAM: "Draw the annotations over the spectrogram lanes",
     SURFACE_NAVIGATOR: (
-        "Mark the annotations along the top of the navigator strip, so the "
+        "Draw the annotations over the navigator strip, full height, so the "
         "whole session shows where the events are"
     ),
 }
+
+#: The two chip rows of the Annotations group, as ``(caption, tip, tracks)``.
+#: Which row a layer lands on is read off its own ``track``, so a bundle
+#: carrying a layer this file has never heard of still gets a chip: the last
+#: row's empty set is the catch-all.
+#:
+#: Two rows and not one, because the ten chips of a session bundle measure
+#: 1133 px of a 678 px field.  Two and not three, because the group is 104 px
+#: tall at two chip rows against the 108 px the tallest other group of the bar
+#: already spends -- so a loaded bundle leaves the bar at the 141 px it has
+#: with nothing loaded, where a third row would take 24 px out of every lane
+#: in the stack.
+ANNOTATION_CHIP_ROWS = (
+    (
+        "Sent",
+        "What the stimulator was commanded to do: the trials of the protocol "
+        "and the pulses it emitted.",
+        frozenset((TRACK_TRIALS, TRACK_PULSES)),
+    ),
+    (
+        "Heard",
+        "What the recording turned out to contain, and what the device logged "
+        "about itself: detections, localization runs, session events, the "
+        "control track.",
+        frozenset(),
+    ),
+)
+
+
+class RecordingInfo(NamedTuple):
+    """What the loader opened, in the shape a `soundfile.info` header has.
+
+    `SessionMeta.check_recording` accepts an already-read header so a caller
+    that has the file open does not open it twice.  A split recording has no
+    single header -- four files are one recording here -- so the browser
+    hands it the loader's own totals instead, which is the only frame count
+    that describes what is on screen.
+    """
+
+    samplerate: float
+    frames: int
+    channels: int
+
+
+def gap_text(delta: float) -> str:
+    """A signed time difference, in the unit that carries meaning at its size.
+
+    Milliseconds are what matters when the pointer is on an event or a
+    recorder loses time at a join; fourteen thousand of them are not a
+    reading, they are a statement that the thing is nowhere near.
+    """
+    if abs(delta) < 1.0:
+        return f"{1e3 * delta:+.1f} ms"
+    return f"{delta:+.2f} s"
+
+
+def annotation_chip_row(track: str) -> int:
+    """Which chip row a layer of `track` belongs on.
+
+    The last row takes everything unclaimed, so a track added to the reader
+    later gets a chip in the bar rather than no chip at all.
+    """
+    for index, (_caption, _tip, tracks) in enumerate(ANNOTATION_CHIP_ROWS):
+        if track in tracks:
+            return index
+    return len(ANNOTATION_CHIP_ROWS) - 1
+
 
 pg.setConfigOption("useNumba", True)
 
@@ -619,10 +692,13 @@ class DataBrowser(QWidget):
     RAIL_WIDTH = 48
     MAX_SPECTROGRAM_CHANNELS = 4
 
-    #: Chips per row in the Annotations group.  Four labels and three
-    #: statuses is seven toggles; laid out in one row they are wider than the
-    #: bar, so they wrap.
-    ANNOTATION_CHIP_COLUMNS = 4
+    #: Key the annotation switches are saved under.  One key holding one
+    #: entry per layer, not one key per layer: `save_setting` rewrites the
+    #: whole settings file, so thirteen keys would be thirteen rewrites.
+    ANNOTATION_SETTING = "annotations"
+    #: Bumped when the shape of that value changes, so an older audian's
+    #: settings can be recognised rather than half-read.
+    ANNOTATION_SETTING_VERSION = 1
 
     # y-range policies of the trace panels:
     y_shared = 0
@@ -830,21 +906,46 @@ class DataBrowser(QWidget):
         self.annotations = AnnotationLayer(self)
         self.annotations.sigTableChanged.connect(self.rebuild_annotations)
         self.annotations.sigVisibilityChanged.connect(self.redraw_annotations)
+        self.annotations.sigVisibilityChanged.connect(self.schedule_annotation_save)
         #: path given on the command line; None means "look for one"
         self.events_path = events_path
         self.annotation_overlays = []
         self.annotation_group = None
-        self.annotation_rows = {}
         self.annotation_sourcew = None
         self.annotation_badgew = None
-        self.annotation_chipbox = None
+        #: one container per row of ANNOTATION_CHIP_ROWS, each an HBox the
+        #: chips are inserted into ahead of a trailing stretch
+        self.annotation_rowboxes = []
         self.annotation_chips = []
+        #: the way back from a solo, beside the first chip
+        self.annotation_allw = None
+        #: a settings write is queued for the end of this turn of the loop
+        self.annotation_save_pending = False
+        #: layer id -> its chip, so a solo driven from a key or the menu can
+        #: put the bar back in step without rebuilding it
+        self.annotation_layer_chips = {}
         #: the parameter bar's groups, kept so the bar can be re-equalised
         #: when the annotation chips change the height of their group
         self.param_groups = []
         self.annotation_showw = None
         self.annotation_surfacew = {}
         self.annotation_hoverw = None
+        #: the layer set that was showing before the current solo, so the
+        #: second click on a soloed chip gives it back.  None means "no solo
+        #: is in progress", which is the state every other way of changing
+        #: the switches puts this back into.
+        self.annotation_layers_before_solo = None
+        #: one vertical rule per join of a split recording, per lane and per
+        #: navigator row.  Positions come from the LOADER, never from a
+        #: bundle -- see `attach_join_markers`.
+        self.join_markers = []
+        #: ``(channel, join index, InfLineLabel)`` for the trace-lane rules;
+        #: only the current channel's labels are shown, so three joins do not
+        #: print forty-eight times in a sixteen lane stack
+        self.join_labels = []
+        #: the control track's optional panel; it is not an overlay, so it is
+        #: not in `annotation_overlays` and never gets an EventOverlay
+        self.control_panel = None
 
         # plots:
         self.color_map = self.read_color_map_setting()
@@ -1260,6 +1361,9 @@ class DataBrowser(QWidget):
         # after the navigator exists: its rows are one of the three surfaces
         # an annotation is drawn on, so there is one attach pass, not two
         self.attach_annotation_overlays()
+        # the joins are the loader's own knowledge and need no bundle, so
+        # they are drawn as soon as there are plots to draw them on
+        self.attach_join_markers()
 
         if hasattr(self.datafig, "sigHoverTime"):
             self.datafig.sigHoverTime.connect(self.show_navigator_time)
@@ -1429,6 +1533,14 @@ class DataBrowser(QWidget):
         self.stack_grid.setRowStretch(self.stack_spacer_row, 1)
         self.stack_pane = stack_pane
         self.setup_time_axis()
+        # Between the lanes and the shared time axis, and *outside* the scroll
+        # area: the control track is one row for the whole session, so it must
+        # not scroll away with the channels, and the axis has to stay directly
+        # under whatever is bottom-most.
+        self.control_panel = ControlPanel(
+            self.annotations, DataBrowser.RAIL_WIDTH, stack_pane
+        )
+        pane.addWidget(self.control_panel, 0)
         pane.addWidget(self.taxis_strip, 0)
         self.splitter.addWidget(stack_pane)
         self.vbox.addWidget(self.splitter)
@@ -1870,6 +1982,9 @@ class DataBrowser(QWidget):
         # baked pixmaps, so both have to be drawn again rather than restyled
         for overlay in self.annotation_overlays:
             overlay.polish()
+        self.polish_join_markers()
+        if self.control_panel is not None:
+            self.control_panel.polish()
         self.build_annotation_chips()
         self.update_annotation_badge()
         self.redraw_annotations()
@@ -1890,6 +2005,17 @@ class DataBrowser(QWidget):
             self.y_readout.setFixedWidth(
                 DataBrowser.RAIL_WIDTH if self.rail_visible else 0
             )
+        if self.control_panel is not None:
+            self.control_panel.set_rail_width(
+                DataBrowser.RAIL_WIDTH if self.rail_visible else 0
+            )
+        # The three columns that have to line up -- the lanes, the time axis
+        # and the control panel -- have just been told to change width, and
+        # `align_time_axis` measures the finished geometry.  Run now it reads
+        # one of them before Qt has moved it and lands 48 px out; the axis
+        # then stays wrong until something else resizes the window.  One turn
+        # of the event loop later every width is real.
+        QTimer.singleShot(0, self.align_time_axis)
 
     def visible_channels(self) -> list:
         """Channels actually drawn, in display order.
@@ -2003,6 +2129,9 @@ class DataBrowser(QWidget):
         # channel the user is actually looking at:
         if self.datafig is not None and hasattr(self.datafig, "set_channel"):
             self.datafig.set_channel(self.current_channel)
+        # the join labels follow the current lane for the same reason the
+        # frame and the bold caption do
+        self.update_join_markers()
 
     def set_navigator_mode(self, mode: str) -> None:
         """Switch the navigator between one row and the per-channel stack."""
@@ -2547,17 +2676,153 @@ class DataBrowser(QWidget):
             ax.annotations = overlay
             self.annotation_overlays.append(overlay)
 
+    # --- where the files of one recording butt together ------------------
+
+    def recording_joins(self) -> list[float]:
+        """Seconds at which the loader started reading a new file.
+
+        Read off the LOADER and never off a bundle.  A split recording has
+        joins whether or not any annotation was ever fitted to it, and a
+        viewer that took their positions from an alignment file would be
+        drawing a claim about the files out of a claim about the log --
+        which is exactly the confusion a join marker exists to prevent.
+        `audian.data.open_files` has already asserted the loader's frame
+        total against the file headers, so these indices are what is on
+        screen.
+        """
+        loader = getattr(self.data, "data", None)
+        starts = getattr(loader, "start_indices", None)
+        rate = float(getattr(loader, "rate", 0.0) or 0.0)
+        if starts is None or rate <= 0.0 or len(starts) < 2:
+            return []
+        # index 0 is the start of the recording, which is not a join
+        return [float(i) / rate for i in list(starts)[1:]]
+
+    def declared_join_gaps(self) -> list:
+        """What the loaded bundle says the recorder lost at each join.
+
+        A declared gap only ever *annotates* a marker the loader positioned;
+        it never places one, and it is never corrected for.  Nothing is
+        labelled when the bundle names a different number of joins than the
+        loader opened files: two sources that disagree about how many joins
+        the recording has cannot be matched up join by join, and a gap
+        printed against the wrong join is worse than no gap at all.
+        """
+        bundle = self.annotations.bundle
+        if bundle is None:
+            return []
+        gaps = list(getattr(bundle.meta.alignment, "recording_join_gaps_s", ()) or ())
+        if not gaps:
+            return []
+        return gaps if len(gaps) == len(self.recording_joins()) else []
+
+    def attach_join_markers(self) -> None:
+        """Draw one quiet rule per join, on every lane and navigator row.
+
+        Chrome, not data: a join is a fact about the FILES, so it reads like
+        the zero line -- same ink, same hairline -- and it sits below every
+        annotation, so a mark is never obscured by one.  It is drawn on the
+        navigator too, where the whole session is in view and a join is most
+        worth knowing about.
+
+        Not on the spectrogram: `SpecItem` is an opaque image at z=0, so a
+        rule below the annotations would not be composited there at all, and
+        one above them would read as an event rather than as chrome.
+        """
+        self.join_markers = []
+        self.join_labels = []
+        joins = self.recording_joins()
+        if not joins:
+            return
+        lanes = []
+        for panel in self.panels.values():
+            if panel.is_trace():
+                lanes.extend((c, ax) for c, ax in enumerate(panel.axs))
+        for channel, ax in lanes:
+            for which, time in enumerate(joins):
+                line = self.join_marker(ax, time, label=True)
+                label = getattr(line, "label", None)
+                if label is not None:
+                    self.join_labels.append((channel, which, label))
+        for ax in getattr(self.datafig, "axs", []):
+            for time in joins:
+                self.join_marker(ax, time, label=False)
+        self.update_join_markers()
+
+    def join_marker(self, ax, time: float, label: bool):
+        """One full-height rule at `time`, below everything else in `ax`."""
+        line = pg.InfiniteLine(
+            angle=90,
+            pos=time,
+            movable=False,
+            pen=theme.join_pen(),
+            label="" if label else None,
+            labelOpts={
+                # Bottom-left anchored just above the floor of the lane: the
+                # top-left corner already carries the channel caption, and a
+                # top-anchored label at this position hangs BELOW the view
+                # box, which clips its children -- measured, the label's rect
+                # sat 25 px outside a 260 px lane and never appeared.
+                "position": 0.03,
+                "color": theme.token("fg.faint"),
+                "movable": False,
+                "anchors": [(0.0, 1.0), (0.0, 1.0)],
+            },
+        )
+        # below FILL_Z (-20), the lowest an annotation is ever drawn at
+        line.setZValue(-30)
+        _passive(line)
+        # pyqtgraph only gives an InfiniteLine a `label` when it was built
+        # with one, so it is asked for rather than assumed
+        text = getattr(line, "label", None)
+        if text is not None:
+            text.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+            _passive(text)
+        ax.addItem(line, ignoreBounds=True)
+        self.join_markers.append(line)
+        return line
+
+    def update_join_markers(self) -> None:
+        """Say what a bundle declares was lost at each join, on one lane.
+
+        The gap is printed on the current channel's lane only.  Three joins
+        in a sixteen lane stack are forty-eight labels, all saying the same
+        thing about the recording -- so the label follows the lane the reader
+        is reading, the way the lane's own frame and bold caption already do.
+        """
+        if not self.join_labels:
+            return
+        gaps = self.declared_join_gaps()
+        for channel, which, label in self.join_labels:
+            text = gap_text(gaps[which]) if which < len(gaps) else ""
+            # shown BEFORE the text is set: pyqtgraph's InfLineLabel drops a
+            # setFormat on a hidden label without a word (`valueChanged`
+            # returns early when the item is not visible), so setting the
+            # text first and showing afterwards puts an empty label on screen
+            label.setVisible(bool(text) and channel == self.current_channel)
+            label.setFormat(text)
+
+    def polish_join_markers(self) -> None:
+        """Re-resolve the rules' pen and ink after a live theme switch."""
+        for line in self.join_markers:
+            line.setPen(theme.join_pen())
+            text = getattr(line, "label", None)
+            if text is not None:
+                text.setColor(theme.token("fg.faint"))
+
     def set_annotation_surface(self, surface: str, on: bool) -> None:
         """Show or hide the overlay on one surface."""
         self.annotations.set_surface(surface, on)
 
     def recording_path(self) -> Path:
-        """The recording an alignment file has to name.
+        """The recording a session bundle has to name.
 
         `Data.file_path` is whatever the browser was handed, which is a list
         while several files are being opened into one buffer and a single
-        path afterwards.  An alignment belongs to one recording, so the first
-        one is the one to check against.
+        path afterwards.  A bundle belongs to one recording, so the first
+        file is the one to check the name against -- and the frame count is
+        checked against the whole of what the loader opened, which is what
+        `recording_info` is for.
         """
         path = self.data.file_path
         if isinstance(path, (list, tuple, np.ndarray)):
@@ -2568,9 +2833,9 @@ class DataBrowser(QWidget):
         """Load the annotations this browser was opened with, if any.
 
         An explicit ``--events`` path is loaded and any failure reported.  With
-        no path, an alignment file sitting beside the recording is picked up
-        automatically -- but only if its ``#recording=`` header names *this*
-        recording, and never silently: opening one is always announced.
+        no path, a session bundle sitting beside the recording is picked up
+        automatically -- but only if its ``[alignment].recording_file`` names
+        *this* recording, and never silently: opening one is always announced.
         """
         if self.events_path is not None:
             self.load_annotations(self.events_path)
@@ -2579,20 +2844,102 @@ class DataBrowser(QWidget):
         if found is not None:
             self.load_annotations(found, discovered=True)
 
+    def recording_info(self) -> Optional[RecordingInfo]:
+        """The header facts of the whole recording, as the loader has them.
+
+        `SessionMeta.check_recording` reads ONE file's header when it is not
+        handed an `info`, and a split recording is not one file.  On exp3 --
+        four WAVs opened as one recording -- that made the frame check
+        compare the bundle's 173,809,152 frames against DR0000_0088.wav's
+        44,734,464 and report a perfect match as the wrong bundle, which is
+        the crying-wolf failure in the one check meant to catch a genuinely
+        wrong bundle.  `data.open_files` has already asserted the loader's
+        total against every file header, so these three numbers are the
+        recording rather than a quarter of it.
+        """
+        loader = getattr(self.data, "data", None)
+        if loader is None:
+            return None
+        return RecordingInfo(
+            samplerate=float(getattr(loader, "rate", 0.0) or 0.0),
+            frames=int(getattr(loader, "frames", 0) or 0),
+            channels=int(getattr(loader, "channels", 0) or 0),
+        )
+
+    def bundle_problems(self, bundle) -> list[str]:
+        """Everything the bundle has to say, with its own frame check redone.
+
+        The provenance check the bundle ran at load asked one file's header
+        how long the recording is; this browser knows what the loader
+        actually opened, so the check is run again against that and its
+        answer replaces the one made without it.  Nothing else in
+        `bundle.warnings` is touched.
+        """
+        info = self.recording_info()
+        stale = frozenset(bundle.recording_check.problems)
+        problems = [w for w in bundle.warnings if w not in stale]
+        if info is None:
+            problems.extend(bundle.recording_check.problems)
+            return problems
+        check = bundle.meta.check_recording(self.recording_path(), info=info)
+        problems.extend(check.problems)
+        gaps = list(getattr(bundle.meta.alignment, "recording_join_gaps_s", ()) or ())
+        joins = len(self.recording_joins())
+        if gaps and len(gaps) != joins:
+            # Not fatal and not corrected for: it only means the declared
+            # gaps cannot be matched to the joins the loader reported, so
+            # none of them is printed against a join.
+            problems.append(
+                f"the bundle declares {len(list(gaps))} join gap(s), the "
+                f"loader opened {joins + 1} file(s) -- no gap is labelled"
+            )
+        return problems
+
+    def residual_tip(self, bundle) -> str:
+        """The fit's residual per region, as the reader measured it.
+
+        This viewer never computes a residual: ``detected_time_s -
+        recording_time_s`` is the reader's arithmetic and the tolerance it is
+        judged against is the fit's own, so this only prints what
+        `SessionBundle.residuals` found.
+
+        Per region and not the one number in the header, because the header's
+        number is not a promise about what is on screen: exp3 states a median
+        residual of about a microsecond for the whole session, while only 259
+        of the 874 pulses in its last file matched the recording at all.  The
+        regions the reader cut are the recording's own files when there are
+        joins, so this table and the join rules in the lanes are talking about
+        the same stretches.
+
+        The regions that are far outside the tolerance are already in
+        `bundle.warnings` and reach the status bar through `bundle_problems`;
+        this is the same measurement where a reader looks for it once the
+        warning has scrolled away.
+        """
+        stats = getattr(bundle, "residuals", None)
+        if stats is None or not len(stats):
+            return ""
+        head = (
+            f"Fit residual by {'file' if stats.split else 'region'} "
+            f"(match tolerance {1e3 * stats.tolerance_s:.3f} ms):"
+        )
+        return head + "\n" + "\n".join(f"• {r.summary()}" for r in stats.regions)
+
     def load_annotations(self, path, discovered: bool = False) -> bool:
-        """Read an alignment CSV and draw it over every lane."""
+        """Read a session bundle and draw it over every lane."""
         try:
-            table = self.annotations.load(path, self.recording_path())
+            bundle = self.annotations.load(path, self.recording_path())
         except Exception as e:
             self.notify("error", f"can not read annotations from {path}: {e}")
             log.exception("failed to read annotations from %s", path)
             return False
         found = " found beside the recording" if discovered else ""
-        self.notify("success", f"{Path(path).name}{found}: {table.summary()}")
-        if table.dropped:
+        self.notify("success", f"{Path(path).name}{found}: {bundle.summary()}")
+        lost = sum(bundle.dropped.values())
+        if lost:
             self.notify(
                 "warning",
-                f"{table.dropped} annotation rows have no t_rec_s and were dropped",
+                f"{lost} annotation rows have no recording_time_s and were dropped",
             )
         # An unvalidated fit or the wrong recording is not a detail for a
         # tool tip: it invalidates every position on screen, so it goes
@@ -2602,7 +2949,7 @@ class DataBrowser(QWidget):
                 "error",
                 f"{Path(path).name} was fitted against "
                 f"{self.annotations.recording_mismatch}, not against "
-                f"{self.recording_path().name} -- every annotation is misplaced",
+                f"{self.recording_path().name} -- nothing is drawn",
             )
         elif self.annotations.unvalidated:
             self.notify(
@@ -2610,20 +2957,23 @@ class DataBrowser(QWidget):
                 f"{Path(path).name} carries an UNVALIDATED alignment: "
                 f"annotation times are unverified predictions",
             )
-        elif table.header.warnings:
-            self.notify(
-                "warning",
-                f"{Path(path).name}: " + "; ".join(table.header.warnings),
-            )
+        for warning in self.bundle_problems(bundle):
+            self.notify("warning", f"{Path(path).name}: {warning}")
+        # a bundle can declare what the recorder lost at each join, and the
+        # rules the loader placed are where that is said
+        self.update_join_markers()
+        # after the notifications, so what is said about the bundle is said
+        # about the bundle and not about the reader's last session
+        self.restore_annotation_layers()
         return True
 
     def open_annotations(self) -> None:
-        """Ask for an alignment file and load it."""
+        """Ask for a session bundle and load it."""
         file_path = QFileDialog.getOpenFileName(
             self,
             "Load annotations",
             os.fspath(self.recording_path().parent),
-            "Alignment and event CSV (*.csv);;All files (*)",
+            "Session metadata (*_metadata.toml);;All files (*)",
         )[0]
         if file_path:
             self.load_annotations(file_path)
@@ -2632,6 +2982,9 @@ class DataBrowser(QWidget):
         if not self.annotations.loaded:
             return
         self.annotations.clear()
+        # the joins stay -- they are the loader's -- but a gap the bundle
+        # declared goes with the bundle
+        self.update_join_markers()
         self.notify("info", "annotations cleared")
 
     def toggle_annotations(self) -> None:
@@ -2648,71 +3001,318 @@ class DataBrowser(QWidget):
             return
         self.annotations.toggle()
 
+    # -- which layers are drawn --
+
+    def annotation_chip_clicked(self, layer_id: str) -> None:
+        """Solo the clicked layer, or extend the set under a modifier.
+
+        The gesture the channel rail beside the lanes already teaches: a
+        plain click leaves one thing showing, a held modifier adds to or
+        removes from what is showing, and one control puts everything back.
+        Ctrl and shift both extend -- the rail extends its selection with
+        shift, list widgets everywhere extend with ctrl, and a reader who
+        reaches for either is asking for the same thing.
+        """
+        modifiers = QApplication.keyboardModifiers()
+        extend = bool(modifiers & (Qt.ControlModifier | Qt.ShiftModifier))
+        self.solo_annotation_layer(layer_id, extend)
+
+    def apply_annotation_layers(self, wanted) -> bool:
+        """Put the layer switches into `wanted`, in one redraw and one write.
+
+        `AnnotationLayer.set_layer` signals per call and a restored set moves
+        up to ten switches, so the signals are held and the redraw and the
+        settings write are made once by hand -- what `solo()` already does
+        for a solo, for a set that is not a solo.
+
+        Only layers this bundle carries are touched: a switch for a layer it
+        does not have would put a name in the bar that the recording knows
+        nothing about.  Returns whether anything moved.
+        """
+        layer = self.annotations
+        before = dict(layer.layers)
+        blocked = layer.blockSignals(True)
+        try:
+            for layer_id in before:
+                on = wanted.get(layer_id)
+                if isinstance(on, bool):
+                    layer.set_layer(layer_id, on)
+        finally:
+            layer.blockSignals(blocked)
+        if layer.layers == before:
+            return False
+        self.redraw_annotations()
+        self.schedule_annotation_save()
+        return True
+
+    def solo_annotation_layer(self, layer_id: str, extend: bool = False) -> None:
+        """Show `layer_id` alone, or toggle it beside the others.
+
+        Clicking the only layer that is on puts back the set that was showing
+        before the solo -- not every layer there is.  This is the round trip
+        the channel rail's solo button makes: `solo_channels` is an overlay
+        over the mute state and dropping a channel from it restores that
+        state exactly.  Switching all ten layers on instead would switch on
+        the three the bundle deliberately defaults off -- the localization
+        runs alone cover 59% of the exp2 session -- and `schedule_annotation_save`
+        would then persist that set, so a gesture meant to be free would
+        destroy the reader's working set for good.  `Shift+F8` is the way to
+        all-on, and it says so on the All button.
+        """
+        if not self.annotations.loaded:
+            self.notify("info", "no annotations loaded -- Ctrl+Shift+A opens a file")
+            return
+        showing = [i for i, on in self.annotations.layers.items() if on]
+        if extend:
+            self.annotations.toggle_layer(layer_id)
+        elif showing == [layer_id]:
+            restore = self.annotation_layers_before_solo
+            self.annotation_layers_before_solo = None
+            if restore is None:
+                # soloed before this browser was watching -- a saved set
+                # restored into a solo, say.  All-on is then the only set
+                # that is certainly not the one on screen.
+                self.annotations.show_all()
+            else:
+                self.apply_annotation_layers(restore)
+        else:
+            if len(showing) != 1:
+                # remember the working set, not the solo it is replacing:
+                # soloing one layer after another still comes back to what
+                # the reader had before the first of them
+                self.annotation_layers_before_solo = dict(self.annotations.layers)
+            self.annotations.solo(layer_id)
+        # A gesture that asks for the state it is already in changes nothing
+        # and emits nothing, and the chip has flipped its own check by then.
+        self.update_annotation_chips()
+
+    def set_annotation_layer(self, layer_id: str, on: bool) -> None:
+        """Switch one layer on or off, as the menu entry does.
+
+        A hand-built set is the reader's own working set from here on, so the
+        set a solo would have restored is forgotten: coming back to a set
+        that was replaced two gestures ago would be a surprise.
+        """
+        if not self.annotations.loaded:
+            self.notify("info", "no annotations loaded -- Ctrl+Shift+A opens a file")
+            return
+        self.annotation_layers_before_solo = None
+        self.annotations.set_layer(layer_id, bool(on))
+
+    def show_all_annotation_layers(self) -> None:
+        """Undo a solo: every layer of the bundle draws again."""
+        if not self.annotations.loaded:
+            self.notify("info", "no annotations loaded -- Ctrl+Shift+A opens a file")
+            return
+        self.annotation_layers_before_solo = None
+        self.annotations.show_all()
+        self.update_annotation_chips()
+
+    # -- what survives a restart --
+
+    def annotation_settings(self) -> dict:
+        """The saved annotation preferences, or an empty mapping.
+
+        A value whose ``version`` is not the one this build writes is dropped
+        whole rather than half-read, which is the entire reason the version
+        is written.  `ANNOTATION_SETTING_VERSION` is bumped exactly when the
+        *shape* of the value changes, so a value carrying another number
+        holds keys this build would map onto the wrong switches -- and a
+        reader who opens a bundle and finds three arbitrary layers off has no
+        way of telling that from a bug.  Defaults are a state audian can
+        explain; a half-restored set is not.
+
+        Imported here and not at the top of the file: `audian.py` imports
+        this module, so a module level import would be a cycle.
+        """
+        from .audian import settings
+
+        saved = settings().get(DataBrowser.ANNOTATION_SETTING)
+        if not isinstance(saved, dict):
+            return {}
+        version = saved.get("version")
+        if version != DataBrowser.ANNOTATION_SETTING_VERSION:
+            log.warning(
+                "ignoring %s settings written in version %r; this audian "
+                "writes version %d",
+                DataBrowser.ANNOTATION_SETTING,
+                version,
+                DataBrowser.ANNOTATION_SETTING_VERSION,
+            )
+            return {}
+        return saved
+
+    def restore_annotation_surfaces(self) -> None:
+        """Put back which surfaces the reader last drew annotations on."""
+        saved = self.annotation_settings().get("surfaces")
+        if not isinstance(saved, dict):
+            return
+        for surface, _label, _enabled in self.annotations.surface_states():
+            on = saved.get(surface)
+            if isinstance(on, bool):
+                self.annotations.set_surface(surface, on)
+
+    def restore_annotation_layers(self) -> None:
+        """Put back the layer switches this reader last left on.
+
+        Only for layers the bundle in front of us actually carries: a saved
+        switch for a layer this session does not have would put a name in the
+        bar that the recording knows nothing about.  A layer the settings
+        have never seen keeps its own `default_on`, which is how a layer
+        added in a later version arrives visible instead of silently off.
+        """
+        if not self.annotations.loaded:
+            return
+        self.annotation_layers_before_solo = None
+        wanted = self.annotation_settings().get("layers")
+        if not isinstance(wanted, dict):
+            return
+        # One redraw for ten layers: `set_layer` signals per call, and a load
+        # that puts back nine switches would otherwise redraw all 32 lanes
+        # nine times before the file is even on screen.
+        blocked = self.annotations.blockSignals(True)
+        try:
+            for state in self.annotations.layer_states():
+                on = wanted.get(state.id)
+                if isinstance(on, bool):
+                    self.annotations.set_layer(state.id, on)
+        finally:
+            self.annotations.blockSignals(blocked)
+        self.redraw_annotations()
+
+    def schedule_annotation_save(self) -> None:
+        """Queue one settings write for the end of this turn of the loop.
+
+        `save_setting` reads, updates and rewrites the whole settings file,
+        and one click on a chip moves up to ten switches, so writing per
+        switch would rewrite that file ten times for one gesture.
+        """
+        if self.annotation_save_pending or not self.annotations.loaded:
+            return
+        self.annotation_save_pending = True
+        QTimer.singleShot(0, self.save_annotation_settings)
+
+    def save_annotation_settings(self) -> None:
+        """Write the layer and surface switches to the settings file.
+
+        Every layer of the bundle gets an entry, so a layer switched off is
+        remembered as off rather than coming back on at the next start.
+
+        The F8 master is deliberately not saved.  It is a glance -- take the
+        marks off the trace for a moment and put them back -- and one left
+        off would come back as an audian that draws no annotations at all and
+        says nothing about why.  Which layers to read is a working set the
+        reader chose; whether to look at any of them right now is not.
+        """
+        self.annotation_save_pending = False
+        if not self.annotations.loaded:
+            return
+        from .audian import save_setting
+
+        save_setting(
+            DataBrowser.ANNOTATION_SETTING,
+            {
+                "version": DataBrowser.ANNOTATION_SETTING_VERSION,
+                "layers": {
+                    state.id: bool(state.enabled)
+                    for state in self.annotations.layer_states()
+                },
+                "surfaces": {
+                    surface: bool(enabled)
+                    for surface, _label, enabled in self.annotations.surface_states()
+                },
+            },
+        )
+
     def rebuild_annotations(self) -> None:
         """React to a new (or cleared) table: rebuild items, chips and badge."""
+        # the remembered set belongs to the bundle it was taken from
+        self.annotation_layers_before_solo = None
         for overlay in self.annotation_overlays:
             if self.annotations.loaded:
                 overlay.rebuild()
             else:
                 overlay.clear()
+        if self.control_panel is not None:
+            self.control_panel.rebuild()
         self.build_annotation_chips()
         self.update_annotation_badge()
         self.redraw_annotations()
 
     def redraw_annotations(self) -> None:
+        if self.control_panel is not None and self.control_panel.refresh():
+            # the strip took or gave back pixels, and the lanes divide up
+            # what is left of the pane
+            self.adjust_layout(self.width(), self.height())
         for overlay in self.annotation_overlays:
             overlay.update_plot()
         self.update_annotation_chips()
 
     def annotation_keys(self) -> list:
-        return self.annotations.active_keys()
+        return self.annotations.active_ids()
 
     def step_annotation(self, forward: bool = True) -> None:
         """Centre the view on the next annotation in time.
 
-        This is how the overlay gets checked against the recording: step to a
-        matched event, zoom in, and see whether the line sits on the pulse.
-        Only the classes that are switched on are stepped through, so the
-        step follows what is on screen.
+        This is how the annotations get checked against the recording: step to
+        an observed pulse, zoom in, and see whether the line sits on it.  Only
+        the layers that are switched on are stepped through, so the step
+        follows what is on screen.
         """
-        table = self.annotations.table
-        if table is None:
+        if not self.annotations.loaded:
             self.notify("info", "no annotations loaded -- Ctrl+Shift+A opens a file")
             return
-        keys = self.annotation_keys()
-        if not keys:
-            self.notify("warning", "no annotation class is switched on")
+        if not self.annotation_keys():
+            self.notify("warning", "no annotation layer is switched on")
             return
         trange = self.plot_ranges[Panel.times[0]]
         centre = 0.5 * (trange.r0[0] + trange.r1[0])
-        found = table.step(centre, forward, keys)
+        found = self.annotations.step(centre, forward)
         if found is None:
             self.notify("info", "no further annotation in that direction")
             return
-        event_class, index = found
-        time = float(event_class.times[index])
+        layer, series, index = found
+        time = mark_time(layer, series, index)
         window = trange.r1[0] - trange.r0[0]
         self.set_times(time - 0.5 * window, window)
-        self.notify("info", event_class.describe(index))
+        self.notify("info", describe_mark(layer, series, index))
 
     def annotation_under(self, time: float) -> str:
-        """Describe the annotation nearest to `time`, for the pointer readout."""
-        table = self.annotations.table
-        if table is None or not self.annotations.visible:
+        """Describe what the pointer is on, for the readout.
+
+        A span the pointer is *inside* is found by asking which spans cover
+        the time (`SessionBundle.spans_at`), never by measuring to the
+        nearest mark.  `nearest()` measures a span from its start, so at the
+        midpoint of a 58 s localization run it reported the run the pointer
+        was standing in as 29 s away -- which reads as "there is nothing
+        here", in the feature's only textual answer.
+
+        Both halves are reported when both exist, because they answer
+        different questions: the span says where the pointer *is*, the
+        nearest instant says what it is next to.  The spans that already
+        answered are left out of the second question so the same layer
+        cannot be reported twice, once rightly and once as far away.
+        """
+        bundle = self.annotations.bundle
+        if bundle is None or not self.annotations.drawable:
             return ""
-        found = table.nearest(time, self.annotation_keys())
-        if found is None:
+        ids = self.annotation_keys()
+        if not ids:
             return ""
-        event_class, index = found
-        delta = float(event_class.times[index]) - time
-        # milliseconds are the unit that matters when the pointer is on an
-        # event; fourteen thousand of them are not a reading, they are a
-        # statement that the nearest event is nowhere near
-        if abs(delta) < 1.0:
-            gap = f"{1e3 * delta:+.1f} ms"
-        else:
-            gap = f"{delta:+.2f} s"
-        return f"{event_class.describe(index)}  (Δ {gap})"
+        parts = []
+        covering = bundle.spans_at(time, ids)
+        for layer, index in covering:
+            inside = time - float(layer.starts[index])
+            parts.append(f"{layer.describe(index)}  (inside, {inside:.3f} s in)")
+        rest = [i for i in ids if i not in {x.id for x, _i in covering}]
+        found = bundle.nearest(time, rest) if rest else None
+        if found is not None:
+            layer, series, index = found
+            delta = mark_time(layer, series, index) - time
+            parts.append(
+                f"{describe_mark(layer, series, index)}  (Δ {gap_text(delta)})"
+            )
+        return "   ·   ".join(parts)
 
     def show_annotation_under(self, time: float) -> None:
         """Name the annotation nearest the pointer in the parameter bar.
@@ -2753,7 +3353,9 @@ class DataBrowser(QWidget):
         loadw = QToolButton(self.parambar)
         loadw.setText("Load…")
         loadw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
-        loadw.setToolTip("Read events from an alignment CSV  (Ctrl+Shift+A)")
+        loadw.setToolTip(
+            "Read a session bundle -- a *_metadata.toml and its CSVs  (Ctrl+Shift+A)"
+        )
         loadw.setFixedHeight(theme.CHIP_HEIGHT)
         loadw.clicked.connect(self.open_annotations)
         group.add_row(
@@ -2761,9 +3363,10 @@ class DataBrowser(QWidget):
         )
 
         # Where the marks are drawn: the master switch and one chip per
-        # surface.  Separate from the class chips below on purpose -- "which
+        # surface.  Separate from the layer chips below on purpose -- "which
         # events" and "which panels" are different questions, and putting
         # them in one strip would make the answer to either hard to read off.
+        self.restore_annotation_surfaces()
         wherebox = QWidget(self.parambar)
         where = QHBoxLayout(wherebox)
         where.setContentsMargins(0, 0, 0, 0)
@@ -2788,94 +3391,113 @@ class DataBrowser(QWidget):
             chip.setChecked(enabled)
             chip.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
             chip.setFixedHeight(theme.CHIP_HEIGHT)
-            chip.setToolTip(ANNOTATION_SURFACE_TIPS[surface])
+            chip.setToolTip(ANNOTATION_SURFACE_TIPS.get(surface, ""))
             chip.toggled.connect(
                 lambda on, name=surface: self.set_annotation_surface(name, on)
             )
             where.addWidget(chip)
             self.annotation_surfacew[surface] = chip
-        where.addStretch(1)
-        group.add_row("Show", "F8", wherebox)
 
-        # One strip for both toggle axes: what the events are, and whether
-        # they were observed.  A grid rather than a row, because a file with
-        # four labels and three statuses needs seven chips and the bar is not
-        # seven chips wide -- they wrap instead of being clipped, since a
-        # toggle nobody can see is a class nobody knows is hidden.
-        self.annotation_chipbox = QWidget(self.parambar)
-        strip = QGridLayout(self.annotation_chipbox)
-        strip.setContentsMargins(0, 0, 0, 0)
-        strip.setHorizontalSpacing(theme.S4)
-        strip.setVerticalSpacing(theme.S2)
-        strip.setColumnStretch(DataBrowser.ANNOTATION_CHIP_COLUMNS, 1)
-        group.add_row("Classes", "", self.annotation_chipbox)
-
-        self.annotation_hoverw = QLabel("", self.parambar)
+        # The pointer readout rides at the end of this row rather than in a
+        # row of its own: a row of the parameter bar is 24 px off every lane
+        # in the stack, and what the pointer happens to be near is an aside,
+        # not a parameter.
+        self.annotation_hoverw = QLabel("", wherebox)
         self.annotation_hoverw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         self.annotation_hoverw.setWordWrap(False)
-        # Ignored, not Preferred: the row takes the width the column has and
-        # never asks for more, so what the pointer happens to be near cannot
-        # change the geometry of the bar (see show_annotation_under).
+        # Ignored, not Preferred: the label takes the width that is left over
+        # and never asks for more, so what the pointer is near cannot change
+        # the geometry of the bar (see show_annotation_under).
         self.annotation_hoverw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         theme.tint(self.annotation_hoverw, "fg.muted")
-        group.add_row("Pointer", "", self.annotation_hoverw)
+        where.addWidget(self.annotation_hoverw, 1)
+        group.add_row("Show", "F8", wherebox)
+
+        # One chip per layer, in the two captioned rows of
+        # ANNOTATION_CHIP_ROWS.  The chips are the legend as well as the
+        # toggle, so they are never elided away to glyphs; what gives instead
+        # is the count, which lives in the tool tip and on the menu entry.
+        self.annotation_rowboxes = []
+        for index, (caption, tip, _tracks) in enumerate(ANNOTATION_CHIP_ROWS):
+            box = QWidget(self.parambar)
+            strip = QHBoxLayout(box)
+            strip.setContentsMargins(0, 0, 0, 0)
+            strip.setSpacing(theme.S4)
+            if index == 0:
+                # The way back from a solo sits ahead of the first chip, at
+                # the corner the eye reaches first, because a solo is one
+                # click away from every chip and this is the one control that
+                # undoes all of them.
+                self.annotation_allw = QToolButton(box)
+                self.annotation_allw.setText("All")
+                self.annotation_allw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+                self.annotation_allw.setFixedHeight(theme.CHIP_HEIGHT)
+                self.annotation_allw.clicked.connect(self.show_all_annotation_layers)
+                strip.addWidget(self.annotation_allw)
+            strip.addStretch(1)
+            placed = group.add_row(caption, "", box)
+            placed[0].setToolTip(tip)
+            self.annotation_rowboxes.append(box)
 
         self.annotation_group = group
         group.setVisible(False)
         return group
 
     def build_annotation_chips(self) -> None:
-        """Rebuild the per-event and per-status toggle chips.
+        """Rebuild the per-layer toggle chips.
 
-        The chips double as the legend: each one is drawn with the pen the
-        overlay itself uses, so the colour of an event and the difference
-        between an observed and a predicted line can be read off the bar
-        rather than remembered.
+        The chips double as the legend: each one is drawn with the pen or the
+        brush the overlay itself uses, so a layer's colour and whether it is a
+        span or a train of instants can be read off the bar rather than
+        remembered.  Toggling is the primary interaction here -- the reader
+        looks at one or two layers at a time -- so every layer gets its own
+        chip and nothing is folded into a facet.
+
+        Built from the bundle's own layers, never from a list in this file:
+        the chips, the menu entries and the saved switches are then the same
+        set by construction and cannot drift apart.
         """
-        if self.annotation_chipbox is None:
+        if not self.annotation_rowboxes:
             return
-        strip = self.annotation_chipbox.layout()
         for chip in self.annotation_chips:
-            strip.removeWidget(chip)
+            chip.parent().layout().removeWidget(chip)
             chip.setParent(None)
             chip.deleteLater()
         self.annotation_chips = []
+        self.annotation_layer_chips = {}
         if not self.annotations.loaded:
             if self.annotation_group is not None:
                 self.annotation_group.setVisible(False)
             return
 
         unvalidated = self.annotations.unvalidated
-        chips = []
-        for event, count, color, enabled in self.annotations.event_counts():
-            chip = self.annotation_chip(f"{event}  {count}", enabled)
-            chip.setIcon(swatch_icon(color))
-            chip.setToolTip(f"Show {event} events ({count})")
-            chip.toggled.connect(lambda on, e=event: self.annotations.set_event(e, on))
-            chips.append(chip)
-        for status, count, measured, enabled in self.annotations.status_counts():
-            chip = self.annotation_chip(f"{status}  {count}", enabled)
-            chip.setIcon(legend_icon(theme.token("fg"), measured, unvalidated))
-            chip.setToolTip(
-                f"Show {status} events ({count}).\n"
-                + (
-                    "Observed: the pulse was found in the recording, and the "
-                    "line is drawn across the whole lane."
-                    if measured
-                    else "Predicted: nothing was found in the recording at "
-                    "this time -- it is where the fit says the pulse should "
-                    "be. Drawn as a short dashed stub with a hollow cap."
+        bundle = self.annotations.bundle
+        for state in self.annotations.layer_states():
+            box = self.annotation_rowboxes[annotation_chip_row(bundle[state.id].track)]
+            chip = self.annotation_chip(box, state.short, state.enabled)
+            if state.kind == KIND_SPAN:
+                chip.setIcon(
+                    span_icon(
+                        state.color,
+                        self.annotations.fill_alpha(state.id, SURFACE_TRACE),
+                        unvalidated,
+                    )
                 )
+            elif state.kind == KIND_POINT:
+                chip.setIcon(legend_icon(state.color, True, unvalidated))
+            else:
+                chip.setIcon(swatch_icon(state.color))
+            chip.setToolTip(self.annotation_chip_tip(state))
+            # clicked, not toggled: the click is a solo (or an extend under a
+            # modifier), so the check state is pushed back from the layer
+            # afterwards rather than being what the click means.
+            chip.clicked.connect(
+                lambda _checked, i=state.id: self.annotation_chip_clicked(i)
             )
-            chip.toggled.connect(
-                lambda on, st=status: self.annotations.set_status(st, on)
-            )
-            chips.append(chip)
-
-        columns = DataBrowser.ANNOTATION_CHIP_COLUMNS
-        for i, chip in enumerate(chips):
-            strip.addWidget(chip, i // columns, i % columns)
-        self.annotation_chips = chips
+            self.annotation_layer_chips[state.id] = chip
+            self.annotation_chips.append(chip)
+            layout = box.layout()
+            layout.insertWidget(layout.count() - 1, chip)
 
         if self.annotation_group is not None:
             self.annotation_group.setVisible(True)
@@ -2892,8 +3514,29 @@ class DataBrowser(QWidget):
         if self.param_groups:
             ParameterGroup.equalize(self.param_groups)
 
-    def annotation_chip(self, text: str, checked: bool) -> QToolButton:
-        chip = QToolButton(self.annotation_chipbox)
+    def annotation_chip_tip(self, state) -> str:
+        """What one layer chip says when the pointer rests on it.
+
+        The count lives here rather than on the chip.  Ten chips carrying
+        their counts measure 1514 px against the 678 px the group has, and
+        the count is the one part of a chip that can be moved without losing
+        the legend -- a layer with no rows still reads `0 in session`, which
+        is the difference between a layer that is empty and one that is off.
+        """
+        count = f"{state.count} in session"
+        drawn = (
+            ""
+            if state.kind in (KIND_POINT, KIND_SPAN)
+            else "\nDrawn by the control panel, not over the lanes."
+        )
+        return (
+            f"{state.label} -- {count}\n{state.tip}{drawn}\n"
+            f"Click to show this layer alone; ctrl- or shift-click to switch "
+            f"just this one on or off."
+        )
+
+    def annotation_chip(self, parent: QWidget, text: str, checked: bool) -> QToolButton:
+        chip = QToolButton(parent)
         chip.setText(text)
         chip.setCheckable(True)
         chip.setChecked(bool(checked))
@@ -2917,12 +3560,29 @@ class DataBrowser(QWidget):
         blocked = self.annotation_showw.blockSignals(True)
         self.annotation_showw.setChecked(self.annotations.visible)
         self.annotation_showw.blockSignals(blocked)
+        # A solo switches nine layers at once from a key or the menu, so the
+        # chips have to be told: a checked chip over a layer that is not on
+        # screen is worse than no chip.
+        for layer_id, chip in self.annotation_layer_chips.items():
+            blocked = chip.blockSignals(True)
+            chip.setChecked(self.annotations.layers.get(layer_id, False))
+            chip.blockSignals(blocked)
         for surface, chip in self.annotation_surfacew.items():
             # the surface chips stay usable while the master is off: they say
             # where the overlay *would* go, and dimming them would hide that
             blocked = chip.blockSignals(True)
             chip.setChecked(self.annotations.surfaces.get(surface, True))
             chip.blockSignals(blocked)
+        if self.annotation_allw is not None:
+            # Enabled either way, and it says how many layers are hidden: a
+            # disabled button gets no mouse events and so no tool tip, which
+            # is exactly the state a reader would want the sentence for.
+            hidden = sum(1 for on in self.annotations.layers.values() if not on)
+            self.annotation_allw.setToolTip(
+                f"Switch all {hidden} hidden layers back on  (Shift+F8)"
+                if hidden
+                else "Every layer of this bundle is switched on  (Shift+F8)"
+            )
         window = self.window()
         if window is not None and hasattr(window, "sync_annotation_actions"):
             window.sync_annotation_actions(self)
@@ -2931,8 +3591,8 @@ class DataBrowser(QWidget):
         """Restate where the annotations came from and how far to trust them."""
         if self.annotation_sourcew is None:
             return
-        table = self.annotations.table
-        if table is None:
+        bundle = self.annotations.bundle
+        if bundle is None:
             self.annotation_sourcew.setText("—")
             self.annotation_sourcew.setToolTip("")
             self.annotation_badgew.setText("")
@@ -2941,16 +3601,18 @@ class DataBrowser(QWidget):
                 self.annotation_hoverw.setText("")
             return
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
-        name = metrics.elidedText(table.name, Qt.ElideMiddle, 20 * theme.S8)
+        session_id = bundle.meta.session_id or "session"
+        name = metrics.elidedText(session_id, Qt.ElideMiddle, 20 * theme.S8)
         # The channel goes in the label, not only in the tool tip: the fit is
         # per channel, and which one it was made against is the difference
         # between an annotation that was checked against what is on screen
         # and one that was checked against the lane below it.
-        channel = table.header.recording_channel
+        channel = bundle.meta.alignment.recording_channel
         fitted = f"  fit ch {channel:02d}" if channel is not None else "  fit ch ??"
         self.annotation_sourcew.setText(name + fitted)
+        source = bundle.ref.metadata_path if bundle.ref is not None else session_id
         self.annotation_sourcew.setToolTip(
-            f"{table.path}\n{table.summary()}\n"
+            f"{source}\n{bundle.summary()}\n"
             + (
                 f"The alignment was fitted against channel {channel} of the "
                 "recording.\nIt is drawn over every channel, because the "
@@ -2960,6 +3622,12 @@ class DataBrowser(QWidget):
             )
         )
         text, token, tip = self.annotations.badge()
+        # The reader's own per-region residuals ride on the badge, because
+        # "how far can I trust what is on screen" is the question the badge
+        # exists to answer and a global median does not answer it.
+        residuals = self.residual_tip(bundle)
+        if residuals:
+            tip += "\n" + residuals
         self.annotation_badgew.setText(text)
         self.annotation_badgew.setToolTip(tip)
         self.annotation_badgew.setVisible(bool(text))
@@ -3232,6 +3900,10 @@ class DataBrowser(QWidget):
         if self.taxis.linkedView() is not view:
             self.taxis.linkToView(view)
         self.taxis.setRange(*view.viewRange()[0])
+        # the control panel shares this one x, for the same reason and off the
+        # same lane: one link, so it can never be a frame behind the axis
+        if self.control_panel is not None:
+            self.control_panel.link_view(view)
 
     def adjust_layout(self, width: int, height: int) -> None:
         """Lay out the channel stack and the panels within each channel.
@@ -3390,6 +4062,12 @@ class DataBrowser(QWidget):
         if (left, right) != self.taxis_margins:
             self.taxis_margins = (left, right)
             layout.setContentsMargins(left, 0, right, 0)
+        # One measurement, two consumers.  The control panel is built with the
+        # axis strip's widget structure precisely so that the margins measured
+        # off a lane apply to it unchanged; giving it its own measurement
+        # would be a second thing to keep in step with the lanes.
+        if self.control_panel is not None:
+            self.control_panel.set_margins(left, right)
 
     def size_splitter(self) -> None:
         """Give the navigator its natural height and the stack the rest.
