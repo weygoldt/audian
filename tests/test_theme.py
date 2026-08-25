@@ -455,3 +455,293 @@ def test_rail_toggles_have_room_for_their_glyph():
     qss = theme.stylesheet()
     assert "QToolButton#railToggle" in qss
     assert theme.RAIL_TOGGLE_HEIGHT >= theme.SIZE_SMALL_PT
+
+
+# --- (e) the annotation palette --------------------------------------------
+
+
+def test_the_cvd_simulator_reproduces_okabe_ito():
+    """A simulator that quietly does nothing makes any palette look safe.
+
+    Okabe-Ito is the most widely reproduced colour-blind-safe qualitative
+    palette there is, so its worst mutual pair is a number that can be looked
+    up rather than trusted: orange vs reddish purple, published at roughly 8
+    dE2000.  This module measures 7.92 and identifies the deficiency as
+    **tritanopia**, not deuteranopia -- under deuteranopia that same pair is
+    34.1, because orange keeps almost all of its lightness and purple loses
+    almost all of its chroma.  Cross-checked against libDaltonLens's published
+    Brettel-1997 matrices, which agree to within two sRGB levels per channel.
+    """
+    a, b, score, kind = theme.okabe_ito_worst_pair()
+    assert {a, b} == {"orange", "reddish purple"}, (a, b)
+    assert kind == "tritan", kind
+    assert 7.7 <= score <= 8.7, score
+    # and the simulator must actually move a colour
+    assert theme.simulate_cvd("#E69F00", "deutan") != "#E69F00"
+    assert theme.simulate_cvd("#E69F00", "normal") == "#E69F00"
+
+
+def test_a_grey_is_unchanged_by_every_deficiency():
+    """The neutral axis is what the two half-planes meet along.
+
+    A grey that moves under simulation means the projection is landing on the
+    wrong plane, which is the failure mode that would silently inflate every
+    separation score in the table.
+    """
+    for grey in ("#000000", "#404040", "#808080", "#C8C8C8", "#FFFFFF"):
+        for kind in theme.VISION_KINDS:
+            out = theme.simulate_cvd(grey, kind)
+            r, g, b = (int(out[i : i + 2], 16) for i in (1, 3, 5))
+            assert max(r, g, b) - min(r, g, b) <= 2, (grey, kind, out)
+
+
+def test_delta_e2000_is_zero_for_a_colour_against_itself():
+    for value in ("#FF253C", "#009A88", "#F575FF", "#000000"):
+        assert theme.delta_e2000(value, value) == 0.0
+    # and symmetric, which the rotation term makes non-obvious
+    assert round(theme.delta_e2000("#FF253C", "#009A88"), 10) == round(
+        theme.delta_e2000("#009A88", "#FF253C"), 10
+    )
+
+
+def test_annotation_palette_separation():
+    """Every annotation category a reader has to tell apart clears the floor.
+
+    Worst of {normal, protan, deutan, tritan}, in both themes.  The exempt
+    pairs are named in :data:`theme.SEPARATION_EXEMPT` with their reason: a
+    chromatic mark and a neutral mark never share a track, and `fault` is a
+    filled triangle two tracks away from anything chromatic.
+    """
+    assert theme.CVD_MODEL == "Brettel-1997"
+    for name in theme.THEMES:
+        assert not theme.check_separation(name), (name, theme.check_separation(name))
+    # the four data categories are the ones that share the top three tracks,
+    # and none of them may be exempt from anything
+    for a in theme.CATEGORY_ROLES:
+        for b in theme.CATEGORY_ROLES:
+            if a == b:
+                continue
+            assert (a, b) not in theme.SEPARATION_EXEMPT, (a, b)
+
+
+def test_the_worst_category_pair_is_recorded_where_it_can_be_rechecked():
+    """Anchors, so a hue edit that erodes the palette shows up as a diff.
+
+    Measured on this machine.  The worst pair anywhere is volley vs silence
+    under tritanopia -- 17.93 dark, 17.44 daylight -- and both clear 15.0.
+    """
+    worst = {}
+    for name, table in theme.THEMES.items():
+        scores = []
+        for i, a in enumerate(theme.CATEGORY_ROLES):
+            for b in theme.CATEGORY_ROLES[i + 1 :]:
+                for kind in theme.VISION_KINDS:
+                    scores.append(
+                        (
+                            theme.delta_e2000(
+                                theme.simulate_cvd(
+                                    table[theme._ANNOTATION_TOKENS[a]], kind
+                                ),
+                                theme.simulate_cvd(
+                                    table[theme._ANNOTATION_TOKENS[b]], kind
+                                ),
+                            ),
+                            a,
+                            b,
+                            kind,
+                        )
+                    )
+        worst[name] = min(scores)
+    assert worst["dark"][1:] == ("volley", "silence", "tritan"), worst["dark"]
+    assert worst["light"][1:] == ("volley", "silence", "tritan"), worst["light"]
+    assert round(worst["dark"][0], 2) == 17.93
+    assert round(worst["light"][0], 2) == 17.44
+    assert min(w[0] for w in worst.values()) >= theme.MIN_CATEGORY_SEPARATION
+
+
+def test_every_exempt_pair_is_actually_below_the_floor():
+    """An exemption that is not needed is a hole waiting for a future edit.
+
+    Below in *either* theme is enough to need the entry: several of these
+    clear 15.0 in one theme and not the other -- resting vs fault is 14.53
+    dark and 22.75 daylight, silence vs run is 22.36 dark and 14.98 daylight.
+    """
+    for a, b in theme.SEPARATION_EXEMPT:
+        assert a in theme.ANNOTATION_ROLES and b in theme.ANNOTATION_ROLES, (a, b)
+        worst = min(
+            theme.delta_e2000(
+                theme.simulate_cvd(table[theme._ANNOTATION_TOKENS[a]], kind),
+                theme.simulate_cvd(table[theme._ANNOTATION_TOKENS[b]], kind),
+            )
+            for table in theme.THEMES.values()
+            for kind in theme.VISION_KINDS
+        )
+        assert worst < theme.MIN_CATEGORY_SEPARATION, (a, b, worst)
+
+
+def test_annotation_colors_clear_the_graphic_floor():
+    """Every annotation mark is a graphic on a plot ground, in both themes.
+
+    Checked against bg.raised as well as bg.plot: the ribbon's chips and the
+    rail stubs sit on the raised surface, and it is the deepest of the three.
+    """
+    for name in theme.THEMES:
+        theme.set_theme(name)
+        floor = theme.min_graphic_contrast()
+        for role in theme.ANNOTATION_ROLES:
+            value = theme.annotation_color(role)
+            for ground in ("bg.plot", "bg.surface", "bg.raised"):
+                ratio = theme.contrast_ratio(value, theme.token(ground))
+                assert ratio >= floor, (name, role, ground, ratio)
+    theme.set_theme(theme.THEME_DARK)
+
+
+def test_no_annotation_hue_collides_with_a_painted_trace_colour():
+    """The one confusion this design cannot tolerate is annotation-as-signal.
+
+    Compared against what the lanes actually PAINT -- the dimmed traces
+    :func:`theme.waveform_color` produces -- not against the undimmed tokens,
+    because the dimmed value is the one on screen.
+    """
+    for name in theme.THEMES:
+        painted = theme.painted_trace_colors(name)
+        assert len(painted) == len(theme.PAINTED_TRACE_COLORS)
+        table = theme.THEMES[name]
+        for role in theme.CATEGORY_ROLES:
+            value = table[theme._ANNOTATION_TOKENS[role]]
+            for label, drawn in painted.items():
+                assert value.upper() != drawn.upper(), (name, role, label)
+                score = theme.delta_e2000(value, drawn)
+                assert score >= theme.MIN_ANNOTATION_SEPARATION, (
+                    name,
+                    role,
+                    label,
+                    score,
+                )
+    assert theme.current_theme() == theme.THEME_DARK
+
+
+def test_the_annotation_tokens_do_not_repoint_an_existing_one():
+    """Why only the three chromatic roles get tokens.
+
+    ``_BY_VALUE`` is value-keyed and the later key wins, so an ``ann.novel``
+    token equal to FG would make every ``theme.FG`` call resolve through the
+    annotation role and change the colour of unrelated text under the light
+    theme.  (``on.primary`` already shadows ``fg`` that way, deliberately and
+    harmlessly -- both are light in both themes.  A role that is dark in one
+    theme would not be harmless.)  So the ink and the neutral roles stay as
+    lookups into existing tokens and only the three chromatic hues are new.
+    """
+    ann = {k: v for k, v in theme.DARK_TOKENS.items() if k.startswith("ann.")}
+    assert set(ann) == {"ann.volley", "ann.resting", "ann.silence"}
+    others = {
+        v.upper() for k, v in theme.DARK_TOKENS.items() if not k.startswith("ann.")
+    }
+    for name, value in ann.items():
+        assert value.upper() not in others, name
+        assert theme._BY_VALUE[value.upper()] == name
+    for name, value in theme.LIGHT_TOKENS.items():
+        if name.startswith("ann."):
+            assert value.upper() not in {
+                v.upper()
+                for k, v in theme.LIGHT_TOKENS.items()
+                if not k.startswith("ann.")
+            }, name
+
+
+def test_every_annotation_role_resolves_in_both_themes():
+    for name in theme.THEMES:
+        theme.set_theme(name)
+        for role in theme.ANNOTATION_ROLES:
+            assert re.fullmatch(r"#[0-9A-Fa-f]{6}", theme.annotation_color(role))
+    theme.set_theme(theme.THEME_DARK)
+    try:
+        theme.annotation_color("volleys")
+    except KeyError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("an unknown role must fail loudly, not fall back")
+
+
+def test_a_predicted_mark_differs_by_dash_and_never_by_hue():
+    """Colour is never the difference between predicted and observed.
+
+    A predicted volley pulse in a different colour would read as a different
+    stimulus, so the only pen difference is the [2, 2] dash.
+    """
+    from PyQt5.QtCore import Qt
+
+    observed = theme.annotation_pen("volley")
+    predicted = theme.annotation_pen("volley", observed=False)
+    assert observed.color().name() == predicted.color().name()
+    assert observed.style() == Qt.SolidLine
+    assert predicted.style() != Qt.SolidLine
+    assert predicted.dashPattern() == [2.0, 2.0]
+
+
+def test_an_unvalidated_alignment_is_dashed_and_hatched_never_faded():
+    """Trust is carried by dash and hatch because alpha does not survive glare.
+
+    Every daylight mark collapses to 1.48-1.62:1 under 640 nit veiling, so an
+    opacity reduction stops meaning anything outdoors -- which is where this
+    tool is used.
+    """
+    from PyQt5.QtCore import Qt
+
+    for name in theme.THEMES:
+        theme.set_theme(name)
+        for role in theme.ANNOTATION_ROLES:
+            p = theme.annotation_pen(role, unvalidated=True)
+            assert p.style() != Qt.SolidLine, (name, role)
+            assert p.color().alpha() == 255, (name, role)
+            b = theme.annotation_brush(role, unvalidated=True)
+            assert b.style() == Qt.BDiagPattern, (name, role)
+            assert b.color().alpha() == 255, (name, role)
+            assert theme.annotation_brush(role).style() == Qt.SolidPattern
+    theme.set_theme(theme.THEME_DARK)
+
+
+def test_dim_color_constants_are_untouched():
+    """Nothing here may buy legibility out of the waveform's contrast budget."""
+    assert theme.TRACE_DIM_MIX == 0.65
+    assert theme.TRACE_DIM_MIX_SPARSE == 0.35
+    assert theme.MIN_GRAPHIC_CONTRAST == 3.0
+    assert theme.MIN_GRAPHIC_CONTRAST_DAYLIGHT == 4.5
+
+
+def test_the_default_ribbon_stack_fits_a_dense_sixteen_channel_window():
+    """The four default-open tracks, measured, against the 12 % budget.
+
+    Sparse: 1 + 18 + 1 + 18 + 2 + 18 + 1 + 8 = 67 px.
+    Dense:  1 + 12 + 1 + 12 + 2 + 12 + 1 + 6 = 47 px.
+    At sixteen channels in a 900 px stack the ribbon may take 108 px, and the
+    lanes must still clear CHANNEL_DENSE_HEIGHT.
+    """
+    sparse = (
+        theme.RIBBON_GAP
+        + theme.RIBBON_TRACK_H
+        + theme.RIBBON_GAP
+        + theme.RIBBON_TRACK_H
+        + theme.RIBBON_SENT_HEARD_H
+        + theme.RIBBON_TRACK_H
+        + theme.RIBBON_GAP
+        + theme.RIBBON_RULE_H
+    )
+    dense = (
+        theme.RIBBON_GAP
+        + theme.RIBBON_TRACK_H_DENSE
+        + theme.RIBBON_GAP
+        + theme.RIBBON_TRACK_H_DENSE
+        + theme.RIBBON_SENT_HEARD_H
+        + theme.RIBBON_TRACK_H_DENSE
+        + theme.RIBBON_GAP
+        + theme.RIBBON_RULE_H_DENSE
+    )
+    assert sparse == 67
+    assert dense == 47
+    budget = 900
+    assert dense <= theme.RIBBON_MAX_FRACTION * budget
+    assert (budget - dense) // 16 >= theme.CHANNEL_DENSE_HEIGHT
+    # a populated chromatic track is never shorter than the dense height it
+    # would otherwise be squeezed to -- the cap closes tracks, never shrinks
+    assert theme.RIBBON_MIN_CHROMATIC == theme.RIBBON_TRACK_H_DENSE

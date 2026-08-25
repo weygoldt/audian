@@ -74,6 +74,7 @@ import copy
 from string import Template
 from typing import Any, Iterable, Sequence
 
+import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import (
@@ -210,10 +211,41 @@ __all__ = [
     "marker_color",
     "MARKER_ICON_BG",
     "MARKER_ICON_RING",
+    # annotations
+    "ANNOTATION_ROLES",
+    "CATEGORY_ROLES",
+    "annotation_color",
+    "annotation_pen",
+    "annotation_brush",
+    "RIBBON_TRACK_H",
+    "RIBBON_TRACK_H_DENSE",
+    "RIBBON_RULE_H",
+    "RIBBON_RULE_H_DENSE",
+    "RIBBON_CTRL_H",
+    "RIBBON_CTRL_H_DENSE",
+    "RIBBON_GAP",
+    "RIBBON_SENT_HEARD_H",
+    "RIBBON_MIN_CHROMATIC",
+    "RIBBON_MAX_FRACTION",
+    "NAV_RIBBON_H",
     # contrast
     "relative_luminance",
     "contrast_ratio",
     "check_contrast",
+    # perceptual separation
+    "CVD_MODEL",
+    "VISION_KINDS",
+    "OKABE_ITO",
+    "srgb_to_lab",
+    "delta_e2000",
+    "simulate_cvd",
+    "MIN_CATEGORY_SEPARATION",
+    "MIN_ANNOTATION_SEPARATION",
+    "SEPARATION_EXEMPT",
+    "PAINTED_TRACE_COLORS",
+    "painted_trace_colors",
+    "check_separation",
+    "okabe_ito_worst_pair",
 ]
 
 
@@ -287,6 +319,25 @@ DARK_TOKENS: dict[str, str] = {
     # both grounds it reads as structure without shouting, where BORDER_HI
     # managed only 1.7:1 and simply disappeared.
     "edge": "#47566E",
+    # The three annotation categories.  Derived from Okabe-Ito by holding
+    # each member's identity and rotating only as far as audian's own painted
+    # palette forces: vermillion #D55E00 rotated -26 deg to h=30 (its 56 deg
+    # is occupied by `accent` at 76.7 and `trace.filtered` at 80.9), bluegreen
+    # #009E73 rotated +16 deg to h=180, reddish purple #CC79A7 rotated -20 deg
+    # to h=325 (345 would sit 7 deg from `trace.envelope` at 352.6).  Canonical
+    # Okabe-Ito cannot be dropped in unchanged: on this plot ground its black
+    # measures 1.12:1 and its blue 3.62:1.
+    #
+    # Lightness was then raised until each clears the graphic floor with room
+    # to spare on the deepest surface, bg.raised: 4.99 / 5.35 / 7.94 on
+    # bg.plot.  Run `python -m audian.theme` for the live table.
+    "ann.volley": "#FF253C",
+    "ann.resting": "#009A88",
+    # the loudest hue in the palette on purpose.  Silence is the control
+    # condition, the one an experimenter must be able to find without
+    # hunting, and it is found by contrast and by owning its own sub-row --
+    # never by greying out the treatments around it.
+    "ann.silence": "#F575FF",
 }
 
 #: The light token table -- a **daylight** theme, not a polite inversion.
@@ -326,6 +377,14 @@ LIGHT_TOKENS: dict[str, str] = {
     "on.primary": "#FFFFFF",
     "bg.lane": "#E8ECF3",
     "edge": "#7C8A9B",
+    # The daylight annotation hues: the same three Okabe-Ito-derived angles,
+    # taken dark instead of bright.  On white a bright mark has almost no
+    # contrast, so these are the *darkened* members of each hue family --
+    # 6.97 / 5.19 / 11.57 on bg.plot, against 1.4:1 for a naive inversion of
+    # the dark theme's values.
+    "ann.volley": "#B60023",
+    "ann.resting": "#007B6C",
+    "ann.silence": "#670071",
 }
 
 #: All selectable themes, by name.
@@ -435,6 +494,91 @@ sixteen of those beat eight comfortable ones plus a scrollbar.
 """
 SPECTROGRAM_MIN_HEIGHT = 120
 AXIS_LEFT_WIDTH = 56
+
+# --- the annotation ribbon ------------------------------------------------
+#
+# The ribbon is one session-global strip under the channel stack, holding one
+# row per open track.  Every value below is a device-pixel count, because the
+# ribbon plot's y range is pinned to [0, height_in_device_pixels]: a fraction
+# of a track is then literally a pixel count and the geometry is checkable in
+# a test rather than eyeballed.
+#
+# Two heights per track, sparse and dense, switched on `is_dense(n_visible)`.
+# Sparse is the comfortable case; dense is what sixteen channels leave.
+
+RIBBON_TRACK_H = 18
+"""Height of a chromatic track (trials, pulses, heard) in a sparse stack, px.
+
+Three positional sub-rows have to fit inside it -- see the ``bh`` rule in the
+ribbon geometry -- so 18 px buys 5 px per sub-row plus the gaps between them.
+"""
+
+RIBBON_TRACK_H_DENSE = 12
+"""The same track at sixteen channels, px.  The floor, not a preference.
+
+Below 12 px a hue in a bar is no longer namable: the sub-rows fall to 3 px
+each and a 3 px chip of colour is judged against its surround rather than
+identified, which is the whole reason the ribbon carries the category.
+"""
+
+RIBBON_RULE_H = 8
+"""Height of an achromatic track (runs, log) in a sparse stack, px.
+
+Half a chromatic track because it has no hue to name and no sub-rows to
+separate -- a bracket and a comb of ticks read fine at 8 px.
+"""
+
+RIBBON_RULE_H_DENSE = 6
+
+RIBBON_CTRL_H = 32
+"""Height of the control track, px.  It is the one track carrying a *value*.
+
+A staircase needs vertical room or every step lands in the same pixel; 32 px
+gives the tick-rate band about 24 px of travel between its two scale rules.
+"""
+
+RIBBON_CTRL_H_DENSE = 22
+
+RIBBON_GAP = 1
+"""Separation between two adjacent tracks, px.  One pixel, and no more.
+
+The tracks are meant to be read as one strip with internal structure, not as
+six stacked plots.  The only wider separator is the SENT|HEARD rule.
+"""
+
+RIBBON_SENT_HEARD_H = 2
+"""Height of the rule between what was commanded and what was recorded, px.
+
+Two pixels, drawn in `edge`, and it is the most important line in the ribbon:
+the pulse comb hangs down to it and the detection comb grows up to it, so a
+matched pulse is a tick answered by a tick across this gutter and a predicted
+one is a tick with nothing on the far side.
+"""
+
+RIBBON_MIN_CHROMATIC = 12
+"""A chromatic track that has data is never drawn shorter than this, px.
+
+The height cap closes whole tracks rather than squeezing them.  A 6 px trials
+track would still be *there*, which is worse than being honestly closed with
+its count showing in the rail stub.
+"""
+
+RIBBON_MAX_FRACTION = 0.12
+"""Largest share of the stack's height the ribbon may take.
+
+The waveform is the instrument; the log is the annotation on it.  At the
+16-channel case this leaves every lane above CHANNEL_DENSE_HEIGHT, which is
+the constraint that actually sets the number: the ribbon closes its
+lowest-priority tracks rather than push a channel below the scroll.
+"""
+
+NAV_RIBBON_H = 20
+"""Height of the navigator's mini-ribbon row, px.
+
+Drawn once for the whole session, not once per channel: the log is a fact
+about the recording, and sixteen copies of it would be sixteen claims where
+there is one.  Added to NAVIGATOR_HEIGHT only while a bundle is loaded.
+"""
 
 MOTION_MS = 150  # 120-180 ms ease-out band; nothing animates the data
 
@@ -1087,6 +1231,133 @@ def waveform_fill_brush(
 ) -> QBrush:
     """Fill brush for a min/max envelope band drawn under :func:`waveform_pen`."""
     return brush(waveform_color(role, selected, dense, color), alpha=alpha)
+
+
+# ---------------------------------------------------------------------------
+# Section 5c -- annotation roles
+#
+# The session log is a second data source drawn beside the waveform: trial
+# spans, stimulus pulses, detections, instrument runs, log entries.  Colour
+# here carries the CATEGORY and nothing else -- form carries geometry (bar /
+# tick / bracket / staircase) and position carries treatment and evidence
+# kind.  Nothing is encoded twice on an ordered channel, which is why a
+# silence trial is not greyed out and a predicted pulse is not faded: those
+# would read as claims about reliability rather than about identity.
+#
+# Only the three chromatic categories get their own tokens.  The other five
+# roles point at tokens that already exist, deliberately: `_BY_VALUE` is a
+# value-keyed dict whose later key wins, so an `ann.novel` token equal to
+# `FG` would silently re-point every `theme.FG` call through the annotation
+# role and change the colour of unrelated text.
+# ---------------------------------------------------------------------------
+
+#: Every annotation role, in the order the tracks are stacked.  A role is a
+#: *category of evidence*, not a layer: `volley` colours both the volley trial
+#: span and the volley pulses inside it, because they are the same claim seen
+#: at two time scales.  Explained detections have no role of their own -- they
+#: resolve to the role of the pulse that explains them.
+ANNOTATION_ROLES: tuple[str, ...] = (
+    "volley",
+    "resting",
+    "silence",
+    "detection.novel",
+    "run",
+    "session",
+    "fault",
+    "control",
+)
+
+_ANNOTATION_TOKENS: dict[str, str] = {
+    "volley": "ann.volley",
+    "resting": "ann.resting",
+    "silence": "ann.silence",
+    # the eel itself: unexplained detections are the finding, so they are the
+    # ink of the page rather than one more hue competing with the stimuli.
+    "detection.novel": "fg",
+    # instrument state, not evidence.  fg.faint is non-text decoration
+    # (theme.py's contrast ruling) and a localisation run is exactly that.
+    "run": "fg.faint",
+    "session": "fg.muted",
+    "fault": "danger",
+    "control": "fg.muted",
+}
+
+
+def annotation_color(role: str) -> str:
+    """Return the hex colour for an annotation *role*.
+
+    Raises
+    ------
+    KeyError
+        On an unknown role.  Unlike :func:`trace_color`, which falls back to
+        the raw trace colour because a mislabelled waveform should still be
+        drawn, an unknown annotation role means the reader would be shown a
+        category that does not exist.  That must fail loudly.
+    """
+    return TOKENS[_ANNOTATION_TOKENS[role]]
+
+
+def annotation_pen(
+    role: str,
+    *,
+    width: float = LW_THIN,
+    observed: bool = True,
+    unvalidated: bool = False,
+    alpha: float = 1.0,
+) -> QPen:
+    """Return the pen for an annotation mark of *role*.
+
+    Parameters
+    ----------
+    observed
+        ``False`` marks a **predicted** event -- a stimulus the log says was
+        commanded but which no detection answers.  It is drawn with a ``[2, 2]``
+        dash, never in a different colour: a predicted volley pulse in a
+        different hue would read as a different stimulus.  The dash is one of
+        four independent differences (length, dash, a hollow diamond cap, and
+        the fact that nothing answers it in the HEARD track).
+    unvalidated
+        ``True`` when ``[alignment].validated`` is not an explicit ``True``.
+        Every pen goes dashed so the whole ribbon reads as provisional.
+        Opacity is deliberately **not** reduced: under 640 nit veiling glare
+        every daylight mark collapses to 1.48-1.62:1, so no alpha below 1.0
+        can carry meaning in the light theme.
+    alpha
+        Kept at 1.0 for the same reason.  Present for the chrome that is
+        allowed to be translucent (the span cast at 0.55, the baseline rule
+        at 0.30), which is decoration and never the mark itself.
+
+    Notes
+    -----
+    ``observed=False`` wins over *unvalidated* when both are set: the ``[2, 2]``
+    dash is the more specific statement, and both leave ``style()`` off
+    ``Qt.SolidLine``, which is what the trust rule actually asserts.
+    """
+    p = pen(annotation_color(role), width=width, alpha=alpha)
+    if not observed:
+        # a short, even dash: at 1 px width it survives a 6 px tick, where
+        # Qt.DashLine (4-2 in pen-width units) would draw a single segment
+        # and look solid.
+        p.setDashPattern([2.0, 2.0])
+    elif unvalidated:
+        p.setStyle(Qt.DashLine)
+    return p
+
+
+def annotation_brush(
+    role: str, alpha: float = 1.0, *, unvalidated: bool = False
+) -> QBrush:
+    """Return the fill brush for an annotation span of *role*.
+
+    *unvalidated* switches the fill to ``Qt.BDiagPattern`` -- a 45 degree
+    hatch.  A hatch survives glare and greyscale where a reduced opacity does
+    not, and it leaves the bar's position, height and width untouched, so the
+    layout does not move when trust changes.
+    """
+    b = brush(annotation_color(role), alpha=alpha)
+    if unvalidated:
+        b.setStyle(Qt.BDiagPattern)
+    return b
 
 
 # ---------------------------------------------------------------------------
@@ -2359,6 +2630,493 @@ def check_contrast(theme_name: str | None = None) -> list[tuple[str, str, float]
     return failures
 
 
+# ---------------------------------------------------------------------------
+# Perceptual separation -- CIEDE2000 and dichromat simulation
+#
+# The contrast table above answers "can this mark be seen against its ground".
+# This section answers the other question, the one a categorical palette lives
+# or dies by: "can these two marks be told apart from each other", including
+# by the ~8 % of male readers with a colour vision deficiency.  A field rig is
+# operated by whoever is in the boat.
+#
+# WCAG contrast cannot answer it.  Two colours of identical luminance score
+# 1.0:1 against each other and may still be a red and a green that a
+# deuteranope sees as the same olive.  So the gate is a colour DIFFERENCE
+# metric (CIEDE2000) applied to the palette after it has been pushed through a
+# dichromat simulation, and the score kept is the WORST of the four vision
+# kinds rather than the average.
+# ---------------------------------------------------------------------------
+
+#: Which simulation this module implements, named so a test can assert it.
+#: Brettel-Vienot-Mollon 1997 and NOT the Vienot 1999 single-plane
+#: simplification: Vienot's own paper validates the single-plane form for
+#: protanopia and deuteranopia only and explicitly declines to claim it for
+#: tritanopia, where the two half-planes are far apart.
+CVD_MODEL = "Brettel-1997"
+
+#: The four vision kinds every categorical pair is scored under.
+VISION_KINDS: tuple[str, ...] = ("normal", "protan", "deutan", "tritan")
+
+# sRGB IEC 61966-2-1 primaries, D65 white.
+_XYZ_FROM_RGB = np.array(
+    [
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041],
+    ]
+)
+_RGB_FROM_XYZ = np.linalg.inv(_XYZ_FROM_RGB)
+
+#: Hunt-Pointer-Estevez cone fundamentals, XYZ -> LMS.  Brettel's construction
+#: is a projection *along a cone axis* onto a plane through the origin, and
+#: both survive any diagonal rescaling of LMS, so the equal-energy versus D65
+#: normalisation of this matrix cannot change a single output pixel.
+_LMS_FROM_XYZ = np.array(
+    [
+        [0.38971, 0.68898, -0.07868],
+        [-0.22981, 1.18340, 0.04641],
+        [0.0, 0.0, 1.0],
+    ]
+)
+_XYZ_FROM_LMS = np.linalg.inv(_LMS_FROM_XYZ)
+
+#: D65, the white point of sRGB and the neutral axis every half-plane contains.
+_D65_XYZ = np.array([0.95047, 1.0, 1.08883])
+
+#: CIE 1931 2 degree tristimulus values of Brettel's four anchor stimuli.
+#: 475 and 575 nm bound the protan/deutan gamut, 485 and 660 nm the tritan one.
+_ANCHOR_XYZ: dict[int, tuple[float, float, float]] = {
+    475: (0.1421, 0.1126, 1.0419),
+    575: (0.8425, 0.9154, 0.0018),
+    485: (0.05795, 0.1693, 0.6162),
+    660: (0.1649, 0.0610, 0.0000),
+}
+
+#: Which cone response each deficiency loses, as an index into LMS.
+_CVD_AXIS: dict[str, int] = {"protan": 0, "deutan": 1, "tritan": 2}
+
+#: The two anchors bounding each deficiency's reduced gamut.
+_CVD_ANCHORS: dict[str, tuple[int, int]] = {
+    "protan": (475, 575),
+    "deutan": (475, 575),
+    "tritan": (485, 660),
+}
+
+
+def _linear_rgb(color: Any) -> np.ndarray:
+    """Token name or ``'#rrggbb'`` -> linear-light sRGB, as a length-3 array."""
+    hex_str = str(_resolve(color)).lstrip("#")
+    c = np.array([int(hex_str[i : i + 2], 16) / 255.0 for i in (0, 2, 4)])
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def _hex_from_linear(lin: np.ndarray) -> str:
+    """Linear-light sRGB -> ``'#RRGGBB'``, clipped into gamut.
+
+    The clip is not a rounding detail: a projection onto the dichromat plane
+    routinely lands outside the sRGB cube, and the honest thing to show is the
+    nearest colour a monitor can actually emit -- which is also the colour the
+    reader would be looking at.
+    """
+    lin = np.clip(lin, 0.0, 1.0)
+    srgb = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
+    return "#" + "".join(f"{int(round(v * 255)):02X}" for v in srgb)
+
+
+def simulate_cvd(color: Any, kind: str) -> str:
+    """Return *color* as a dichromat of *kind* sees it, as ``'#RRGGBB'``.
+
+    *kind* is one of :data:`VISION_KINDS`; ``'normal'`` returns the colour
+    unchanged.  Implements :data:`CVD_MODEL`: the dichromat gamut is two
+    half-planes in LMS meeting along the neutral axis, one anchored on each of
+    the deficiency's two anchor wavelengths.  A stimulus is projected along
+    the axis of the missing cone onto whichever half-plane lies on its own
+    side of the plane containing the neutral axis and that projection axis --
+    projecting along an axis cannot move a colour across that plane, so the
+    side is invariant and the choice is unambiguous.
+
+    This is a simulation of *dichromacy*, the complete loss of one cone class,
+    which is the severe end of each deficiency.  Anomalous trichromats see
+    more separation than this, never less, so a palette that clears the gate
+    here clears it for everyone.
+
+    Raises
+    ------
+    KeyError
+        On an unknown *kind*, so a typo cannot silently report normal vision
+        and make an unsafe palette look safe.
+    """
+    if kind == "normal":
+        return _hex_from_linear(_linear_rgb(color))
+    axis = _CVD_AXIS[kind]
+    white = _LMS_FROM_XYZ @ _D65_XYZ
+    unit = np.zeros(3)
+    unit[axis] = 1.0
+    separation = np.cross(white, unit)
+    lms = _LMS_FROM_XYZ @ (_XYZ_FROM_RGB @ _linear_rgb(color))
+    side = float(separation @ lms)
+    anchors = _CVD_ANCHORS[kind]
+    anchor = _LMS_FROM_XYZ @ np.array(_ANCHOR_XYZ[anchors[0]])
+    if side != 0.0 and np.sign(separation @ anchor) != np.sign(side):
+        anchor = _LMS_FROM_XYZ @ np.array(_ANCHOR_XYZ[anchors[1]])
+    normal = np.cross(white, anchor)
+    other = [i for i in range(3) if i != axis]
+    out = lms.copy()
+    out[axis] = -(normal[other[0]] * lms[other[0]] + normal[other[1]] * lms[other[1]])
+    out[axis] /= normal[axis]
+    return _hex_from_linear(_RGB_FROM_XYZ @ (_XYZ_FROM_LMS @ out))
+
+
+def srgb_to_lab(color: Any) -> tuple[float, float, float]:
+    """Token name or ``'#rrggbb'`` -> CIE L*a*b* under D65, the sRGB white.
+
+    D65 and not D50: the numbers describe a colour on this screen, not a
+    print of it.
+    """
+    xyz = _XYZ_FROM_RGB @ _linear_rgb(color)
+    ratio = xyz / _D65_XYZ
+    # the linear segment below the cube-root's knee, so that near-black stays
+    # numerically well behaved instead of collapsing all dark colours together
+    f = np.where(
+        ratio > (24 / 116) ** 3, np.cbrt(ratio), (841 / 108) * ratio + 16 / 116
+    )
+    return (
+        float(116 * f[1] - 16),
+        float(500 * (f[0] - f[1])),
+        float(200 * (f[1] - f[2])),
+    )
+
+
+def delta_e2000(a: Any, b: Any) -> float:
+    """CIEDE2000 colour difference between two colours.
+
+    The unit is roughly a just-noticeable difference for two large patches
+    side by side; two marks a few pixels wide and half a screen apart need
+    considerably more, which is what :data:`MIN_CATEGORY_SEPARATION` is for.
+
+    CIE 142-2001 with ``kL = kC = kH = 1``.  Written out rather than pulled
+    from a dependency because the whole point of the separation gate is that
+    it is auditable: ``python -m audian.theme`` prints the numbers a reviewer
+    can check against any other implementation.
+    """
+    l1, a1, b1 = srgb_to_lab(a)
+    l2, a2, b2 = srgb_to_lab(b)
+    c1, c2 = np.hypot(a1, b1), np.hypot(a2, b2)
+    c_bar = (c1 + c2) / 2
+    g = 0.5 * (1 - np.sqrt(c_bar**7 / (c_bar**7 + 25.0**7)))
+    a1p, a2p = (1 + g) * a1, (1 + g) * a2
+    c1p, c2p = np.hypot(a1p, b1), np.hypot(a2p, b2)
+    h1 = np.degrees(np.arctan2(b1, a1p)) % 360 if abs(a1p) + abs(b1) else 0.0
+    h2 = np.degrees(np.arctan2(b2, a2p)) % 360 if abs(a2p) + abs(b2) else 0.0
+    dlp = l2 - l1
+    dcp = c2p - c1p
+    if c1p * c2p == 0:
+        dhp = 0.0
+    elif abs(h2 - h1) <= 180:
+        dhp = h2 - h1
+    elif h2 - h1 > 180:
+        dhp = h2 - h1 - 360
+    else:
+        dhp = h2 - h1 + 360
+    dhp_big = 2 * np.sqrt(c1p * c2p) * np.sin(np.radians(dhp / 2))
+    lbp = (l1 + l2) / 2
+    cbp = (c1p + c2p) / 2
+    if c1p * c2p == 0:
+        hbp = h1 + h2
+    elif abs(h1 - h2) <= 180:
+        hbp = (h1 + h2) / 2
+    elif h1 + h2 < 360:
+        hbp = (h1 + h2 + 360) / 2
+    else:
+        hbp = (h1 + h2 - 360) / 2
+    t = (
+        1
+        - 0.17 * np.cos(np.radians(hbp - 30))
+        + 0.24 * np.cos(np.radians(2 * hbp))
+        + 0.32 * np.cos(np.radians(3 * hbp + 6))
+        - 0.20 * np.cos(np.radians(4 * hbp - 63))
+    )
+    d_theta = 30 * np.exp(-(((hbp - 275) / 25) ** 2))
+    r_c = 2 * np.sqrt(cbp**7 / (cbp**7 + 25.0**7))
+    s_l = 1 + 0.015 * (lbp - 50) ** 2 / np.sqrt(20 + (lbp - 50) ** 2)
+    s_c = 1 + 0.045 * cbp
+    s_h = 1 + 0.015 * cbp * t
+    r_t = -np.sin(np.radians(2 * d_theta)) * r_c
+    return float(
+        np.sqrt(
+            (dlp / s_l) ** 2
+            + (dcp / s_c) ** 2
+            + (dhp_big / s_h) ** 2
+            + r_t * (dcp / s_c) * (dhp_big / s_h)
+        )
+    )
+
+
+MIN_CATEGORY_SEPARATION = 15.0
+"""Floor for two annotation categories that can share a track, worst of four
+vision kinds.
+
+Canonical Okabe-Ito -- the reference eight-colour qualitative palette -- has a
+worst mutual pair of 7.9 measured with this module's own simulator.  15.0 is
+close to a full step stricter, and audian can afford it because it needs four
+data categories rather than eight.
+"""
+
+MIN_ANNOTATION_SEPARATION = 20.0
+"""Floor between an annotation hue and any colour the waveform stack actually
+paints, under normal vision.
+
+Higher than the category floor, and deliberately so.  Two annotation
+categories sit in adjacent tracks a few pixels apart, where the eye compares
+them directly.  An annotation hue and a trace colour are compared across the
+whole window with the ribbon's own structure in between, and a mark that
+merely *resembles* the waveform reads as part of the signal -- which is the
+one confusion this design cannot tolerate.
+"""
+
+#: Annotation pairs excused from :data:`MIN_CATEGORY_SEPARATION`, with the
+#: measured worst-of-four score in each theme.  A named set, never an omission:
+#: adding a pair here is a design decision that has to be argued in review,
+#: and any pair NOT listed that falls below the floor fails the gate.
+#:
+#: Two rules cover every entry.
+#:
+#: 1. A chromatic mark and a NEUTRAL mark never share a track.  `run` owns the
+#:    RUNS track, `session` owns LOG, `control` owns CTRL, and each is
+#:    separated from the chromatic tracks by a gap and by the SENT|HEARD rule.
+#:    They are also different *forms* -- a bracket, a comb, a staircase --
+#:    against a bar or a tick.
+#: 2. `fault` appears only in the trust badge and as a filled up-triangle
+#:    glyph inside the LOG track, two tracks away from any chromatic mark and
+#:    the only triangle anywhere in the ribbon.
+#:
+#: `session` and `control` are the same token by construction: one neutral ink
+#: used in two tracks that never touch.  Their 0.00 is not a collision.
+SEPARATION_EXEMPT: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("volley", "fault"),  # 5.62 dark / 3.40 light   -- rule 2
+        ("resting", "fault"),  # 14.53 / 22.75           -- rule 2
+        ("silence", "fault"),  # 11.48 / 13.81           -- rule 2
+        ("resting", "run"),  # 6.03 / 4.82               -- rule 1
+        ("silence", "run"),  # 22.36 / 14.98             -- rule 1
+        ("resting", "session"),  # 12.61 / 18.18         -- rule 1
+        ("resting", "control"),  # 12.61 / 18.18         -- rule 1
+        ("silence", "session"),  # 13.98 / 11.77         -- rule 1
+        ("silence", "control"),  # 13.98 / 11.77         -- rule 1
+        ("detection.novel", "session"),  # 17.78 / 14.68 -- rule 1
+        ("detection.novel", "control"),  # 17.78 / 14.68 -- rule 1
+        ("session", "control"),  # 0.00 -- literally the same token
+    }
+)
+
+#: The annotation roles that carry a CATEGORY claim, and therefore the ones
+#: that get cast into a lane as a tether or a span edge.
+#:
+#: The other four roles resolve to chrome tokens that predate the ribbon --
+#: `fg.faint`, `fg.muted`, `danger` -- and those are governed by the contrast
+#: table above, not by :data:`MIN_ANNOTATION_SEPARATION`.  Holding grid-and-
+#: crosshair grey 20 dE2000 away from a dimmed blue trace is not a statement
+#: about annotations; it would be a demand to repaint the whole application's
+#: chrome, and `fg.muted` measures 13.98 from the sparse dimmed raw trace
+#: today, with or without a session log loaded.
+CATEGORY_ROLES: tuple[str, ...] = (
+    "volley",
+    "resting",
+    "silence",
+    "detection.novel",
+)
+
+#: The waveform and chrome colours that are actually painted into a lane,
+#: as ``(label, role, selected, dense)``.  Resolved to hexes by
+#: :func:`painted_trace_colors`, which routes every one of them through
+#: :func:`waveform_color` so the table tracks :data:`TRACE_DIM_MIX` and the
+#: :func:`dim_color` contrast clamp automatically.  A dimmed trace is what is
+#: on screen; the undimmed token value is not.
+PAINTED_TRACE_COLORS: tuple[tuple[str, str | None, bool, bool], ...] = (
+    ("raw", "raw", False, False),
+    ("raw dense", "raw", False, True),
+    ("filtered", "filtered", False, False),
+    ("filtered dense", "filtered", False, True),
+    ("envelope", "envelope", False, False),
+    ("envelope dense", "envelope", False, True),
+    # the selected lane, which is `primary` in every plot that draws it
+    ("selected", "raw", True, False),
+)
+
+
+def painted_trace_colors(theme_name: str | None = None) -> dict[str, str]:
+    """Resolve :data:`PAINTED_TRACE_COLORS` to ``{label: '#RRGGBB'}``.
+
+    Theme aware, and it has to be: :func:`dim_color` clamps its mix against
+    the active theme's graphic floor, so the daylight dimmed trace is not the
+    dark one lightened.  Switches the active theme and restores it, because
+    the dimming path deliberately reads global state rather than taking a
+    theme argument at 48 plots per repaint.
+    """
+    name = theme_name or current_theme()
+    previous = current_theme()
+    try:
+        if name != previous:
+            set_theme(name)
+        out = {
+            label: waveform_color(role, selected, dense).name().upper()
+            for label, role, selected, dense in PAINTED_TRACE_COLORS
+        }
+    finally:
+        if name != previous:
+            set_theme(previous)
+    return out
+
+
+def check_separation(
+    theme_name: str | None = None,
+) -> list[tuple[str, str, float, str]]:
+    """Return every annotation pair in *theme_name* that fails its floor.
+
+    Each failure is ``(a, b, delta_e, vision_kind)``.  An empty list means the
+    palette is safe.  Two gates run:
+
+    * every non-exempt pair of :data:`ANNOTATION_ROLES` against
+      :data:`MIN_CATEGORY_SEPARATION`, scored as the **worst** of
+      :data:`VISION_KINDS` -- the reported *vision_kind* is the one that
+      produced the worst score;
+    * every role in :data:`CATEGORY_ROLES` against every entry of
+      :func:`painted_trace_colors` against :data:`MIN_ANNOTATION_SEPARATION`,
+      under normal vision only, because a mark that survives normal vision
+      here is separated by hue *and* by living in a different widget.
+    """
+    table = THEMES[theme_name] if theme_name else TOKENS
+    roles = {r: table[_ANNOTATION_TOKENS[r]] for r in ANNOTATION_ROLES}
+    failures: list[tuple[str, str, float, str]] = []
+    order = list(ANNOTATION_ROLES)
+    for i, a in enumerate(order):
+        for b in order[i + 1 :]:
+            if (a, b) in SEPARATION_EXEMPT or (b, a) in SEPARATION_EXEMPT:
+                continue
+            scores = {
+                kind: delta_e2000(
+                    simulate_cvd(roles[a], kind), simulate_cvd(roles[b], kind)
+                )
+                for kind in VISION_KINDS
+            }
+            kind = min(scores, key=lambda k: scores[k])
+            if scores[kind] < MIN_CATEGORY_SEPARATION:
+                failures.append((a, b, scores[kind], kind))
+    painted = painted_trace_colors(theme_name)
+    for role in CATEGORY_ROLES:
+        for label, value in painted.items():
+            score = delta_e2000(roles[role], value)
+            if score < MIN_ANNOTATION_SEPARATION:
+                failures.append((role, f"trace {label}", score, "normal"))
+    return failures
+
+
+def _separation_report(theme_name: str, table: dict[str, str]) -> None:
+    """Print the annotation contrast and separation tables for one theme."""
+    surfaces = ("bg.plot", "bg.surface", "bg.raised")
+    print("annotations -- contrast against the grounds they are drawn on:")
+    header = "  role".ljust(20) + "hex".ljust(10)
+    print(header + "".join(name.ljust(13) for name in surfaces))
+    for role in ANNOTATION_ROLES:
+        value = table[_ANNOTATION_TOKENS[role]]
+        row = "  " + role.ljust(18) + value.ljust(10)
+        for surface in surfaces:
+            row += f"{contrast_ratio(value, table[surface]):.2f}".ljust(13)
+        print(row)
+    floor = (
+        MIN_GRAPHIC_CONTRAST_DAYLIGHT
+        if theme_name == THEME_LIGHT
+        else MIN_GRAPHIC_CONTRAST
+    )
+    print(f"  (graphic floor for this theme: {floor}:1)")
+
+    print(f"annotations -- CIEDE2000 separation, {CVD_MODEL}:")
+    header = "  " + "pair".ljust(36) + "worst".ljust(8) + "kind".ljust(9)
+    header += "".join(k.ljust(9) for k in VISION_KINDS)
+    print(header)
+    order = list(ANNOTATION_ROLES)
+    for i, a in enumerate(order):
+        for b in order[i + 1 :]:
+            scores = {
+                kind: delta_e2000(
+                    simulate_cvd(table[_ANNOTATION_TOKENS[a]], kind),
+                    simulate_cvd(table[_ANNOTATION_TOKENS[b]], kind),
+                )
+                for kind in VISION_KINDS
+            }
+            kind = min(scores, key=lambda k: scores[k])
+            exempt = (a, b) in SEPARATION_EXEMPT or (b, a) in SEPARATION_EXEMPT
+            mark = (
+                "  exempt"
+                if exempt
+                else ("  FAIL" if scores[kind] < MIN_CATEGORY_SEPARATION else "")
+            )
+            row = "  " + f"{a} / {b}".ljust(36)
+            row += f"{scores[kind]:.2f}".ljust(8) + kind.ljust(9)
+            row += "".join(f"{scores[k]:.2f}".ljust(9) for k in VISION_KINDS)
+            print(row + mark)
+    print(f"  (floor {MIN_CATEGORY_SEPARATION}, worst of the four kinds)")
+
+    print("annotations -- CIEDE2000 against what the lanes actually paint:")
+    painted = painted_trace_colors(theme_name)
+    row = "  " + "category".ljust(18) + "".join(k.ljust(17) for k in painted)
+    print(row)
+    for role in CATEGORY_ROLES:
+        value = table[_ANNOTATION_TOKENS[role]]
+        row = "  " + role.ljust(18)
+        for label in painted:
+            row += f"{delta_e2000(value, painted[label]):.2f}".ljust(17)
+        print(row)
+    print(f"  (floor {MIN_ANNOTATION_SEPARATION}, normal vision)")
+
+    failures = check_separation(theme_name)
+    if failures:
+        print("SEPARATION FAIL:")
+        for a, b, score, kind in failures:
+            print(f"  {a} vs {b}: {score:.2f} under {kind}")
+    else:
+        print("OK: every annotation pair clears its separation floor")
+
+
+#: Canonical Okabe-Ito, the reference eight-colour qualitative palette.  Kept
+#: here as the *calibration standard* for :func:`simulate_cvd`, never as a
+#: palette audian paints from -- on this plot ground its black measures 1.12:1.
+OKABE_ITO: dict[str, str] = {
+    "black": "#000000",
+    "orange": "#E69F00",
+    "sky blue": "#56B4E9",
+    "bluish green": "#009E73",
+    "yellow": "#F0E442",
+    "blue": "#0072B2",
+    "vermillion": "#D55E00",
+    "reddish purple": "#CC79A7",
+}
+
+
+def okabe_ito_worst_pair() -> tuple[str, str, float, str]:
+    """Return Okabe-Ito's worst mutual pair as ``(a, b, delta_e, vision_kind)``.
+
+    The calibration check for :func:`simulate_cvd`.  Okabe-Ito is the most
+    widely reproduced colour-blind-safe palette there is, so its worst pair is
+    a number that can be looked up: **orange vs reddish purple under
+    tritanopia**, published at roughly 8.  A simulator that quietly does
+    nothing would report this pair at 49, and every audian palette it scored
+    would look safe.
+    """
+    worst: tuple[str, str, float, str] | None = None
+    names = list(OKABE_ITO)
+    for i, a in enumerate(names):
+        for b in names[i + 1 :]:
+            for kind in VISION_KINDS:
+                score = delta_e2000(
+                    simulate_cvd(OKABE_ITO[a], kind), simulate_cvd(OKABE_ITO[b], kind)
+                )
+                if worst is None or score < worst[2]:
+                    worst = (a, b, score, kind)
+    assert worst is not None
+    return worst
+
+
 def _report() -> int:
     """Print the contrast table for every theme; return a process exit code."""
     status = 0
@@ -2399,6 +3157,16 @@ def _report() -> int:
         else:
             print(f"OK: every text pair clears {MIN_CONTRAST}:1")
         print()
+        _separation_report(name, table)
+        if check_separation(name):
+            status = 1
+        print()
+    a, b, score, kind = okabe_ito_worst_pair()
+    print(f"calibration: Okabe-Ito worst mutual pair under {CVD_MODEL} is")
+    print(f"  {a} / {b} at {score:.2f} dE2000 ({kind}); published ~8.")
+    if not 7.0 <= score <= 9.0:
+        status = 1
+        print("  FAIL: the simulator is not reproducing the reference.")
     print(
         "note: fg.faint is intentionally below 4.5:1 and is excluded -- it is\n"
         "      non-text decoration (tick marks, crosshairs) and disabled roles."
