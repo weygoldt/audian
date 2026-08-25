@@ -32,7 +32,12 @@ from audioio import available_formats, PlayAudio, AudioLoader
 
 from . import theme
 from .version import __version__, __year__, audian_dirs
-from .databrowser import DataBrowser
+from .databrowser import ANNOTATION_SURFACE_TIPS, DataBrowser
+from .eventoverlay import (
+    SURFACE_NAVIGATOR,
+    SURFACE_SPECTROGRAM,
+    SURFACE_TRACE,
+)
 from .fulltraceplot import OVERVIEW_ACTIVITY, secs_to_str
 from .plugins import Plugins
 from .panels import Panel
@@ -3524,6 +3529,28 @@ class Audian(QMainWindow):
         if browser is not None:
             browser.toggle_annotations()
 
+    def set_annotation_surface(self, surface, on):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.set_annotation_surface(surface, on)
+
+    def sync_annotation_actions(self, browser) -> None:
+        """Point the menu checks at what the browser is actually doing.
+
+        The same three switches live on the parameter bar, and a tab switch
+        changes which browser they belong to, so the menu is never the
+        source of truth -- it is told.
+        """
+        layer = getattr(browser, "annotations", None)
+        if layer is None or browser is not self.browser():
+            # a background tab changing its own switches must not move the
+            # menu, which speaks for the tab in front
+            return
+        for surface, act in self.acts.annotation_surfaces.items():
+            blocked = act.blockSignals(True)
+            act.setChecked(layer.surfaces.get(surface, True))
+            act.blockSignals(blocked)
+
     def next_annotation(self):
         browser = self.require_browser()
         if browser is not None:
@@ -3546,6 +3573,22 @@ class Audian(QMainWindow):
         self.acts.toggle_annotations.setShortcut("F8")
         self.acts.toggle_annotations.triggered.connect(self.toggle_annotations)
 
+        # one check per surface, mirroring the chips on the parameter bar
+        self.acts.annotation_surfaces = {}
+        for surface, label, enabled in (
+            (SURFACE_TRACE, "Show on &traces", True),
+            (SURFACE_SPECTROGRAM, "Show on &spectrograms", True),
+            (SURFACE_NAVIGATOR, "Show on the &navigator", True),
+        ):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked(enabled)
+            act.setToolTip(ANNOTATION_SURFACE_TIPS[surface])
+            act.toggled.connect(
+                lambda on, name=surface: self.set_annotation_surface(name, on)
+            )
+            self.acts.annotation_surfaces[surface] = act
+
         self.acts.clear_annotations = QAction("&Clear annotations", self)
         self.acts.clear_annotations.triggered.connect(self.clear_annotations)
 
@@ -3564,6 +3607,9 @@ class Audian(QMainWindow):
         annotation_menu.addAction(self.acts.load_annotations)
         annotation_menu.addAction(self.acts.toggle_annotations)
         annotation_menu.addAction(self.acts.clear_annotations)
+        annotation_menu.addSeparator()
+        for act in self.acts.annotation_surfaces.values():
+            annotation_menu.addAction(act)
         annotation_menu.addSeparator()
         annotation_menu.addAction(self.acts.next_annotation)
         annotation_menu.addAction(self.acts.previous_annotation)
@@ -3780,6 +3826,7 @@ class Audian(QMainWindow):
                 browser.spec_acts[0].setChecked(True)
             self.spectrogram_menu.menuAction().setVisible(len(browser.spec_acts) > 1)
             self.relabel_axis_actions(browser)
+            self.sync_annotation_actions(browser)
             browser.update()
         self.sync_toolbar(browser)
 

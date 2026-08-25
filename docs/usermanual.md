@@ -254,6 +254,9 @@ The bottom bar grows an **Annotations** group while a file is loaded:
 - **Source** — the file, the channel the fit was made against, and a badge
   saying how far its positions may be believed. Hover the badge for the fit
   itself: scale, offset and drift.
+- **Show** — the master switch, then one chip per place the marks can go:
+  **Traces**, **Spectrograms**, **Navigator**. The same three sit in
+  *View ▸ Annotations*, and the two always agree.
 - **Classes** — one chip per event label and one per status. Colour is the
   event; the chips are drawn with the same pens the plot uses, so the strip
   doubles as the legend. Click one to hide that class.
@@ -264,6 +267,23 @@ The bottom bar grows an **Annotations** group while a file is loaded:
 the next and previous annotation of a class that is shown — which is how you
 check the overlay against the audio: step to an event, zoom in, and see
 whether the line sits on the pulse.
+
+### The navigator strip
+
+The navigator shows the whole session at once, so a line down the lane there
+would bury the waveform it exists to show. The marks sit in a band along the
+top edge instead, and read as a ruler of events: where the stimulation was
+running, and where it stopped.
+
+Observed and predicted get **separate stripes** rather than long and short
+marks in one. A navigator row is about sixty pixels, so the band is eight,
+and neither a dash pattern nor a half-length mark survives that. Two stripes
+do — and they answer the question the strip is good for: *is there a stretch
+of this session where the fit predicted pulses and nothing was ever found?*
+That reads as a lower stripe with nothing above it.
+
+Turn it off with the **Navigator** chip if you would rather see the bare
+envelope.
 
 ### Observed and predicted are drawn differently
 

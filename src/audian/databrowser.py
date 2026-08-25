@@ -19,6 +19,7 @@ from PyQt5.QtCore import Qt, QEvent, QPoint, QSettings, QSize, QTimer
 from PyQt5.QtGui import QCursor, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout
+from PyQt5.QtWidgets import QLayout
 from PyQt5.QtWidgets import QScrollArea, QSplitter, QFrame, QSlider
 from PyQt5.QtWidgets import QLineEdit, QToolButton
 from PyQt5.QtWidgets import QSizePolicy, QSpacerItem, QAbstractSpinBox
@@ -54,8 +55,9 @@ from .markerdata import MarkerData, MarkerDataModel
 from .eventoverlay import (
     LEGEND_H,
     LEGEND_W,
-    SPECTROGRAM_ALPHA,
-    TRACE_ALPHA,
+    SURFACE_NAVIGATOR,
+    SURFACE_SPECTROGRAM,
+    SURFACE_TRACE,
     AnnotationLayer,
     EventOverlay,
     legend_icon,
@@ -66,6 +68,17 @@ from .statisticsanalyzer import StatisticsAnalyzer
 
 
 log = logging.getLogger(__name__)
+
+#: What each annotation surface chip promises, in the reader's terms rather
+#: than in the code's.
+ANNOTATION_SURFACE_TIPS = {
+    SURFACE_TRACE: "Draw the annotations over the waveform lanes",
+    SURFACE_SPECTROGRAM: "Draw the annotations over the spectrogram lanes",
+    SURFACE_NAVIGATOR: (
+        "Mark the annotations along the top of the navigator strip, so the "
+        "whole session shows where the events are"
+    ),
+}
 
 pg.setConfigOption("useNumba", True)
 
@@ -145,6 +158,9 @@ class ParameterGroup(QWidget):
         self.rows += 1
         return [caption, *widgets]
 
+    #: Qt's "no maximum", for releasing a previous setFixedHeight.
+    UNBOUNDED = 16777215
+
     @staticmethod
     def equalize(groups: "list[ParameterGroup]") -> None:
         """Give every group the same frame height.
@@ -153,10 +169,32 @@ class ParameterGroup(QWidget):
         185, 175 and 130 px whose captions sat on three different baselines
         - three separate boxes rather than one bar.  The shorter groups get
         the tallest one's height and keep their rows packed at the top.
+
+        Callable again after a group's contents change, which the annotation
+        chips do: they are rebuilt whenever a file is loaded.  That needs two
+        things this used to skip.  The previous `setFixedHeight` has to be
+        released first, or a group can only ever grow to whatever the bar was
+        when it was first built; and the layout has to be activated before it
+        is measured, because widgets added a moment ago are not in its size
+        hint yet -- which is how the class chips ended up clipped to a four
+        pixel sliver.
         """
         if not groups:
             return
-        height = max(g.body.sizeHint().height() for g in groups)
+        for group in groups:
+            group.body.setMinimumHeight(0)
+            group.body.setMaximumHeight(ParameterGroup.UNBOUNDED)
+            # Every nested layout, not just the group's own: a row whose
+            # field is a container -- the chip strip is one -- reports the
+            # height it had before its contents changed until that inner
+            # layout is activated, and the group is then sized for a row
+            # that is no longer there.
+            for layout in group.body.findChildren(QLayout):
+                layout.invalidate()
+                layout.activate()
+            group.grid.invalidate()
+            group.grid.activate()
+        height = max(g.grid.totalSizeHint().height() for g in groups)
         for group in groups:
             # absorb the added height below the last row, not between rows:
             group.grid.setRowStretch(group.rows, 1)
@@ -805,6 +843,7 @@ class DataBrowser(QWidget):
         #: when the annotation chips change the height of their group
         self.param_groups = []
         self.annotation_showw = None
+        self.annotation_surfacew = {}
         self.annotation_hoverw = None
 
         # plots:
@@ -1199,7 +1238,6 @@ class DataBrowser(QWidget):
 
         if self.spectrogram:
             self.spectrogram_power = self.panels[self.data[self.spectrogram].panel].z()
-        self.attach_annotation_overlays()
         self.setup_parameter_bar()
         self.vbox.addWidget(self.parambar)
 
@@ -1212,6 +1250,10 @@ class DataBrowser(QWidget):
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
         self.splitter.setCollapsible(0, False)
+
+        # after the navigator exists: its rows are one of the three surfaces
+        # an annotation is drawn on, so there is one attach pass, not two
+        self.attach_annotation_overlays()
 
         if hasattr(self.datafig, "sigHoverTime"):
             self.datafig.sigHoverTime.connect(self.show_navigator_time)
@@ -1962,6 +2004,8 @@ class DataBrowser(QWidget):
             return
         self.datafig.set_mode(mode)
         self.adjust_layout(self.width(), self.height())
+        # rows that were hidden a moment ago now have to carry their marks
+        self.redraw_annotations()
 
     def toggle_navigator_mode(self) -> None:
         """Flip the navigator between 'single' and 'all'."""
@@ -1998,6 +2042,8 @@ class DataBrowser(QWidget):
             OVERVIEW_WAVEFORM if current == OVERVIEW_ACTIVITY else OVERVIEW_ACTIVITY
         )
         self.datafig.set_overview(target)
+        # the activity overview has a different y range, so the band moves
+        self.redraw_annotations()
 
     def update_levels(self) -> None:
         """Update the peak level of every rail row for the visible window."""
@@ -2465,26 +2511,39 @@ class DataBrowser(QWidget):
     # --- annotations -----------------------------------------------------
 
     def attach_annotation_overlays(self) -> None:
-        """Give every trace and spectrogram plot an annotation overlay.
+        """Give every trace, spectrogram and navigator plot an overlay.
 
         Done once, when the plots are built.  The overlays start empty and
         cost nothing until a table is loaded; creating them up front means a
         file opened later never has to walk the plot tree again.
+
+        Which surface a plot is decides how the marks are drawn, so it is
+        passed rather than inferred: a line down a lane is right over a
+        waveform and wrong over a strip showing ten minutes at once.
         """
         self.annotation_overlays = []
         for panel in self.panels.values():
             if panel.is_spacer() or panel.is_power():
                 continue
             if panel.is_trace():
-                alpha = TRACE_ALPHA
+                surface = SURFACE_TRACE
             elif panel.is_spectrogram():
-                alpha = SPECTROGRAM_ALPHA
+                surface = SURFACE_SPECTROGRAM
             else:
                 continue
             for ax in panel.axs:
-                overlay = EventOverlay(ax, self.annotations, alpha)
+                overlay = EventOverlay(ax, self.annotations, surface)
                 ax.annotations = overlay
                 self.annotation_overlays.append(overlay)
+        # the navigator: one row per channel, the whole session in each
+        for ax in getattr(self.datafig, "axs", []):
+            overlay = EventOverlay(ax, self.annotations, SURFACE_NAVIGATOR)
+            ax.annotations = overlay
+            self.annotation_overlays.append(overlay)
+
+    def set_annotation_surface(self, surface: str, on: bool) -> None:
+        """Show or hide the overlay on one surface."""
+        self.annotations.set_surface(surface, on)
 
     def recording_path(self) -> Path:
         """The recording an alignment file has to name.
@@ -2689,10 +2748,48 @@ class DataBrowser(QWidget):
         loadw.setText("Load…")
         loadw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         loadw.setToolTip("Read events from an alignment CSV  (Ctrl+Shift+A)")
+        loadw.setFixedHeight(theme.CHIP_HEIGHT)
         loadw.clicked.connect(self.open_annotations)
         group.add_row(
             "Source", "", self.annotation_sourcew, self.annotation_badgew, loadw
         )
+
+        # Where the marks are drawn: the master switch and one chip per
+        # surface.  Separate from the class chips below on purpose -- "which
+        # events" and "which panels" are different questions, and putting
+        # them in one strip would make the answer to either hard to read off.
+        wherebox = QWidget(self.parambar)
+        where = QHBoxLayout(wherebox)
+        where.setContentsMargins(0, 0, 0, 0)
+        where.setSpacing(theme.S4)
+        self.annotation_showw = QToolButton(wherebox)
+        self.annotation_showw.setText("Show")
+        self.annotation_showw.setCheckable(True)
+        self.annotation_showw.setChecked(True)
+        self.annotation_showw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        self.annotation_showw.setToolTip(
+            "Show the annotation overlay at all  (F8).\n"
+            "The chips beside it choose which panels it reaches."
+        )
+        self.annotation_showw.toggled.connect(self.annotations.set_visible)
+        self.annotation_showw.setFixedHeight(theme.CHIP_HEIGHT)
+        where.addWidget(self.annotation_showw)
+        self.annotation_surfacew = {}
+        for surface, label, enabled in self.annotations.surface_states():
+            chip = QToolButton(wherebox)
+            chip.setText(label)
+            chip.setCheckable(True)
+            chip.setChecked(enabled)
+            chip.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+            chip.setFixedHeight(theme.CHIP_HEIGHT)
+            chip.setToolTip(ANNOTATION_SURFACE_TIPS[surface])
+            chip.toggled.connect(
+                lambda on, name=surface: self.set_annotation_surface(name, on)
+            )
+            where.addWidget(chip)
+            self.annotation_surfacew[surface] = chip
+        where.addStretch(1)
+        group.add_row("Show", "F8", wherebox)
 
         # One strip for both toggle axes: what the events are, and whether
         # they were observed.  A grid rather than a row, because a file with
@@ -2705,14 +2802,6 @@ class DataBrowser(QWidget):
         strip.setHorizontalSpacing(theme.S4)
         strip.setVerticalSpacing(theme.S2)
         strip.setColumnStretch(DataBrowser.ANNOTATION_CHIP_COLUMNS, 1)
-        self.annotation_showw = QToolButton(self.annotation_chipbox)
-        self.annotation_showw.setText("Show")
-        self.annotation_showw.setCheckable(True)
-        self.annotation_showw.setChecked(True)
-        self.annotation_showw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
-        self.annotation_showw.setToolTip("Show the annotation overlay  (F8)")
-        self.annotation_showw.toggled.connect(self.annotations.set_visible)
-        strip.addWidget(self.annotation_showw, 0, 0)
         group.add_row("Classes", "", self.annotation_chipbox)
 
         self.annotation_hoverw = QLabel("", self.parambar)
@@ -2779,16 +2868,23 @@ class DataBrowser(QWidget):
 
         columns = DataBrowser.ANNOTATION_CHIP_COLUMNS
         for i, chip in enumerate(chips):
-            # +1 so the Show button keeps the first cell of the first row
-            slot = i + 1
-            strip.addWidget(chip, slot // columns, slot % columns)
+            strip.addWidget(chip, i // columns, i % columns)
         self.annotation_chips = chips
 
         if self.annotation_group is not None:
             self.annotation_group.setVisible(True)
-        # the group grew or shrank by a row of chips, and equalize() froze
-        # every frame height when the bar was built
-        ParameterGroup.equalize(self.param_groups)
+        # The group grew or shrank by a row of chips, and equalize() froze
+        # every frame height when the bar was built.  Deferred by one turn
+        # of the event loop rather than run here: widgets added a moment ago
+        # do not reach their parent's size hint until Qt has processed the
+        # layout invalidation, and measuring before that leaves the group a
+        # row-spacing short and clips the last row of chips.
+        QTimer.singleShot(0, self.equalize_parameter_bar)
+
+    def equalize_parameter_bar(self) -> None:
+        """Re-level the parameter bar's frames after a group changed size."""
+        if self.param_groups:
+            ParameterGroup.equalize(self.param_groups)
 
     def annotation_chip(self, text: str, checked: bool) -> QToolButton:
         chip = QToolButton(self.annotation_chipbox)
@@ -2797,18 +2893,33 @@ class DataBrowser(QWidget):
         chip.setChecked(bool(checked))
         chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         chip.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        chip.setFixedHeight(theme.CHIP_HEIGHT)
         # exactly the pixmap size: a legend icon scaled by even one pixel
         # loses the hairline that says whether the line is solid or broken
         chip.setIconSize(QSize(LEGEND_W, LEGEND_H))
         return chip
 
     def update_annotation_chips(self) -> None:
-        """Keep the Show button in step with the layer."""
+        """Keep the Show button and the surface chips in step with the layer.
+
+        They can be driven from the menu and from a key as well as from the
+        bar, and a checkbox that disagrees with what is on screen is worse
+        than no checkbox.
+        """
         if self.annotation_showw is None:
             return
         blocked = self.annotation_showw.blockSignals(True)
         self.annotation_showw.setChecked(self.annotations.visible)
         self.annotation_showw.blockSignals(blocked)
+        for surface, chip in self.annotation_surfacew.items():
+            # the surface chips stay usable while the master is off: they say
+            # where the overlay *would* go, and dimming them would hide that
+            blocked = chip.blockSignals(True)
+            chip.setChecked(self.annotations.surfaces.get(surface, True))
+            chip.blockSignals(blocked)
+        window = self.window()
+        if window is not None and hasattr(window, "sync_annotation_actions"):
+            window.sync_annotation_actions(self)
 
     def update_annotation_badge(self) -> None:
         """Restate where the annotations came from and how far to trust them."""

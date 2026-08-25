@@ -62,6 +62,30 @@ from .events import (
 log = logging.getLogger(__name__)
 
 
+#: The three places an annotation can be drawn.  They are separate switches
+#: because they answer different questions: the trace and the spectrogram say
+#: *what the signal was doing at this event*, the navigator says *where in the
+#: session the events are*.  Wanting one is no reason to want the others.
+SURFACE_TRACE = "trace"
+SURFACE_SPECTROGRAM = "spectrogram"
+SURFACE_NAVIGATOR = "navigator"
+
+#: Order the surfaces are listed in, and the label each one gets.  The strip
+#: at the bottom of the window is the *navigator* everywhere else in audian
+#: -- the Panels menu, F6 -- and a chip that called the same thing something
+#: else would be a second name for one object.  What the marks make of it is
+#: a timeline of the session, and that belongs in the tool tip, not the label.
+SURFACE_ORDER: tuple[str, ...] = (
+    SURFACE_TRACE,
+    SURFACE_SPECTROGRAM,
+    SURFACE_NAVIGATOR,
+)
+SURFACE_LABELS: dict[str, str] = {
+    SURFACE_TRACE: "Traces",
+    SURFACE_SPECTROGRAM: "Spectrograms",
+    SURFACE_NAVIGATOR: "Navigator",
+}
+
 #: Opacity of an event line over a waveform.  Well below 1: the point of the
 #: overlay is to say where an event is *on the trace*, and an opaque line
 #: hides the pulse it is pointing at.
@@ -71,6 +95,11 @@ TRACE_ALPHA = 0.62
 #: an empty ground, so it needs more of it.
 SPECTROGRAM_ALPHA = 0.8
 
+#: On the navigator the mark is a short tick rather than a line down the
+#: lane, so it has less to hide -- but a whole session of events packs about
+#: one tick per pixel, and at full opacity that is a solid bar.
+NAVIGATOR_ALPHA = 0.8
+
 #: Everything is scaled by this when the alignment was never validated.
 UNVALIDATED_ALPHA = 0.6
 
@@ -78,10 +107,51 @@ UNVALIDATED_ALPHA = 0.6
 MEASURED_SPAN = (0.0, 1.0)
 PREDICTED_SPAN = (0.60, 0.90)
 
+#: The navigator shows the whole session in one strip, so a line down the
+#: lane would bury the very waveform the strip exists to show.  The marks sit
+#: in a band along the top edge instead, and read as a ruler of events.
+#:
+#: Observed and predicted get *separate stripes* rather than long and short
+#: marks in one.  A navigator row is about 60 px, so the band is eight pixels
+#: and a "half length" mark would be four -- neither a dash pattern nor a
+#: length difference survives that.  Two stripes do, and they answer the
+#: question the strip is actually good for: is there a stretch of this
+#: session where the fit predicted pulses and nothing was ever found?  That
+#: reads as a lower stripe with nothing above it.
+NAVIGATOR_MEASURED_SPAN = (0.88, 1.0)
+NAVIGATOR_PREDICTED_SPAN = (0.76, 0.86)
+
 #: Above this many drawn events the diamond caps on predicted events are
 #: dropped: at that density they merge into a bar and say nothing the dashed
 #: stub does not already say.
 CAP_LIMIT = 400
+
+#: How each surface draws: opacity, the span of an observed and of a
+#: predicted mark, and whether predicted marks get their hollow cap.  Keeping
+#: it in one table means the three surfaces are the same code path with
+#: different numbers rather than three drawing routines that can drift apart.
+SURFACE_STYLE: dict[str, dict] = {
+    SURFACE_TRACE: {
+        "alpha": TRACE_ALPHA,
+        "measured": MEASURED_SPAN,
+        "predicted": PREDICTED_SPAN,
+        "caps": True,
+    },
+    SURFACE_SPECTROGRAM: {
+        "alpha": SPECTROGRAM_ALPHA,
+        "measured": MEASURED_SPAN,
+        "predicted": PREDICTED_SPAN,
+        "caps": True,
+    },
+    SURFACE_NAVIGATOR: {
+        "alpha": NAVIGATOR_ALPHA,
+        "measured": NAVIGATOR_MEASURED_SPAN,
+        "predicted": NAVIGATOR_PREDICTED_SPAN,
+        # a 12 px band has no room for a cap, and a diamond that small is a
+        # smudge rather than a symbol
+        "caps": False,
+    },
+}
 
 #: Fallback width in device pixels when a view box has not been laid out yet.
 DEFAULT_PIXELS = 1200
@@ -112,6 +182,9 @@ class AnnotationLayer(QObject):
         # and "hide everything that was only predicted" are one click each.
         self.events: dict[str, bool] = {}
         self.statuses: dict[str, bool] = {}
+        #: which surfaces draw at all.  A third axis alongside the event and
+        #: the status: *where* to show them, not *which* to show.
+        self.surfaces: dict[str, bool] = dict.fromkeys(SURFACE_ORDER, True)
         #: set when the file's ``#recording=`` names a different recording
         self.recording_mismatch: Optional[str] = None
         #: bumped whenever anything an overlay draws from changes.  An
@@ -179,6 +252,24 @@ class AnnotationLayer(QObject):
     @property
     def unvalidated(self) -> bool:
         return self.trust == TRUST_UNVALIDATED
+
+    def surface_enabled(self, surface: str) -> bool:
+        """Whether annotations are drawn on `surface` at all."""
+        return self.visible and self.surfaces.get(surface, True)
+
+    def set_surface(self, surface: str, on: bool) -> None:
+        if self.surfaces.get(surface) == bool(on):
+            return
+        self.surfaces[surface] = bool(on)
+        self.revision += 1
+        self.sigVisibilityChanged.emit()
+
+    def surface_states(self) -> list:
+        """``(surface, label, enabled)`` per surface, in `SURFACE_ORDER`."""
+        return [
+            (name, SURFACE_LABELS[name], self.surfaces.get(name, True))
+            for name in SURFACE_ORDER
+        ]
 
     def is_enabled(self, key) -> bool:
         event, status = key
@@ -306,9 +397,6 @@ class AnnotationLayer(QObject):
         width = theme.LW_THIN if event_class.measured else theme.LW_HAIRLINE
         return theme.pen(self.color(event_class), width=width, alpha=alpha, style=style)
 
-    def span(self, event_class: EventClass) -> tuple[float, float]:
-        return MEASURED_SPAN if event_class.measured else PREDICTED_SPAN
-
     # --- what the badge has to say ---------------------------------------
 
     def badge(self) -> tuple[str, str, str]:
@@ -360,6 +448,20 @@ class AnnotationLayer(QObject):
 _EMPTY = np.empty(0, dtype=np.float64)
 
 
+def _passive(item) -> None:
+    """Make a plot item invisible to the mouse.
+
+    pyqtgraph hands every `PlotCurveItem` and `ScatterPlotItem` the full set
+    of accepted mouse buttons, so an annotation line lying under the pointer
+    is an item the scene will offer the press to before the view box sees it
+    -- and a rubber band drag that starts on an event is exactly the drag a
+    reader is most likely to make.  An annotation states where something is;
+    it is not a control.
+    """
+    item.setAcceptedMouseButtons(Qt.NoButton)
+    item.setAcceptHoverEvents(False)
+
+
 class EventOverlay:
     """The annotation lines of one plot.
 
@@ -369,10 +471,16 @@ class EventOverlay:
     ``arrayToQPath`` and no Python loop ever sees an event.
     """
 
-    def __init__(self, plot, layer: AnnotationLayer, alpha: float = TRACE_ALPHA):
+    def __init__(self, plot, layer: AnnotationLayer, surface: str = SURFACE_TRACE):
+        style = SURFACE_STYLE[surface]
         self.plot = plot
         self.layer = layer
-        self.alpha = float(alpha)
+        #: which of the three surfaces this overlay draws on; the layer's
+        #: per-surface switch is read through it
+        self.surface = surface
+        self.alpha = float(style["alpha"])
+        self.spans = (style["measured"], style["predicted"])
+        self.wants_caps = bool(style["caps"])
         self.curves: dict[tuple[str, str], pg.PlotCurveItem] = {}
         self.caps: dict[tuple[str, str], pg.ScatterPlotItem] = {}
         self._keys: tuple = ()
@@ -415,13 +523,15 @@ class EventOverlay:
             # Above the traces, below the crosshair and the playback cursor:
             # an annotation must not hide where the sound is playing.
             curve.setZValue(15)
+            _passive(curve)
             self.plot.addItem(curve, ignoreBounds=True)
             self.curves[key] = curve
-            if not event_class.measured:
+            if self.wants_caps and not event_class.measured:
                 cap = pg.ScatterPlotItem(
                     symbol="d", size=theme.S8, pxMode=True, hoverable=False
                 )
                 cap.setZValue(16)
+                _passive(cap)
                 self.plot.addItem(cap, ignoreBounds=True)
                 self.caps[key] = cap
         self._keys = keys
@@ -476,9 +586,12 @@ class EventOverlay:
             return
         # A hidden lane still gets its view box's sigRangeChanged, and
         # redrawing what nobody can see is the whole cost of hiding a channel
-        # in a sixteen channel stack.  `_drawn` is left alone, so the lane
-        # redraws itself when it comes back.
+        # in a sixteen channel stack.  The last-drawn state is dropped rather
+        # than kept: nothing promises a range signal when the lane is shown
+        # again -- the navigator hides its rows through setVisible() alone --
+        # so the next call has to redraw whatever it is handed.
         if not self.plot.isVisible():
+            self._drawn = None
             return
         view = self.plot.getViewBox()
         if view is None:
@@ -494,11 +607,12 @@ class EventOverlay:
         if state == self._drawn:
             return
         self._drawn = state
+        on = self.layer.surface_enabled(self.surface)
         height = y1 - y0
         for key, curve in self.curves.items():
             cap = self.caps.get(key)
             drawn = 0
-            if self.layer.is_enabled(key):
+            if on and self.layer.is_enabled(key):
                 xpairs, drawn, _total = self.layer.window(key, t0, t1, pixels)
             if drawn == 0:
                 if key not in self._blank:
@@ -508,7 +622,7 @@ class EventOverlay:
                     self._blank.add(key)
                 continue
             self._blank.discard(key)
-            low, high = self.layer.span(table[key])
+            low, high = self.spans[0 if table[key].measured else 1]
             segment = np.array([y0 + low * height, y0 + high * height])
             # xpairs is the layer's cached array, shared with every other
             # plot in the stack; pyqtgraph keeps a reference and never writes

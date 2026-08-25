@@ -163,6 +163,22 @@ def run_interactions(app, main_win):
                 "show predicted events",
                 lambda: browser.annotations.set_status("unmatched", True),
             ),
+            (
+                "annotations off the traces",
+                lambda: browser.set_annotation_surface("trace", False),
+            ),
+            (
+                "annotations back on the traces",
+                lambda: browser.set_annotation_surface("trace", True),
+            ),
+            (
+                "annotations off the navigator",
+                lambda: browser.set_annotation_surface("navigator", False),
+            ),
+            (
+                "annotations back on the navigator",
+                lambda: browser.set_annotation_surface("navigator", True),
+            ),
             ("clear annotations", lambda: browser.clear_annotations()),
             ("metadata dialog", lambda: browser.show_metadata()),
             ("message log", lambda: main_win.show_log()),
@@ -276,6 +292,12 @@ def main(argv=None):
 
     pump(app, args.settle)
 
+    if args.spectrogram:
+        browser = main_win.browser()
+        if browser is not None and not getattr(browser, "show_specs", 0):
+            main_win.acts.toggle_spectrograms.trigger()
+            pump(app, 4.0)
+
     if args.events or args.goto is not None or args.window is not None:
         browser = main_win.browser()
         if browser is None:
@@ -306,12 +328,17 @@ def main(argv=None):
                     table[key].count_between(t0, t1) for key in layer.active_keys()
                 )
                 print(f"             {shown} events in view {t0:.3f}..{t1:.3f} s")
-
-    if args.spectrogram:
-        browser = main_win.browser()
-        if browser is not None and not getattr(browser, "show_specs", 0):
-            main_win.acts.toggle_spectrograms.trigger()
-            pump(app, 4.0)
+                per_surface = {}
+                for overlay in browser.annotation_overlays:
+                    drawn = sum(
+                        c.getData()[0].size // 2 for c in overlay.curves.values()
+                    )
+                    per_surface[overlay.surface] = (
+                        per_surface.get(overlay.surface, 0) + drawn
+                    )
+                print(f"             marks drawn: {per_surface}")
+                if not any(per_surface.values()):
+                    faults.append("annotations loaded but nothing was drawn")
 
     if args.theme:
         from audian import theme as _theme

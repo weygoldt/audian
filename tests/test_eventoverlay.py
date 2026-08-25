@@ -33,7 +33,13 @@ from audian import eventoverlay, theme  # noqa: E402
 from audian.eventoverlay import (  # noqa: E402
     CAP_LIMIT,
     MEASURED_SPAN,
+    NAVIGATOR_MEASURED_SPAN,
+    NAVIGATOR_PREDICTED_SPAN,
     PREDICTED_SPAN,
+    SURFACE_NAVIGATOR,
+    SURFACE_ORDER,
+    SURFACE_SPECTROGRAM,
+    SURFACE_TRACE,
     UNVALIDATED_ALPHA,
     AnnotationLayer,
     EventOverlay,
@@ -64,6 +70,25 @@ def layer(alignment):
     layer = AnnotationLayer()
     layer.load(alignment, "REC.wav")
     return layer
+
+
+@pytest.fixture
+def new_plot(app):
+    """Make plots and keep them alive.
+
+    A `PlotWidget` that nothing holds is collected between statements, and
+    the next call into its view box raises "wrapped C/C++ object has been
+    deleted" rather than failing the thing under test.
+    """
+    kept = []
+
+    def make(**kwargs):
+        widget, plot = make_plot(app, **kwargs)
+        kept.append(widget)
+        return plot
+
+    yield make
+    kept.clear()
 
 
 def make_plot(app, xrange=(0.0, 5.0), yrange=(-1.0, 1.0)):
@@ -365,32 +390,172 @@ def test_caps_are_dropped_once_they_would_merge_into_a_bar(app, tmp_path):
     assert len(caps) == 0
 
 
+# --- surfaces ---------------------------------------------------------------
+
+
+def test_every_surface_starts_on(layer):
+    assert [name for name, _label, on in layer.surface_states() if on] == list(
+        SURFACE_ORDER
+    )
+
+
+def test_a_surface_can_be_switched_off_on_its_own(new_plot, layer):
+    """Wanting marks on the trace is no reason to want them on the strip."""
+    overlays = {
+        surface: EventOverlay(new_plot(), layer, surface) for surface in SURFACE_ORDER
+    }
+    for overlay in overlays.values():
+        overlay.rebuild()
+        overlay.update_plot()
+
+    def drawn(surface):
+        return sum(c.getData()[0].size for c in overlays[surface].curves.values())
+
+    assert all(drawn(s) > 0 for s in SURFACE_ORDER)
+    layer.set_surface(SURFACE_NAVIGATOR, False)
+    for overlay in overlays.values():
+        overlay.update_plot()
+    assert drawn(SURFACE_NAVIGATOR) == 0
+    assert drawn(SURFACE_TRACE) > 0
+    assert drawn(SURFACE_SPECTROGRAM) > 0
+
+
+def test_the_master_switch_overrides_every_surface(new_plot, layer):
+    overlay = EventOverlay(new_plot(), layer, SURFACE_NAVIGATOR)
+    overlay.rebuild()
+    overlay.update_plot()
+    assert layer.surface_enabled(SURFACE_NAVIGATOR)
+    layer.set_visible(False)
+    assert not layer.surface_enabled(SURFACE_NAVIGATOR)
+    overlay.update_plot()
+    assert all(c.getData()[0].size == 0 for c in overlay.curves.values())
+
+
+def test_the_navigator_keeps_observed_and_predicted_in_separate_stripes(app, layer):
+    """At sixty pixels a row, length and dashes both vanish; position does not.
+
+    A stretch of session where the fit predicted pulses and nothing was ever
+    found has to be visible as a lower stripe with nothing above it, so the
+    two bands must not overlap.
+    """
+    widget, plot = make_plot(app, yrange=(0.0, 1.0))
+    overlay = EventOverlay(plot, layer, SURFACE_NAVIGATOR)
+    overlay.rebuild()
+    overlay.update_plot()
+
+    _x, measured = overlay.curves[("LOC", "matched")].getData()
+    _x, predicted = overlay.curves[("LOC", "unmatched")].getData()
+    assert sorted(set(np.round(measured, 6))) == list(NAVIGATOR_MEASURED_SPAN)
+    assert sorted(set(np.round(predicted, 6))) == list(NAVIGATOR_PREDICTED_SPAN)
+    assert predicted.max() < measured.min(), "the two stripes overlap"
+    # and the observed one reaches the top edge of the row
+    assert measured.max() == pytest.approx(1.0)
+
+
+def test_the_navigator_draws_no_caps(new_plot, layer):
+    """A hollow diamond in an eight pixel band is a smudge, not a symbol."""
+    overlay = EventOverlay(new_plot(), layer, SURFACE_NAVIGATOR)
+    overlay.rebuild()
+    assert overlay.caps == {}
+    assert set(overlay.curves) == set(layer.table.keys)
+
+
+def test_the_lane_surfaces_still_draw_down_the_lane(new_plot, layer):
+    for surface in (SURFACE_TRACE, SURFACE_SPECTROGRAM):
+        overlay = EventOverlay(new_plot(), layer, surface)
+        assert overlay.spans == (MEASURED_SPAN, PREDICTED_SPAN)
+        assert overlay.wants_caps
+
+
+def test_a_spectrogram_mark_is_more_opaque_than_a_trace_mark(new_plot, layer):
+    """It competes with an image rather than with an empty ground."""
+    trace = EventOverlay(new_plot(), layer, SURFACE_TRACE)
+    spec = EventOverlay(new_plot(), layer, SURFACE_SPECTROGRAM)
+    assert spec.alpha > trace.alpha
+
+
+# --- the mouse ---------------------------------------------------------------
+
+
+def test_overlay_items_never_take_the_mouse(app, layer):
+    """A rubber band drag that starts on an event must reach the view box.
+
+    pyqtgraph hands every curve and scatter the full set of accepted mouse
+    buttons, so an annotation lying under the pointer is an item the scene
+    offers the press to first -- and starting a drag on an event is the most
+    likely drag a reader makes.
+    """
+    widget, plot = make_plot(app)
+    overlay = EventOverlay(plot, layer)
+    overlay.rebuild()
+    for item in list(overlay.curves.values()) + list(overlay.caps.values()):
+        assert item.acceptedMouseButtons() == Qt.NoButton
+        assert not item.acceptHoverEvents()
+
+
 # --- actions that must never block ------------------------------------------
 
 
-def test_toggling_with_nothing_loaded_does_not_open_a_dialog(app, monkeypatch):
+def test_toggling_with_nothing_loaded_does_not_open_a_dialog():
     """A key bound to a toggle must not be able to raise a modal file chooser.
 
     `DataBrowser.toggle_annotations` is on F8.  Falling through to the file
     chooser when no table is loaded made that key open a modal dialog, which
     is surprising from the keyboard and a hang for anything driving the
     application without a user in front of it.
+
+    Exercised on the unbound method rather than on a real browser: building
+    one needs a file, and what is under test is a two line decision.
     """
     from audian.databrowser import DataBrowser
 
-    browser = DataBrowser.__new__(DataBrowser)
-    browser.annotations = AnnotationLayer()
     said = []
-    monkeypatch.setattr(
-        DataBrowser, "notify", lambda self, level, message: said.append(message)
-    )
-    monkeypatch.setattr(
-        DataBrowser,
-        "open_annotations",
-        lambda self: pytest.fail("toggle raised the file chooser"),
-    )
-    browser.toggle_annotations()
+
+    class Stub:
+        toggle_annotations = DataBrowser.toggle_annotations
+
+        def __init__(self):
+            self.annotations = AnnotationLayer()
+
+        def notify(self, level, message):
+            said.append(message)
+
+        def open_annotations(self):
+            pytest.fail("the toggle raised the file chooser")
+
+    Stub().toggle_annotations()
     assert said and "Ctrl+Shift+A" in said[0]
+
+
+# --- the parameter bar frame -------------------------------------------------
+
+
+def test_equalize_regrows_a_group_whose_contents_changed(app):
+    """The Annotations group gains a row of chips after its bar was built.
+
+    `equalize` froze every frame at the height the bar had then, and measured
+    before Qt had processed the new widgets, so the class chips came back
+    clipped to a four pixel sliver.  Both halves are checked here: the frames
+    grow, and they grow by what the contents actually need.
+    """
+    from PyQt5.QtWidgets import QLabel
+    from audian.databrowser import ParameterGroup
+
+    groups = [ParameterGroup("A"), ParameterGroup("B")]
+    for group in groups:
+        group.add_row("row", "", QLabel("x"))
+    ParameterGroup.equalize(groups)
+    before = groups[0].body.height()
+
+    tall = QLabel("tall")
+    tall.setFixedHeight(4 * before)
+    groups[1].add_row("tall", "", tall)
+    ParameterGroup.equalize(groups)
+
+    needed = groups[1].grid.totalSizeHint().height()
+    assert groups[1].body.height() >= needed
+    assert groups[0].body.height() == groups[1].body.height()
+    assert groups[0].body.height() > before
 
 
 # --- theme ------------------------------------------------------------------

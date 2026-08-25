@@ -21,7 +21,7 @@ for viewing and analyzing recordings of animal vocalizations.
 - Change low- and high-pass filter cutoff frequencies interactively.
 - Optional envelope with lowpass-filter cutoff frequency that can be changed interactively.
 - Hide and show channels as well as plot panels.
-- Overlay events from an alignment CSV on traces and spectrogram, backed by polars and windowed to the visible range.
+- Overlay events from an alignment CSV on traces, spectrogram and the navigator strip, backed by polars and windowed to the visible range.
 - Extensive and intuitive key shortcuts for most functions.
 - Plugins for additional computed traces, plot panels, and analysis.
 

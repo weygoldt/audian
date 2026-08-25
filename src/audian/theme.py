@@ -1288,6 +1288,17 @@ Large enough for :data:`SIZE_SMALL_PT` mono digits plus the ``S4`` padding
 and the hairline border that the style sheet adds.
 """
 
+CHIP_HEIGHT = 22
+"""Height of a small toggle chip inside a parameter group.
+
+Shorter than :data:`CONTROL_HEIGHT`, deliberately.  A chip carries a
+:data:`SIZE_SMALL_PT` label and a 12 px legend icon, so twenty pixels of
+content box is enough -- while the generic ``QToolButton`` rule leaves it at
+31 px, and a group that holds two rows of chips then spends 64 px of the
+one axis a waveform stack is short of.  Stated rather than inherited, so a
+row of chips cannot quietly grow the parameter bar.
+"""
+
 
 def style_spinbox(spin: Any, mono: bool = True) -> None:
     """Theme a ``pyqtgraph.SpinBox`` and undo its ``compactHeight`` hack.
