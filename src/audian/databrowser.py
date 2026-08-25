@@ -992,6 +992,12 @@ class DataBrowser(QWidget):
         self.data.open(unwrap, unwrap_clip)
         if self.data.data is None:
             return
+        # What the loader noticed about the joins between files but did not act
+        # on.  It reaches the status bar rather than stdout, because the whole
+        # failure mode here is information nobody sees: a split recording that
+        # is quietly missing its last file looks completely normal.
+        for message in getattr(self.data, "load_warnings", []):
+            self.notify("warning", message)
         self.marker_data.file_path = self.data.file_path
 
         # add traces to menu:
