@@ -126,10 +126,23 @@ class Panel(object):
         return changed
 
     def has_visible_traces(self, channel):
+        """Does this channel's panel have anything of its own to draw?
+
+        Asked *of the panel*, not of the screen.  `QGraphicsItem.isVisible`
+        is the effective answer -- false whenever any ancestor is hidden --
+        so a panel that the layout hid once reported "nothing to draw"
+        forever after, and the layout that hid it took that as the reason to
+        keep it hidden.  On a sixteen channel stack, where the spectrogram
+        follows the focused lane, stepping to the next channel hid the old
+        lane's spectrogram and no lane ever drew one again.
+        `isVisibleTo(plot)` asks only whether the item itself was hidden
+        inside its own plot.
+        """
         if self.is_spacer():
             return False
-        for di in self.axs[channel].data_items:
-            if di.isVisible():
+        plot = self.axs[channel]
+        for di in plot.data_items:
+            if di.isVisibleTo(plot):
                 return True
         return False
 
@@ -297,6 +310,13 @@ class Panels(dict):
             panel.update_plots()
 
     def insert_spacers(self):
+        """Put a zero-height row between every pair of panels.
+
+        Which of them gets a grab band is `databrowser.split_spacers`'
+        business, and it is a per-channel question: on a sixteen channel
+        stack one lane has a trace / spectrogram boundary and fifteen do
+        not.
+        """
         panels = {}
         row = 0
         spacer = 0
@@ -309,20 +329,3 @@ class Panels(dict):
         self.clear()
         for name, value in panels.items():
             self[name] = value
-
-    def show_spacers(self, channel):
-        prev_panel = None
-        prev_spacer = None
-        for panel in self.values():
-            if panel.is_spacer():
-                if prev_panel:
-                    prev_visible = prev_panel.is_visible(channel)
-                    panel.set_visible(prev_visible)
-                    if prev_visible:
-                        prev_spacer = panel
-            elif not panel.is_power():
-                prev_panel = panel
-                if panel.is_visible(channel):
-                    prev_spacer = None
-        if prev_spacer:
-            panel.set_visible(False)

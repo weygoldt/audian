@@ -146,6 +146,9 @@ __all__ = [
     "CHANNEL_MIN_HEIGHT",
     "CHANNEL_DENSE_HEIGHT",
     "SPECTROGRAM_MIN_HEIGHT",
+    "PLOT_FRAME_HEIGHT",
+    "PANEL_SPLIT_MIN_HEIGHT",
+    "PANEL_SPLIT_HANDLE_HEIGHT",
     "AXIS_LEFT_WIDTH",
     "MOTION_MS",
     "LW_THIN",
@@ -193,6 +196,7 @@ __all__ = [
     "style_axis",
     "style_plotitem",
     "style_figure",
+    "style_channel_figure",
     "style_colorbar",
     "strip_pg_menus",
     "overlay_textitem",
@@ -496,6 +500,73 @@ zero line and its ``CH nn`` caption, which is still a readable trace - and
 sixteen of those beat eight comfortable ones plus a scrollbar.
 """
 SPECTROGRAM_MIN_HEIGHT = 120
+"""What a spectrogram adds to its channel's lane, px.
+
+An *allowance*: it is the height `databrowser.lane_geometry` grows a lane
+by when that lane shows a spectrogram, the height the spectrogram row gets
+at the default split, and the height below which
+`spectrogramplot.can_render` has the browser leave the panel out and say
+so.  Those three have to be the same number, or a lane grows by 120 px to
+make room for a panel that then opens at 69 px and is, by the browser's own
+rule, too short to read.
+"""
+
+PLOT_FRAME_HEIGHT = 2
+"""What a `pyqtgraph.PlotItem` spends on itself, top and bottom, px.
+
+`PlotItem` gives its own grid layout 1 px of contents margin on every side,
+so a plot's view box is always exactly 2 px shorter than the row it sits
+in, and a *hidden* plot still holds 2 px of the lane it is in: a
+`QGraphicsGridLayout`, unlike a `QLayout`, keeps laying hidden items out.
+
+Both have to be counted rather than assumed away.  Rows that ignore the
+hidden 2 px overflow the figure, and the bottom of the last row is clipped
+off the screen.  A chrome threshold applied to the row rather than to the
+view box disagrees with `timeplot.TimePlot._view_resized`, which applies it
+to the view box, by exactly these 2 px -- measured as a lane drawing
+amplitude tick values while the plot that owns them had hidden its caption
+for want of the height to put one.
+"""
+
+PANEL_SPLIT_MIN_HEIGHT = CHANNEL_DENSE_HEIGHT
+"""Floor for either side of the trace / spectrogram split, px.
+
+The shortest row this application still calls a panel is the one a dense
+stack gives a whole channel, so that is the floor: 34 px.
+
+Deliberately not `timeplot.TICK_VALUES_MIN_HEIGHT` (48), the height a row
+keeps its tick values above.  The default split hands the trace the lane,
+and a dense lane *is* 34 px -- at 1200x900 with four channels the figure is
+154 px and it opens 120 / 34.  A floor of 48 would put the split's own
+starting point out of the drag's reach: the first pixel of travel would
+snap the boundary 14 px away from the pointer, and a control that cannot
+return to where it started is broken.  Since the default can sit below 48,
+a drag *can* move a row across that threshold, and
+`databrowser.apply_panel_split` re-runs the chrome decision instead of
+claiming it cannot.
+
+Travel in that same 154 px figure is ``154 - 2*34 = 86`` px, and one
+channel filling the window leaves about 550.
+"""
+
+PANEL_SPLIT_HANDLE_HEIGHT = 7
+"""Reach of the grab band on the trace / spectrogram boundary, px.
+
+The band straddles the boundary -- half of this either side of it -- and
+costs the lane nothing.  That is the one thing an in-scene handle can do
+that a `QSplitter` handle cannot: widgets cannot overlap, so Qt has to
+spend real layout height on a handle, while a `QGraphicsItem` reports a
+bounding rect taller than the zero-height row it is laid out in and takes
+the mouse there.  Spending 7 px of the lane instead is what pushed a four
+channel stack's spectrogram from its 120 px allowance down to 69.
+
+A 1 px boundary is visible but not findable by the mouse -- the same
+measurement `HANDLE_WIDTH` records -- and Qt's own `QSplitter` defaults to
+a 5 px handle.  7 px is that with a margin for a stack the pointer is
+usually moving through, and it is odd, so the 3 px `HANDLE_WIDTH` line it
+paints is centred with 2 px of slop either side.
+"""
+
 AXIS_LEFT_WIDTH = 56
 
 # --- the control panel ----------------------------------------------------
@@ -882,7 +953,11 @@ be an easy target.
 
 
 def handle_pen() -> QPen:
-    """Pen for the spectrogram highpass / lowpass drag handles."""
+    """Pen for a grab handle the reader is meant to drag.
+
+    The spectrogram highpass / lowpass cutoffs, and the trace / spectrogram
+    split, which paints it only while hovered or dragged.
+    """
     return pen("primary", width=LW_SELECTED)
 
 
@@ -1546,6 +1621,28 @@ def style_figure(glw: Any) -> None:
         layout.setContentsMargins(S4, S4, S4, S4)
         layout.setHorizontalSpacing(0)
         layout.setVerticalSpacing(0)
+
+
+def style_channel_figure(glw: Any) -> None:
+    """:func:`style_figure` for one lane of the channel stack: no vertical pad.
+
+    A lane's height is not the figure's to spend.  `lane_geometry` solves
+    the stack in integers and hands this figure exactly
+    ``lane_h (+ SPECTROGRAM_MIN_HEIGHT)`` px for its rows; an S4 pad above
+    and below leaves the rows 8 px less than that, and since the rows are
+    sized from the figure height the layout's minimum came out 8 px taller
+    than the viewport.  `QGraphicsView` then clamped the central item up to
+    that minimum and the bottom of the last row fell off the screen -- the
+    four channel stack drew its 34 px trace row in the 30 px it could see.
+
+    The horizontal S4 stays: the stack's width is nobody's exact budget, and
+    that pad is what keeps the left axis off the lane frame.
+    """
+    style_figure(glw)
+    ci = getattr(glw, "ci", None)
+    layout = getattr(ci, "layout", None) if ci is not None else None
+    if layout is not None:
+        layout.setContentsMargins(S4, 0, S4, 0)
 
 
 CONTROL_HEIGHT = 26

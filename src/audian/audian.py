@@ -3433,6 +3433,19 @@ class Audian(QMainWindow):
                     )
         self.sync_toolbar()
 
+    def reset_panel_split(self):
+        """Shift+F3: the current spectrogram size back to its own default.
+
+        Not propagated by `link_panels`, and neither is the drag.  That
+        switch links which panels the tabs *show*, which the toolbar mirrors
+        so both tabs read the same; the split is a continuous adjustment
+        made with the mouse inside one stack, and a stack of two channels
+        and a stack of sixteen do not owe each other a ratio.
+        """
+        browser = self.browser()
+        if isinstance(browser, DataBrowser):
+            browser.reset_panel_split()
+
     def toggle_powers(self):
         self.browser().toggle_powers()
         if self.link_panels:
@@ -3707,6 +3720,19 @@ class Audian(QMainWindow):
         self.acts.toggle_spectrograms.setShortcut("F3")
         self.acts.toggle_spectrograms.triggered.connect(self.toggle_spectrograms)
 
+        # The split between a trace and its spectrogram is dragged, and a
+        # dragged setting needs a way back.  Shift+F3 sits next to the F3
+        # that shows the spectrogram in the first place, and was the only
+        # unclaimed modifier on it (Shift+F6 and Alt+F6 are the navigator's,
+        # F7 is the rail, F8 the annotations).
+        self.acts.reset_panel_split = QAction("Reset spectrogram &split", self)
+        self.acts.reset_panel_split.setShortcut("Shift+F3")
+        self.acts.reset_panel_split.setToolTip(
+            "Put the boundary between the trace and the spectrogram back "
+            "where this spectrogram size started"
+        )
+        self.acts.reset_panel_split.triggered.connect(self.reset_panel_split)
+
         self.acts.toggle_power = QAction("Toggle power", self)
         self.acts.toggle_power.setShortcut("F4")
         self.acts.toggle_power.triggered.connect(self.toggle_powers)
@@ -3740,6 +3766,7 @@ class Audian(QMainWindow):
         panel_menu.addAction(self.acts.link_panels)
         panel_menu.addAction(self.acts.toggle_traces)
         panel_menu.addAction(self.acts.toggle_spectrograms)
+        panel_menu.addAction(self.acts.reset_panel_split)
         panel_menu.addAction(self.acts.toggle_power)
         panel_menu.addAction(self.acts.toggle_cbars)
         panel_menu.addAction(self.acts.toggle_fulldata)
