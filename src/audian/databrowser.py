@@ -728,13 +728,28 @@ class DataBrowser(QWidget):
     ANNOTATION_SETTING_VERSION = 1
 
     #: Key the trace / spectrogram split is saved under.  One key holding one
-    #: fraction per F3 preset, for the same reason as above.  Nothing in the
-    #: value depends on the recording: `trace_fracs` is a ratio between two
-    #: rows of one lane, so a bundle with two channels and one with sixteen
-    #: read the same entry and both get the split the reader last chose.
+    #: number per F3 preset, for the same reason as above.
+    #:
+    #: The number is `spec_scales`: the spectrogram row over
+    #: `theme.SPECTROGRAM_MIN_HEIGHT`, the allowance every lane grows by to
+    #: make room for one.  It is the only height in this layout that does
+    #: not move, and measuring the split against it is what makes a saved
+    #: split mean the same thing on the next recording.
+    #:
+    #: Version 1 stored the trace over the spectrogram, which is
+    #: dimensionless and looked portable and is not: the trace *is* the
+    #: lane, and the lane at 1200x900 is 34 px on four channels and sixteen,
+    #: 130 px on two, and 329 px in a window tall enough (1200x1298).  So
+    #: holding that ratio made the spectrogram track the lane instead of
+    #: itself.  Measured on the file found in the field, 2.7437722419928825
+    #: -- a 281 px spectrogram dragged on a 1052 px lane -- replayed on a
+    #: sixteen channel stack as a 41 px spectrogram, a height
+    #: `spectrogramplot.can_render` refuses to draw at all when it is asked
+    #: about a lane.  Three presses of F3 before the reader saw anything.
     PANEL_SPLIT_SETTING = "panel-split"
-    #: Bumped when the shape of that value changes.
-    PANEL_SPLIT_SETTING_VERSION = 1
+    #: Bumped when the shape of that value changes.  2: the number is the
+    #: spectrogram over its default, not the trace over the spectrogram.
+    PANEL_SPLIT_SETTING_VERSION = 2
 
     #: How much of the *lane* the traces keep at each F3 spectrogram size,
     #: before anything is dragged.  The lane is what `lane_geometry` solved
@@ -841,15 +856,22 @@ class DataBrowser(QWidget):
         # view:
         self.setting = False
 
-        # How a lane showing both is split: the traces' total height as a
-        # multiple of the spectrogram's, keyed by `show_specs` so each F3
-        # size keeps its own.  `None` is not "no split" but "the split this
-        # size opens on", which is a function of the lane height rather than
-        # a constant -- see `default_spec_height`.  One dict on the browser,
-        # not one per channel, which is why dragging the boundary in any
-        # lane moves all of them.
-        self.trace_fracs = {preset: None for preset in DataBrowser.LANE_TRACE_SHARES}
-        self.default_trace_fracs = dict(self.trace_fracs)
+        # How a lane showing both is split: the spectrogram's height as a
+        # multiple of the height its F3 size opens it at, keyed by
+        # `show_specs` so each size keeps its own.  `None` is not "no split"
+        # but "the split this size opens on", which is a function of the
+        # lane height rather than a constant -- see `default_spec_height`.
+        # One dict on the browser, not one per channel, which is why
+        # dragging the boundary in any lane moves all of them.
+        #
+        # Keyed over the sizes that have a boundary to drag, and no others:
+        # at size 0 there is no spectrogram, so no gesture can set a scale
+        # for it and nothing reads one.  Keying it off `LANE_TRACE_SHARES`
+        # instead put an entry for size 0 in the settings file that no code
+        # path could write and none could read, and every drag wrote it
+        # back out again.
+        self.spec_scales = {preset: None for preset in range(1, 5)}
+        self.default_spec_scales = dict(self.spec_scales)
         self.restore_panel_split()
         # the y gutter every lane reserves, a stack-wide decision made by
         # `adjust_layout` and re-used by the drag:
@@ -1023,6 +1045,9 @@ class DataBrowser(QWidget):
         self.taxis_margins = None
         self.y_readout = None
         self.lane_height = theme.CHANNEL_MIN_HEIGHT
+        #: One deferred scroll per turn of the event loop, however many
+        #: times the lanes were resized in it - see `show_focused_lane`.
+        self.scroll_focus_pending = False
         self.stack_pane = None
         self.stack_spacer_row = 0
         self.sig_proxies = []
@@ -2110,6 +2135,99 @@ class DataBrowser(QWidget):
         visible = [c for c in order if c not in self.muted_channels]
         return visible if visible else order
 
+    def focus_channel(self, channel: int) -> None:
+        """Point the focus at `channel`, and let the layout follow it.
+
+        `spectrogram_channels` picks its one lane off `current_channel`, so
+        on a stack that has collapsed the spectrogram onto the focused lane
+        the focus and the layout are the same fact.  Four gestures moved the
+        first without the second - the arrow keys and their shifted
+        selecting twins, all four of which stopped at `update_borders` - and
+        the spectrogram stayed behind on the lane the reader had just left:
+        sixteen channels, one press of the down arrow, and the stack this
+        application exists for had a spectrogram nowhere at all.
+
+        The relayout is spent only when the set of lanes that get a
+        spectrogram actually changes, which on a stack that draws every
+        spectrogram is never.  That is not premature: a full `adjust_layout`
+        on sixteen lanes is 7.4 ms of Python measured offscreen at 1200x900,
+        which is nothing once per keystroke and more than a 60 Hz frame per
+        mouse move - the reason `mouse_clicked` guards its call to
+        `rail_clicked` at all.  `update_stretches` still runs either way,
+        because the rail row of the focused channel expands and that is a
+        lane height like any other.
+        """
+        channels = self.visible_channels()
+        before = self.spectrogram_channels(channels)
+        self.current_channel = channel
+        if self.spectrogram_channels(channels) != before:
+            self.adjust_layout(self.width(), self.height())
+        else:
+            self.update_stretches(self.height())
+
+    def show_focused_lane(self) -> None:
+        """Scroll the focused lane into view, on a stack that scrolls.
+
+        A no-op whenever the whole stack fits, which is most of the time.
+        It matters where the lanes outgrow the viewport: sixteen
+        spectrograms with the traces off are 1952 px in a 500 px viewport,
+        so pressing F2 while the focus is on channel 12 left the reader
+        looking at channels 0 to 3 and the lane they had selected off the
+        bottom of the screen.  The stack already marks the focused lane
+        three ways -- a frame, a bold caption, a rule down its rail row -- and
+        all three are useless where they cannot be seen.
+
+        Scrolls the least it can, so a lane already on screen does not move
+        the view at all.
+
+        It measures a geometry the caller has only just asked for, and the
+        two lines that deal with that do different jobs.  Measured on F2
+        with the focus on channel 12, sixteen channels at 1200x900, all four
+        ways round:
+
+            deferred + activated   lane 1464..1586, view 1086..1586   on screen
+            inline   + activated   lane 1464..1586, view 1086..1586   on screen
+            deferred, not activated                 view  132..632    off screen
+            inline,   not activated                 view   74..574    off screen
+
+        So *activating* is what makes it right: without it the lane position
+        read here is the one the stack had before the panels changed, and
+        the bar is left wherever it already was.  Deferring is what makes it
+        cheap.  Run inline, the activation is unavoidable because the layout
+        is still mid-flight every time, and one press of the down arrow goes
+        from 13.7 ms to 63.7 ms - held down, the difference between stepping
+        through the array and watching it crawl.  A turn of the event loop
+        later Qt has usually done the work anyway and the guard skips it;
+        only a gesture that changes the stack's total height, which F2 does
+        and a focus move does not, still has to pay.
+
+        The height is `setFixedHeight`'s minimum rather than `geometry()`,
+        which is a frame behind even so, and the arithmetic is here rather
+        than in `QScrollArea.ensureWidgetVisible` because that one reads the
+        same stale geometry and scrolls the lane's top edge to the bottom of
+        the viewport, leaving all 122 px of it below the fold.
+        """
+        self.scroll_focus_pending = False
+        if self.stack_area is None or self.stack_grid is None:
+            return
+        c = self.current_channel
+        if c < 0 or c >= len(self.figs) or not self.figs[c].isVisible():
+            return
+        stack = self.stack_area.widget()
+        wanted = stack.sizeHint().height()
+        if wanted > 0 and stack.height() != wanted:
+            self.stack_grid.activate()
+            stack.adjustSize()
+        fig = self.figs[c]
+        top = fig.mapTo(self.stack_area.widget(), QPoint(0, 0)).y()
+        lane_h = max(fig.minimumHeight(), fig.height())
+        bar = self.stack_area.verticalScrollBar()
+        viewport = self.stack_area.viewport().height()
+        if top < bar.value():
+            bar.setValue(top)
+        elif top + lane_h > bar.value() + viewport:
+            bar.setValue(min(bar.maximum(), top + lane_h - viewport))
+
     def rail_clicked(self, channel: int, extend: bool) -> None:
         """Select a channel from the rail, optionally extending the range."""
         if extend:
@@ -2118,10 +2236,9 @@ class DataBrowser(QWidget):
             self.add_to_selected_channels(list(range(lo, hi + 1)))
         else:
             self.selected_channels = [channel]
-        self.current_channel = channel
+        self.focus_channel(channel)
         self.update_borders()
         self.update_rail()
-        self.adjust_layout(self.width(), self.height())
 
     def toggle_solo(self, channel: int) -> None:
         if channel in self.solo_channels:
@@ -4061,6 +4178,30 @@ class DataBrowser(QWidget):
                 return panel.axs[channel]
         return None
 
+    def time_plot(self, channel: int) -> Optional[TimePlot]:
+        """Any of the channel's visible plots that carries the shared x.
+
+        The trace first, because it is the one the stack is usually read
+        off; the spectrogram when the traces are off, because then it is the
+        only plot in the lane and every lane shares one time range anyway.
+
+        `trace_plot` is not that: it answers None once F2 has hidden every
+        trace, and the shared time axis, which asked it, went on mapping its
+        ticks through the *hidden* trace's view box.  Measured on two
+        channels with the traces off: the hidden trace's view box is 1037 px
+        wide while the spectrogram the ticks are drawn under is 981, so the
+        axis was scaled to a width nothing on screen had.
+        """
+        for prefer_trace in (True, False):
+            for panel in self.panels.values():
+                if panel.is_power() or panel.is_spacer():
+                    continue
+                if panel.is_trace() != prefer_trace or len(panel.axs) <= channel:
+                    continue
+                if panel.axs[channel].isVisible():
+                    return panel.axs[channel]
+        return None
+
     def spectrogram_channels(self, channels: list[int]) -> list[int]:
         """Channels that get a spectrogram row.
 
@@ -4068,9 +4209,23 @@ class DataBrowser(QWidget):
         rotated frequency label overprints the ticks. Above a handful of
         visible channels the spectrogram collapses onto a single focused
         panel that follows the current channel.
+
+        That collapse is a *fallback*, and it only makes sense while there
+        is a trace to fall back on.  With the traces off the spectrogram is
+        the only thing a lane has left to draw, so collapsing left fifteen
+        of sixteen lanes drawing nothing at all -- the reader pressed F2 to
+        say "spectrograms only" and got one spectrogram and fifteen strips
+        of background.  So every visible channel keeps its own, and the
+        stack scrolls rather than going blank: measured at 1200x900,
+        sixteen readable spectrograms are 1952 px of stack in a 500 px
+        viewport, four lanes on screen at a time.  Scrolling is not a cost
+        this introduces - the stack already scrolls 116 px at four channels
+        and 424 px at six with the spectrograms on.
         """
         if self.show_specs <= 0 or not channels:
             return []
+        if not self.show_traces:
+            return list(channels)
         row_height = self.height() / max(1, len(channels))
         if hasattr(SpectrogramPlot, "can_render"):
             fits = SpectrogramPlot.can_render(row_height)
@@ -4113,12 +4268,17 @@ class DataBrowser(QWidget):
         spec_channels = self.spectrogram_channels(channels)
         spec_total = theme.SPECTROGRAM_MIN_HEIGHT * len(spec_channels)
         n = max(1, len(channels))
-        lane_h = int(
-            max(
-                theme.CHANNEL_DENSE_HEIGHT,
-                (available - spec_total) // n,
-            )
+        # `theme.CHANNEL_DENSE_HEIGHT` is the shortest row this application
+        # still calls a readable *trace*; with the traces off there is no
+        # trace in the lane to keep readable, and the floor is only what
+        # `pyqtgraph.PlotItem` spends on its own margins.  Measured: a
+        # 122 px row draws a 120 px spectrogram, a 121 px row draws 119.
+        # Holding the trace's floor with no trace in the lane cost four
+        # channels a scrollbar for 29 px of spectrogram nobody asked for.
+        floor = (
+            theme.CHANNEL_DENSE_HEIGHT if self.show_traces else theme.PLOT_FRAME_HEIGHT
         )
+        lane_h = int(max(floor, (available - spec_total) // n))
         if self.maximized_channel is not None:
             lane_h = max(lane_h, theme.CHANNEL_MIN_HEIGHT)
         # a lane this short cannot carry tick values - see TimePlot, which
@@ -4170,6 +4330,21 @@ class DataBrowser(QWidget):
             self.taxis_strip.setFixedHeight(axis_h)
         # one place for the remainder, and one only:
         self.stack_grid.setRowStretch(self.stack_spacer_row, 1)
+        # Every lane height in this application is set right here, so this is
+        # the one place a lane can be pushed off the bottom of the viewport,
+        # and therefore the one place worth asking whether the focused one
+        # was - see `show_focused_lane`.  Hanging it off the two gestures
+        # that seemed to need it instead left four other routes to a stack
+        # taller than its viewport without it: solo, mute, maximise and
+        # move_channel through `apply_channel_visibility`, show_channel and
+        # hide_deselected_channels through `set_channels`, the wrapping
+        # branch of the arrow keys, and dragging the window shorter.  On
+        # sixteen channels with the traces *on*, one solo and un-solo of the
+        # focused lane was enough to leave the stack's only spectrogram off
+        # the bottom of the screen: the headline bug through a side door.
+        if not self.scroll_focus_pending:
+            self.scroll_focus_pending = True
+            QTimer.singleShot(0, self.show_focused_lane)
 
     def time_axis_height(self) -> int:
         """Height of the stack's one shared time axis row.
@@ -4203,7 +4378,7 @@ class DataBrowser(QWidget):
         channels = self.visible_channels()
         if not channels:
             return
-        plot = self.trace_plot(channels[0])
+        plot = self.time_plot(channels[0])
         if plot is None:
             return
         view = plot.getViewBox()
@@ -4346,38 +4521,57 @@ class DataBrowser(QWidget):
         in a row of its own that is always 0 px tall and reaches across the
         boundary instead - see `panelsplitter`.
 
-        The algebra of a *dragged* split.  `trace_fracs` says the trace is
-        `frac` times the spectrogram, so with `n` trace rows sharing
-        `content` px::
+        The algebra of a *dragged* split.  `spec_scales` says the
+        spectrogram is `scale` allowances tall, and the trace rows share
+        whatever the lane has left::
 
-            spec + n * trace = content,   trace = frac * spec
-            =>  spec = content / (1 + frac * n),   trace = frac * spec
+            spec = scale * theme.SPECTROGRAM_MIN_HEIGHT
+            trace = (content - spec) / n
 
-        `None` there means this F3 size has not been dragged and opens on
-        `default_spec_height` instead, which is a function of the lane
-        height and not a constant.  In the same terms it is
-        ``frac = lane_h / (n * SPECTROGRAM_MIN_HEIGHT)``: 34/120 on a four
-        channel stack, 126/120 on a two channel one.
+        `None` is a size nobody has dragged, and it opens on
+        `default_spec_height` instead - the allowance plus a share of the
+        lane, which is what gives F3 four sizes to cycle through.
+
+        The denominator is the bare allowance and not that default, even
+        though the default is what the size opens on, because the default is
+        not a constant: at F3 size 2 it is 120 px of lane content on a
+        sixteen channel stack and 185 on a two channel one, so a split
+        dragged on the roomy stack replayed at 81 px on the dense one, which
+        `spectrogramplot.can_render` will not draw.  Weaker than version 1's
+        1.6 against 9.7, and the same mechanism.  The allowance is the one
+        height here that no recording moves.
+
+        What a reader gives up for that: once a size has been dragged it
+        stops growing with the lane, because they said where they wanted the
+        boundary and that is an answer in spectrograms, not in lanes.
+        Shift+F3 hands the size back to the default that does grow.
 
         The traces are then *rounded* to whole pixels and the spectrogram
         takes the remainder, so the rows sum exactly and the boundary lands
         on a pixel the reader can point at.  Rounded and not floored: a drag
-        hands back the ratio it just read off these same rows, and
-        ``content / (1 + frac * n)`` returns it only to within a float's
-        last bit - 89.99999999999999 floors to 89, and a boundary dragged
-        20 px down moved 21.
+        hands back the scale it just read off these same rows, and the
+        arithmetic returns it only to within a float's last bit -
+        89.99999999999999 floors to 89, and a boundary dragged 20 px down
+        moved 21.
         """
         content = self.lane_content_height(channel, fig_height)
-        traces = ntraces if self.show_traces else 0
+        # `ntraces` is what THIS lane is drawing, not what the F2 toggle
+        # says the stack should be: `lane_fallback` can put a trace back in
+        # a lane with the traces off, and reading the toggle then handed the
+        # rescued row a budget of zero.  It kept whatever Qt's leftover
+        # distribution gave it - 15.5 px of a 29 px lane on sixteen
+        # channels, 198 of 248 on two - so the backstop saved the lane from
+        # being empty and left most of it background anyway.
+        traces = max(0, int(ntraces))
         if not show_spec:
             return 0, max(1, content // max(1, traces)) if traces > 0 else 0
         if traces <= 0:
             return max(1, content), 0
-        frac = self.trace_fracs.get(self.show_specs)
-        if frac is None:
+        scale = self.spec_scales.get(self.show_specs)
+        if scale is None:
             spec = self.default_spec_height(content, traces)
         else:
-            spec = content / (1.0 + float(frac) * traces) if frac > 0 else content
+            spec = float(scale) * theme.SPECTROGRAM_MIN_HEIGHT
         lo, hi = self.panel_split_limits(content, traces)
         spec = min(max(spec, lo), hi)
         trace = min(
@@ -4411,7 +4605,7 @@ class DataBrowser(QWidget):
         """Where the boundary is now: (spectrogram height, px it shares).
 
         Measured off the rows as they stand on screen rather than recomputed
-        from `trace_fracs`, so a drag starts from the boundary the reader is
+        from `spec_scales`, so a drag starts from the boundary the reader is
         pointing at instead of jumping to wherever the arithmetic would have
         put it.  `None` when this lane has no boundary to move.
         """
@@ -4445,9 +4639,17 @@ class DataBrowser(QWidget):
         share right now; mapping travel onto a stale `room` scaled the whole
         drag by ``room_new / room_old``.
 
-        One ratio for the whole browser, so every channel showing both
+        One scale for the whole browser, so every channel showing both
         panels moves together; that sync is not code here, it is the absence
         of a per-channel copy.
+
+        What is stored is the spectrogram over its allowance - see
+        `PANEL_SPLIT_SETTING`.  The allowance is a constant, so unlike
+        version 1's ratio this number carries nothing else with it: not the
+        lane it was measured on, and not the number of trace rows that were
+        sharing it.  Version 1 carried both without saying so, and a
+        boundary saved with a second trace panel showing and replayed with
+        one halved the total trace - 68 px to 34 on a 250 px lane, measured.
         """
         channels = self.visible_channels()
         if not channels:
@@ -4455,9 +4657,10 @@ class DataBrowser(QWidget):
         traces = self.visible_trace_panels(channels[0]) if self.show_traces else 0
         if traces <= 0 or room <= 0:
             return
-        lo, hi = self.panel_split_limits(int(round(room)), traces)
+        content = int(round(room))
+        lo, hi = self.panel_split_limits(content, traces)
         spec_h = min(max(spec_h, lo), hi)
-        self.trace_fracs[self.show_specs] = (room - spec_h) / (traces * spec_h)
+        self.spec_scales[self.show_specs] = spec_h / theme.SPECTROGRAM_MIN_HEIGHT
         self.apply_panel_split()
 
     def apply_panel_split(self) -> None:
@@ -4558,17 +4761,21 @@ class DataBrowser(QWidget):
         if self.show_specs <= 0 or not self.show_traces:
             self.notify("info", "no trace/spectrogram split to reset")
             return
-        self.trace_fracs[self.show_specs] = self.default_trace_fracs[self.show_specs]
+        self.spec_scales[self.show_specs] = self.default_spec_scales[self.show_specs]
         self.adjust_layout(self.width(), self.height())
         self.save_panel_split()
 
     def restore_panel_split(self) -> None:
         """Put back the split this reader last dragged.
 
-        Read once, in `__init__`, before any figure exists: the value is a
-        ratio between two rows of one lane and knows nothing about the
-        recording, so a bundle with two channels and one with sixteen read
-        the same entry and both open on the split the reader chose.
+        Read once, in `__init__`, before any figure exists: the value is the
+        spectrogram over the height its F3 size opens it at, and knows
+        nothing about the recording, so a bundle with two channels and one
+        with sixteen read the same entry and both open on the split the
+        reader chose.  A version 1 file is *not* read: it holds the other
+        ratio, which does not survive the change of lane height, and there
+        is no way to tell a value the reader chose from one an earlier build
+        wrote for them.  The warning below says so.
 
         Imported here and not at the top of the file: `audian.py` imports
         this module, so a module level import would be a cycle.
@@ -4588,22 +4795,22 @@ class DataBrowser(QWidget):
                 DataBrowser.PANEL_SPLIT_SETTING_VERSION,
             )
             return
-        fracs = saved.get("fracs")
-        if not isinstance(fracs, dict):
+        scales = saved.get("scales")
+        if not isinstance(scales, dict):
             return
-        for key, value in fracs.items():
+        for key, value in scales.items():
             try:
                 preset = int(key)
-                frac = float(value)
+                scale = float(value)
             except (TypeError, ValueError):
                 continue
-            if preset not in self.trace_fracs or not np.isfinite(frac):
+            if preset not in self.spec_scales or not np.isfinite(scale):
                 continue
-            # Which ratios are reachable depends on the lane height, and the
+            # Which scales are reachable depends on the lane height, and the
             # pixel floors settle that at layout time.  All a stored value
-            # has to be is positive and finite, or `panel_split_rows`
-            # divides by a zero it did not put there.
-            self.trace_fracs[preset] = min(max(frac, 0.01), 100.0)
+            # has to be is positive and finite, so that a file edited by
+            # hand cannot put a zero or a negative height into a row.
+            self.spec_scales[preset] = min(max(scale, 0.01), 100.0)
 
     def save_panel_split(self) -> None:
         """Write the split.  Once per gesture, never per mouse move.
@@ -4615,7 +4822,10 @@ class DataBrowser(QWidget):
         on its default is *absent*, not written out as the number that
         default happened to come to in this window: the default follows the
         lane height, and freezing this window's answer into the settings
-        file would open the next stack on a ratio nobody chose.
+        file would open the next stack on a split nobody chose.  That is not
+        hypothetical - a version 1 file was found holding an entry for F3
+        size 0, which has no boundary at all, so no gesture could have
+        written it and nothing ever read it, and every drag rewrote it.
         """
         from .audian import save_setting
 
@@ -4623,13 +4833,43 @@ class DataBrowser(QWidget):
             DataBrowser.PANEL_SPLIT_SETTING,
             {
                 "version": DataBrowser.PANEL_SPLIT_SETTING_VERSION,
-                "fracs": {
-                    str(preset): float(frac)
-                    for preset, frac in self.trace_fracs.items()
-                    if frac is not None
+                "scales": {
+                    str(preset): float(scale)
+                    for preset, scale in self.spec_scales.items()
+                    if scale is not None
                 },
             },
         )
+
+    def lane_fallback(self, channel: int, rows: dict) -> dict:
+        """Put one row back into a lane that ended up with none.
+
+        A lane with nothing in it is a strip of background the reader
+        cannot tell from a dead channel, and every way of producing one is a
+        bug in whichever rule decided it: the collapse blanked fifteen of
+        sixteen lanes as soon as the traces went off, and
+        `set_panels(traces=False, specs=0)` would blank every lane in the
+        stack - no key reaches that pair, but nothing in `set_panels`
+        forbids it either.  Those decisions belong upstream, in
+        `spectrogram_channels` and `lane_geometry`, which own the row
+        budget; this is the assertion that they cannot be quietly violated,
+        and it is what the "no visible lane is empty" tests hold onto.
+
+        The trace goes back first.  It is the panel that needs no allowance
+        of its own, so it is the one a lane already has the height for -
+        forcing a spectrogram into a lane budgeted at
+        `theme.CHANNEL_DENSE_HEIGHT` squeezes it into 32 px, which is the
+        stripe `spectrogramplot.can_render` exists to refuse.
+        """
+        for prefer_trace in (True, False):
+            for panel in self.panels.values():
+                if panel.name not in rows:
+                    continue
+                if panel.is_trace() != prefer_trace:
+                    continue
+                if panel.has_visible_traces(channel):
+                    return {**rows, panel.name: True}
+        return rows
 
     def adjust_layout(self, width: int, height: int) -> None:
         """Lay out the channel stack and the panels within each channel.
@@ -4650,7 +4890,6 @@ class DataBrowser(QWidget):
             self.notify("warning", "spectrogram hidden - too many channels visible")
         self.spec_warned = hidden
         # what to plot:
-        ntraces = self.visible_trace_panels(channels[0])
         nrows = len(channels)
         # the y gutter is a stack-wide decision so that every view box
         # starts at the same x; it is only reclaimed while no spectrogram
@@ -4674,16 +4913,24 @@ class DataBrowser(QWidget):
             # sixteen channel stack, `show_spec` is true a layout pass
             # before the spectrogram itself has anything to draw.
             spec_visible = False
+            rows = {}
             for panel in self.panels.values():
                 if panel.is_power() or panel.is_spacer():
                     continue
                 visible = panel.has_visible_traces(c)
                 if panel.is_spectrogram():
                     visible = visible and show_spec
-                    spec_visible = spec_visible or visible
                 elif panel.is_trace():
                     visible = visible and self.show_traces
-                panel.axs[c].setVisible(visible)
+                rows[panel.name] = visible
+            if not any(rows.values()):
+                rows = self.lane_fallback(c, rows)
+            for panel in self.panels.values():
+                if panel.name not in rows:
+                    continue
+                if panel.is_spectrogram():
+                    spec_visible = spec_visible or rows[panel.name]
+                panel.axs[c].setVisible(rows[panel.name])
             bands = self.split_spacers(c)
             for panel in self.panels.values():
                 if panel.is_spacer():
@@ -4696,8 +4943,11 @@ class DataBrowser(QWidget):
             fig_height = max(1.0, float(lane_h))
             if show_spec:
                 fig_height += theme.SPECTROGRAM_MIN_HEIGHT
+            lane_traces = sum(
+                1 for p in self.panels.values() if p.is_trace() and rows.get(p.name)
+            )
             spec_h, trace_h = self.panel_split_rows(
-                c, fig_height, spec_visible, ntraces
+                c, fig_height, spec_visible, lane_traces
             )
             if show_spec and self.show_powers:
                 self.figs[c].ci.layout.setColumnFixedWidth(1, 0.1 * width)
@@ -4759,7 +5009,7 @@ class DataBrowser(QWidget):
         channels = self.visible_channels()
         if not channels:
             return
-        plot = self.trace_plot(channels[0])
+        plot = self.time_plot(channels[0])
         if plot is None:
             return
         view = plot.getViewBox()
@@ -5177,10 +5427,32 @@ class DataBrowser(QWidget):
             self.selected_channels = list(self.show_channels)
         self.update_borders()
 
-    def next_channel(self):
+    def stepped_channel(self, forward: bool) -> Optional[int]:
+        """The next channel down (or up) the stack that is actually drawn.
+
+        `show_channels` is the window of channels the stack is scrolled to;
+        `visible_channels` is what survives solo, mute and maximise on top of
+        that, and only those have a lane on screen.  The arrow keys walked
+        the first and could land on the second's leftovers: with channel 5
+        muted, stepping down from 4 put the focus on a lane that is not
+        there.  Harmless while nothing read the focus back - the frame just
+        went somewhere invisible - but `spectrogram_channels` falls back to
+        `channels[0]` when the focused channel is not among them, so on a
+        collapsed sixteen channel stack one press of the down arrow moved
+        the spectrogram from lane 4 to lane 0.  Returns `None` at the end of
+        the window, which is where the caller scrolls it.
+        """
+        drawn = self.visible_channels()
         idx = self.show_channels.index(self.current_channel)
-        if idx + 1 < len(self.show_channels):
-            self.current_channel = self.show_channels[idx + 1]
+        window = (
+            self.show_channels[idx + 1 :] if forward else self.show_channels[:idx][::-1]
+        )
+        return next((c for c in window if c in drawn), None)
+
+    def next_channel(self):
+        step = self.stepped_channel(True)
+        if step is not None:
+            self.focus_channel(step)
             self.selected_channels = [self.current_channel]
             self.update_borders()
         else:
@@ -5203,9 +5475,9 @@ class DataBrowser(QWidget):
             self.set_channels()
 
     def previous_channel(self):
-        idx = self.show_channels.index(self.current_channel)
-        if idx > 0:
-            self.current_channel = self.show_channels[idx - 1]
+        step = self.stepped_channel(False)
+        if step is not None:
+            self.focus_channel(step)
             self.selected_channels = [self.current_channel]
             self.update_borders()
         else:
@@ -5231,9 +5503,9 @@ class DataBrowser(QWidget):
         ]
         if len(show_selected_channels) > 0:
             self.current_channel = show_selected_channels[-1]
-        idx = self.show_channels.index(self.current_channel)
-        if idx + 1 < len(self.show_channels):
-            self.current_channel = self.show_channels[idx + 1]
+        step = self.stepped_channel(True)
+        if step is not None:
+            self.focus_channel(step)
             self.add_to_selected_channels(self.current_channel)
             self.update_borders()
         else:
@@ -5262,9 +5534,9 @@ class DataBrowser(QWidget):
         ]
         if len(show_selected_channels) > 0:
             self.current_channel = show_selected_channels[0]
-        idx = self.show_channels.index(self.current_channel)
-        if idx > 0:
-            self.current_channel = self.show_channels[idx - 1]
+        step = self.stepped_channel(False)
+        if step is not None:
+            self.focus_channel(step)
             self.add_to_selected_channels(self.current_channel)
             self.update_borders()
         else:

@@ -7,7 +7,7 @@ Runs offscreen::
 The split is a layout, and there is only one question about a layout worth
 asking: what height did the rows actually end up with.  So every claim here
 is measured off `QGraphicsWidget.geometry()` once the layout has settled,
-never off `trace_fracs` -- the ratio agreeing with itself would prove
+never off `spec_scales` -- the ratio agreeing with itself would prove
 nothing.  `settle` is where the layout is activated, which is also why it is
 called by hand after every gesture: a drag invalidates and Qt re-activates
 before the next paint, so a test that reads geometry without letting the
@@ -16,7 +16,7 @@ event loop turn is reading the frame before the one it means.
 Three windows are built, because the three cases differ in kind.  Four
 channels at 1200x900 is *dense*: the lane is 34 px, the whole of it goes to
 the trace, and the spectrogram's 120 px allowance leaves nothing over -- so
-the boundary can be dragged one way only.  Two channels have 126 px of lane
+the boundary can be dragged one way only.  Two channels have 130 px of lane
 to share, so that is where a drag is measured in both directions.  Sixteen
 collapse the spectrogram onto a single focused lane (`spectrogram_channels`)
 and are the case whose cost is measured.
@@ -145,7 +145,7 @@ def browser(app, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def roomy_browser(app, tmp_path_factory):
-    """Two channels: 126 px of lane over the allowance, room to drag."""
+    """Two channels: 130 px of lane over the allowance, room to drag."""
     yield from open_stack(app, tmp_path_factory.mktemp("split2"), 2)
 
 
@@ -232,7 +232,7 @@ def send(app, browser, channel, kind, y, button, buttons):
 
 
 def reset_split(browser):
-    browser.trace_fracs.update(browser.default_trace_fracs)
+    browser.spec_scales.update(browser.default_spec_scales)
     browser.set_panels(specs=1, traces=True)
     browser.adjust_layout(browser.width(), browser.height())
     settle()
@@ -270,7 +270,7 @@ def test_a_lane_opens_with_the_spectrogram_at_the_height_it_grew_the_lane_by(
     before the reader had touched anything.
 
     Measured at 1200x900: four channels and sixteen open 120 / 34, two open
-    120 / 126.
+    120 / 130.
     """
     from audian.spectrogramplot import SpectrogramPlot
 
@@ -707,34 +707,59 @@ def test_a_lane_whose_spectrogram_has_nothing_to_draw_has_no_band(wide_browser):
     assert splitter(view, c).isVisible()
 
 
-def test_the_focused_lane_keeps_its_spectrogram_when_the_focus_moves(wide_browser):
+@pytest.mark.parametrize(
+    "gesture",
+    [
+        "next_channel",
+        "previous_channel",
+        "select_next_channel",
+        "select_previous_channel",
+        "rail_clicked",
+    ],
+)
+def test_the_spectrogram_follows_the_focus_by_every_gesture_that_moves_it(
+    wide_browser, gesture
+):
     """Stepping down the array must not cost the stack its spectrogram.
 
     Sixteen channels collapse the spectrogram onto the focused lane, so
-    every step hides one lane's panel and shows another's.  A panel asked
-    whether it has anything to draw with `QGraphicsItem.isVisible` answers
-    for its whole ancestry, so a lane hidden once answered "nothing" for
-    ever and the stack this application exists for lost its spectrogram at
-    the first press of the down arrow.
+    every step hides one lane's panel and shows another's.  Two ways that
+    went wrong, and the second is why this is parametrised.
+
+    A panel asked whether it has anything to draw with
+    `QGraphicsItem.isVisible` answers for its whole ancestry, so a lane
+    hidden once answered "nothing" for ever and the stack lost its
+    spectrogram at the first press of the down arrow.
+
+    Then, with that fixed, four of the five gestures below still left the
+    spectrogram on the lane the reader had just left: they moved
+    `current_channel` and stopped at `update_borders`, and only
+    `rail_clicked` relaid the stack out.  The version of this test that
+    called `adjust_layout` by hand after the gesture passed throughout -
+    it was doing for the browser the thing the browser was failing to do.
+    So nothing here calls it.
     """
     view = wide_browser
+    restore = view.current_channel
+    # somewhere in the middle of the array, so "previous" has somewhere to go
+    view.rail_clicked(4, False)
+    settle()
     before = view.current_channel
     try:
-        view.next_channel()
+        if gesture == "rail_clicked":
+            view.rail_clicked(before + 1, False)
+        else:
+            getattr(view, gesture)()
         settle()
-        view.adjust_layout(view.width(), view.height())
-        settle()
-        focus = spec_channel(view)
+        focus = view.current_channel
         assert focus != before
+        assert spec_channel(view) == focus
         assert panel(view, "spectrogram").axs[focus].isVisible()
         assert row_height(view, "spectrogram", focus) == theme.SPECTROGRAM_MIN_HEIGHT
         assert splitter(view, focus).isVisible()
         assert not splitter(view, before).isVisible()
     finally:
-        while view.current_channel != before:
-            view.previous_channel()
-        settle()
-        view.adjust_layout(view.width(), view.height())
+        view.rail_clicked(restore, False)
         settle()
 
 
@@ -815,8 +840,8 @@ def test_the_split_is_written_once_the_gesture_ends(roomy_browser, roomy_reset):
     roomy_browser.finish_panel_split()
     saved = audian_app.settings().get(DataBrowser.PANEL_SPLIT_SETTING)
     assert saved["version"] == DataBrowser.PANEL_SPLIT_SETTING_VERSION
-    assert saved["fracs"][str(roomy_browser.show_specs)] == pytest.approx(
-        roomy_browser.trace_fracs[roomy_browser.show_specs]
+    assert saved["scales"][str(roomy_browser.show_specs)] == pytest.approx(
+        roomy_browser.spec_scales[roomy_browser.show_specs]
     )
 
 
@@ -831,11 +856,11 @@ def test_a_size_that_was_never_dragged_is_not_written_out(roomy_browser, roomy_r
     drag(roomy_browser, spec_h + 9, room)
     roomy_browser.finish_panel_split()
     saved = audian_app.settings().get(DataBrowser.PANEL_SPLIT_SETTING)
-    assert set(saved["fracs"]) == {str(roomy_browser.show_specs)}
+    assert set(saved["scales"]) == {str(roomy_browser.show_specs)}
 
 
 def test_a_saved_split_is_read_back_whatever_the_channel_count(browser, monkeypatch):
-    """It is a ratio between two rows, so no bundle can invalidate it."""
+    """It measures the spectrogram against its own default, so it travels."""
     import audian.audian as audian_app
     from audian.databrowser import DataBrowser
 
@@ -845,39 +870,393 @@ def test_a_saved_split_is_read_back_whatever_the_channel_count(browser, monkeypa
         lambda: {
             DataBrowser.PANEL_SPLIT_SETTING: {
                 "version": DataBrowser.PANEL_SPLIT_SETTING_VERSION,
-                "fracs": {"1": 0.375, "2": "not a number", "9": 2.0},
+                "scales": {"1": 0.375, "2": "not a number", "9": 2.0, "0": 1.0},
             }
         },
     )
-    fracs = dict(browser.trace_fracs)
+    scales = dict(browser.spec_scales)
     try:
-        browser.trace_fracs = dict(browser.default_trace_fracs)
+        browser.spec_scales = dict(browser.default_spec_scales)
         browser.restore_panel_split()
-        assert browser.trace_fracs[1] == pytest.approx(0.375)
+        assert browser.spec_scales[1] == pytest.approx(0.375)
         # unreadable entries, and presets this build does not have, are left
         # at their defaults rather than half-applied
-        assert browser.trace_fracs[2] == browser.default_trace_fracs[2]
-        assert 9 not in browser.trace_fracs
+        assert browser.spec_scales[2] == browser.default_spec_scales[2]
+        assert 9 not in browser.spec_scales
+        # F3 size 0 hides the spectrogram, so it has no boundary to drag and
+        # no scale to read: a file holding one is an older build's, and it is
+        # dropped rather than carried along by every later write
+        assert 0 not in browser.spec_scales
     finally:
-        browser.trace_fracs = fracs
+        browser.spec_scales = scales
 
 
-def test_a_split_saved_by_another_version_is_ignored(browser, monkeypatch):
+@pytest.mark.parametrize("preset", [1, 2, 3, 4])
+def test_the_split_a_reader_dragged_means_the_same_on_any_stack(
+    browser, roomy_browser, preset
+):
+    """The measurement the version 2 format exists for.
+
+    `spec_scales` is measured against `theme.SPECTROGRAM_MIN_HEIGHT`, which
+    no recording moves, so a reader who halves the spectrogram on one stack
+    must find it halved on the other -- at every F3 size, which is why this
+    is parametrised.  Version 1 could not do it at any size: it held the
+    trace over the spectrogram, and the trace is the lane, 34 px on the
+    dense stack against 130 on the roomy one, so the same stored number came
+    out 60 px one side and 144 the other, a shrink replayed as a stretch.
+
+    Measuring against `default_spec_height` instead -- the height the size
+    opens on, which is the tempting denominator -- fixes only size 1, where
+    that default *is* the allowance.  At sizes 2 to 4 it takes a share of
+    the lane as well, so it is 185 px on two channels against 120 on
+    sixteen, and a boundary dragged to a readable 125 px on the roomy stack
+    came back at 81 px on the dense one: the same unreadable stripe this
+    format was written to stop, arriving 1.6x instead of 9.7x.
+    """
+    dense = dict(browser.spec_scales)
+    roomy = dict(roomy_browser.spec_scales)
+    sizes = (browser.show_specs, roomy_browser.show_specs)
+    try:
+        for view in (browser, roomy_browser):
+            view.set_panels(specs=preset)
+            view.spec_scales[preset] = 0.5
+            view.adjust_layout(view.width(), view.height())
+        settle()
+        for view in (browser, roomy_browser):
+            c = spec_channel(view)
+            assert row_height(view, "spectrogram", c) == pytest.approx(60, abs=1)
+    finally:
+        browser.spec_scales = dense
+        roomy_browser.spec_scales = roomy
+        for view, size in zip((browser, roomy_browser), sizes):
+            view.set_panels(specs=size)
+        settle()
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [
+        pytest.param({"version": 99, "fracs": {"1": 0.1}}, id="a later version"),
+        pytest.param(
+            {
+                "version": 1,
+                "fracs": {
+                    "0": 1.0,
+                    "1": 2.7437722419928825,
+                    "2": 1.3717948717948718,
+                    "3": 0.25,
+                    "4": 0.15,
+                },
+            },
+            id="the version 1 file this format replaced",
+        ),
+    ],
+)
+def test_a_split_saved_by_another_version_is_ignored(browser, monkeypatch, saved):
+    """The version 1 case is the one a reader actually hit.
+
+    Those five numbers are a real ``~/.config/audian/settings.json``.  Read
+    as version 2 scales they would open F3 size 1 at 2.74 times its default;
+    read as the version 1 fracs they are, they open it at 41 px on a sixteen
+    channel stack.  Neither is what the reader chose, and nothing in the file
+    distinguishes a value they dragged from one an earlier build wrote for
+    them - the entry for size 0 is the tell, since size 0 hides the
+    spectrogram and has no boundary to drag.  So the whole entry goes.
+    """
     import audian.audian as audian_app
     from audian.databrowser import DataBrowser
 
     monkeypatch.setattr(
         audian_app,
         "settings",
-        lambda: {DataBrowser.PANEL_SPLIT_SETTING: {"version": 99, "fracs": {"1": 0.1}}},
+        lambda: {DataBrowser.PANEL_SPLIT_SETTING: saved},
     )
-    fracs = dict(browser.trace_fracs)
+    scales = dict(browser.spec_scales)
     try:
-        browser.trace_fracs = dict(browser.default_trace_fracs)
+        browser.spec_scales = dict(browser.default_spec_scales)
         browser.restore_panel_split()
-        assert browser.trace_fracs == browser.default_trace_fracs
+        assert browser.spec_scales == browser.default_spec_scales
     finally:
-        browser.trace_fracs = fracs
+        browser.spec_scales = scales
+
+
+# ------------------------------------------------------- the empty lane
+
+
+@pytest.mark.parametrize("stack", ["browser", "roomy_browser", "wide_browser"])
+@pytest.mark.parametrize("traces", [True, False])
+@pytest.mark.parametrize("specs", [0, 1, 2, 3, 4])
+def test_no_visible_lane_is_ever_empty(stack, traces, specs, request):
+    """The one thing the reader actually saw, held as an invariant.
+
+    A lane with no row in it is a strip of background nothing tells apart
+    from a dead channel, and there turned out to be two ways to get one.
+    F3 then F2 on sixteen channels collapsed the spectrogram onto the
+    focused lane and hid the traces everywhere, which left fifteen of
+    sixteen lanes drawing nothing -- reachable with two keystrokes, and
+    swept across 600 states -- channel count x window size x F3 size x
+    `show_traces` x `show_powers` x saved split -- where it emptied 1316
+    lanes in 140 of them.  `set_panels(traces=False, specs=0)` empties the
+    whole stack; no key reaches that pair, but nothing in `set_panels`
+    forbids it, so it is swept here too.
+
+    Swept rather than spot-checked because both bugs were combinations, not
+    single settings.  `show_powers` is the one axis dropped from the sweep
+    and it was dropped on measurement: over 1860 pairs of lanes it changed
+    no lane's visible panels and no row height, the power panel living in
+    the figure's second column and taking no row of its own.
+    """
+    view = request.getfixturevalue(stack)
+    before = (view.show_traces, view.show_specs)
+    try:
+        view.set_panels(traces=traces, specs=specs)
+        settle()
+        for c in view.visible_channels():
+            drawn = [
+                (p.name, float(p.axs[c].geometry().height()))
+                for p in view.panels.values()
+                if not p.is_power()
+                and not p.is_spacer()
+                and p.axs[c].isVisible()
+                and p.axs[c].geometry().height() > 0
+            ]
+            assert drawn, (
+                f"lane {c} of {len(view.visible_channels())} draws nothing "
+                f"with traces={traces} specs={specs}"
+            )
+            # and the rows it draws fill it.  A backstop that puts a panel
+            # back without a height leaves the lane looking exactly as
+            # broken: the rescued row took 15.5 px of a 29 px lane, because
+            # `panel_split_rows` was budgeting from the F2 toggle instead of
+            # from what the lane had ended up drawing.
+            content = view.lane_content_height(c, float(view.figs[c].height()))
+            assert sum(h for _, h in drawn) == pytest.approx(content, abs=1.0), (
+                f"lane {c} rows {drawn} do not fill its {content} px "
+                f"with traces={traces} specs={specs}"
+            )
+    finally:
+        view.set_panels(traces=before[0], specs=before[1])
+        settle()
+
+
+def test_the_traces_off_stack_gives_every_lane_a_readable_spectrogram(wide_browser):
+    """F2 means "spectrograms only", so all sixteen get one - and it scrolls.
+
+    The collapse onto the focused lane is a fallback for a lane that still
+    has a trace to show; with the traces off there is nothing to fall back
+    on.  So `spectrogram_channels` hands every visible channel a spectrogram
+    and `lane_geometry` drops the lane's floor from
+    `theme.CHANNEL_DENSE_HEIGHT` -- which is the height a *trace* needs to
+    stay readable, and there is no trace here -- to the two px a
+    `pyqtgraph.PlotItem` spends on its own margins.
+
+    The cost is a stack taller than its viewport, and it is deliberate:
+    sixteen readable spectrograms do not fit in a 1200x900 window and the
+    reader asked for sixteen readable spectrograms.
+    """
+    view = wide_browser
+    before = (view.show_traces, view.show_specs)
+    try:
+        view.set_panels(traces=False, specs=1)
+        settle()
+        channels = view.visible_channels()
+        assert view.spectrogram_channels(channels) == channels
+        for c in channels:
+            assert not panel(view, "trace").axs[c].isVisible()
+            assert row_height(view, "spectrogram", c) == theme.SPECTROGRAM_MIN_HEIGHT, (
+                f"lane {c}"
+            )
+        # every lane is its spectrogram plus the plot's own two px of margin
+        assert view.lane_geometry(view.height())[0] == theme.PLOT_FRAME_HEIGHT
+        assert figure_height(view, channels[0]) == (
+            theme.SPECTROGRAM_MIN_HEIGHT + theme.PLOT_FRAME_HEIGHT
+        )
+    finally:
+        view.set_panels(traces=before[0], specs=before[1])
+        settle()
+
+
+def lane_on_screen(browser, channel):
+    """Is this lane wholly inside the scroll area's viewport?"""
+    area = browser.stack_area
+    fig = browser.figs[channel]
+    top = fig.mapTo(area.widget(), QPoint(0, 0)).y()
+    value = area.verticalScrollBar().value()
+    return (
+        value <= top
+        and top + max(fig.minimumHeight(), fig.height())
+        <= value + area.viewport().height()
+    )
+
+
+@pytest.mark.parametrize("focus", [0, 3, 8, 12, 15])
+def test_the_focused_lane_stays_on_screen_when_the_stack_outgrows_the_view(
+    wide_browser, focus
+):
+    """Sixteen spectrograms are four viewports; the selection has to come too.
+
+    The stack marks the focused lane three ways -- a frame around it, a bold
+    caption, a rule down its rail row -- and all three are useless where they
+    cannot be seen.  F2 with the focus on channel 12 left the reader looking
+    at channels 0 to 3.
+    """
+    view = wide_browser
+    before = (view.show_traces, view.show_specs, view.current_channel)
+    try:
+        view.rail_clicked(focus, False)
+        settle()
+        view.set_panels(traces=False, specs=1)
+        settle()
+        pump(0.2)
+        assert lane_on_screen(view, focus)
+    finally:
+        view.set_panels(traces=before[0], specs=before[1])
+        view.rail_clicked(before[2], False)
+        settle()
+
+
+def test_an_arrow_key_steps_over_a_channel_that_is_not_drawn(wide_browser):
+    """The focus has to land somewhere the reader can see.
+
+    `show_channels` is the window the stack is scrolled to; `mute` and its
+    friends take channels out of that afterwards.  Walking the first could
+    put the focus on a lane that is not on screen, which was harmless only
+    while nothing read the focus back: `spectrogram_channels` falls back to
+    `channels[0]` when the focused channel is not among them, so once
+    `focus_channel` started relaying the stack out, one press of the down
+    arrow onto muted channel 5 moved the spectrogram from lane 4 to lane 0
+    -- four lanes the wrong way, and the frame onto a lane with no figure.
+    """
+    view = wide_browser
+    restore = view.current_channel
+    try:
+        view.toggle_mute(5)
+        settle()
+        view.rail_clicked(4, False)
+        settle()
+        assert spec_channel(view) == 4
+        view.next_channel()
+        settle()
+        assert view.current_channel == 6
+        assert view.current_channel in view.visible_channels()
+        assert spec_channel(view) == 6
+        view.previous_channel()
+        settle()
+        assert view.current_channel == 4
+        assert spec_channel(view) == 4
+    finally:
+        if 5 in view.muted_channels:
+            view.toggle_mute(5)
+        settle()
+        view.rail_clicked(restore, False)
+        settle()
+
+
+@pytest.mark.parametrize(
+    "gesture",
+    [
+        "solo",
+        "mute",
+        "maximize",
+        "show_channel",
+        "hide_deselected_channels",
+        "select_previous_channel",
+        "resize",
+    ],
+)
+def test_every_gesture_that_re_flows_the_stack_keeps_the_focus_on_screen(
+    wide_browser, gesture
+):
+    """Not just the two gestures the scroll was first hung off.
+
+    Sixteen lanes are taller than the viewport even with the traces on --
+    679 px against 500 -- so any gesture that puts every channel back while
+    the focus is near the bottom can leave it off screen.  With the
+    spectrogram collapsed onto that lane, this *is* the reported bug through
+    a side door: one solo and un-solo of channel 15 left the stack's only
+    spectrogram below the fold, no F2 involved.  So the scroll hangs off
+    `update_stretches`, where every lane height in this application is set,
+    rather than off the gestures that were noticed first.
+    """
+    view = wide_browser
+    before = (view.show_traces, view.show_specs, view.current_channel)
+    size = view.window().size()
+    try:
+        view.rail_clicked(15, False)
+        settle()
+        pump(0.2)
+        assert lane_on_screen(view, 15), "the setup itself did not scroll"
+        if gesture == "solo":
+            view.toggle_solo(15)
+            settle()
+            view.toggle_solo(15)
+        elif gesture == "mute":
+            view.toggle_mute(0)
+            settle()
+            view.toggle_mute(0)
+        elif gesture == "maximize":
+            view.toggle_maximize(15)
+            settle()
+            view.toggle_maximize(15)
+        elif gesture == "show_channel":
+            view.show_channel(15)
+            settle()
+            view.show_channel(15)
+        elif gesture == "hide_deselected_channels":
+            view.hide_deselected_channels()
+            settle()
+            view.set_channels(list(range(16)))
+        elif gesture == "select_previous_channel":
+            for _ in range(6):
+                view.select_next_channel()
+                settle()
+            view.select_previous_channel()
+        elif gesture == "resize":
+            view.window().resize(1200, 400)
+        settle()
+        pump(0.3)
+        assert lane_on_screen(view, view.current_channel), (
+            f"{gesture} left lane {view.current_channel} off screen"
+        )
+    finally:
+        view.window().resize(size)
+        view.set_channels(list(range(16)))
+        view.set_panels(traces=before[0], specs=before[1])
+        view.rail_clicked(before[2], False)
+        settle()
+        pump(0.3)
+
+
+def test_the_time_axis_never_maps_its_ticks_through_a_hidden_plot(wide_browser):
+    """With the traces off, the axis has to follow the spectrogram.
+
+    `link_time_axis` reached for `trace_plot`, which is the lane's first
+    visible *trace* and is None once F2 has hidden every one of them; it
+    returned early and left the axis linked to the hidden trace's view box.
+    Measured on two channels: that box is 1037 px wide while the
+    spectrogram the ticks are drawn under is 981.
+    """
+    view = wide_browser
+    before = (view.show_traces, view.show_specs)
+    try:
+        view.set_panels(traces=False, specs=1)
+        settle()
+        linked = view.taxis.linkedView()
+        assert linked is not None
+        owners = [
+            p
+            for p in view.panels.values()
+            if not p.is_power()
+            and not p.is_spacer()
+            and any(ax.getViewBox() is linked for ax in p.axs)
+        ]
+        assert owners and owners[0].is_spectrogram()
+        assert all(
+            ax.isVisible() for p in owners for ax in p.axs if ax.getViewBox() is linked
+        )
+    finally:
+        view.set_panels(traces=before[0], specs=before[1])
+        settle()
 
 
 # ----------------------------------------------------------------- the cost
@@ -911,6 +1290,43 @@ def test_a_drag_step_costs_a_fraction_of_the_python_a_full_layout_does(wide_brow
         wide_browser.drag_panel_split(target, room)
     per_step_ms = 1000.0 * (time.perf_counter() - start) / len(steps)
     assert per_step_ms < 1.0, f"{per_step_ms:.3f} ms per drag step"
+
+
+def test_a_focus_move_relayouts_only_where_the_spectrogram_has_to_move(
+    roomy_browser, wide_browser
+):
+    """The arrow key must not buy a relayout it has no use for.
+
+    Two channels draw a spectrogram each, so stepping between them changes
+    nothing about which lanes have one and `focus_channel` has nothing to
+    lay out: measured 1.4 ms a press, against 13.5 ms on sixteen where the
+    spectrogram really does move lanes and the layout really is the work.
+    Both are inside a 60 Hz frame; the one that would regress is the first,
+    if `focus_channel` ever started relayouting unconditionally.
+
+    Counted rather than timed, because a wall clock on a loaded machine
+    fences nothing: what is asserted is the number of `adjust_layout` calls
+    one press makes.
+    """
+    for view, expected in ((roomy_browser, 0), (wide_browser, 1)):
+        before = view.current_channel
+        calls = []
+        original = view.adjust_layout
+        view.adjust_layout = lambda w, h, _c=calls, _o=original: (
+            _c.append(1),
+            _o(w, h),
+        )[1]
+        try:
+            view.next_channel()
+            settle()
+        finally:
+            del view.adjust_layout
+        assert len(calls) == expected, (
+            f"{len(calls)} relayouts for one arrow key on "
+            f"{len(view.visible_channels())} channels"
+        )
+        view.rail_clicked(before, False)
+        settle()
 
 
 def test_a_drag_step_writes_no_axis_style_it_did_not_have_to(
@@ -961,6 +1377,6 @@ def test_a_drag_never_runs_the_full_layout_and_the_release_runs_it_once(
     wide_browser.finish_panel_split()
     assert len(calls) == 1
     settle()
-    wide_browser.trace_fracs.update(wide_browser.default_trace_fracs)
+    wide_browser.spec_scales.update(wide_browser.default_spec_scales)
     original(wide_browser.width(), wide_browser.height())
     settle()
