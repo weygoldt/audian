@@ -1,0 +1,4 @@
+- [ ] Implemet sum spectrogram toggle
+- [ ] check spec backend. torch could be faster. 
+- [ ] Add manual labeling interface
+- [ ] Write plugin interface, so that wavetracker, eeltracker, etc. algos can be visualized interactively in audian
