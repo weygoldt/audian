@@ -13,3 +13,7 @@ __pycache__/
 *.pyc
 .devdata/
 .devshots/
+
+# Agent worktrees and scratch. Worktrees live at .claude/worktrees/<name> so the
+# primary checkout can stay on master -- one held elsewhere silently strands it.
+.claude/
