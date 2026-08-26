@@ -4897,6 +4897,9 @@ class DataBrowser(QWidget):
         # worse than a narrow one:
         left_width = 0 if dense else theme.AXIS_LEFT_WIDTH
         self.lane_left_width = left_width
+        # Panels this pass turns on, flushed once the rows are their final
+        # size - see the loop at the bottom.
+        revealed = []
         for c in range(self.data.channels):
             if c not in channels:
                 for panel in self.panels.values():
@@ -4930,7 +4933,10 @@ class DataBrowser(QWidget):
                     continue
                 if panel.is_spectrogram():
                     spec_visible = spec_visible or rows[panel.name]
-                panel.axs[c].setVisible(rows[panel.name])
+                ax = panel.axs[c]
+                if rows[panel.name] and not ax.isVisible():
+                    revealed.append(ax)
+                ax.setVisible(rows[panel.name])
             bands = self.split_spacers(c)
             for panel in self.panels.values():
                 if panel.is_spacer():
@@ -4994,6 +5000,25 @@ class DataBrowser(QWidget):
         for c in channels:
             self.fit_figure_layout(c)
             self.figs[c].update()
+        # A panel that was hidden a moment ago has never been asked to draw,
+        # and showing it does not ask.  `Panel.update_plots` skips hidden
+        # panels -- rightly, uploading a spectrogram nobody can see is what
+        # `specitem` exists to avoid -- and the only caller that follows a
+        # layout with one is `set_panels`.  So every other way of revealing a
+        # panel gave the reader an empty one: on sixteen channels, F3 drew a
+        # spectrogram on the focused lane and stepping to the next lane made
+        # room for one and left it blank.  It stayed blank until something
+        # else moved the range, which is why pressing F2 twice appeared to
+        # cure it for good - that pass has every lane visible at once, so
+        # every `SpecItem` uploads and none is ever empty again.
+        #
+        # Run last, so the item reads the width its row ended up with rather
+        # than the one it had before the split moved; and cheap, because
+        # `SpecItem.update_plot` returns immediately when what is on screen
+        # is already uploaded, which is what makes the redundant calls a
+        # hidden ancestor can produce here harmless.
+        for ax in revealed:
+            ax.update_plot()
 
     def align_time_axis(self) -> None:
         """Line the shared time axis up with the lanes above it.

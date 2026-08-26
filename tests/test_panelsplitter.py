@@ -1115,6 +1115,76 @@ def test_the_focused_lane_stays_on_screen_when_the_stack_outgrows_the_view(
         settle()
 
 
+def spec_image(browser, channel):
+    """The pixels the spectrogram of this lane actually has, or None."""
+    ax = panel(browser, "spectrogram").axs[channel]
+    for item in ax.data_items:
+        image = getattr(item, "image", None)
+        if image is not None:
+            return image
+    return None
+
+
+def forget_spectrogram(browser, channel):
+    """Put a lane's spectrogram back to never having been drawn.
+
+    The stack fixtures are module scoped, so by the time a test runs some
+    earlier one may have had every lane visible at once and uploaded all
+    sixteen images.  That is exactly the state that hides the bug below, so
+    the precondition has to be established rather than assumed.
+    """
+    ax = panel(browser, "spectrogram").axs[channel]
+    for item in ax.data_items:
+        if hasattr(item, "_image_range"):
+            item.clear()
+            item._image_range = None
+
+
+@pytest.mark.parametrize("gesture", ["next_channel", "rail_clicked"])
+def test_the_lane_the_spectrogram_moves_to_actually_draws_one(wide_browser, gesture):
+    """Making room for a panel is not the same as drawing in it.
+
+    `Panel.update_plots` skips hidden panels, rightly -- uploading a
+    spectrogram nobody can see is what `specitem` exists to avoid -- and the
+    only caller that follows a layout pass with one is `set_panels`.  So
+    every other way of revealing a panel handed the reader an empty one: on
+    sixteen channels, F3 drew a spectrogram on the focused lane and one
+    press of the down arrow made room on the next lane and left it blank.
+
+    It stayed blank until something else moved the range, which is why
+    pressing F2 twice appeared to cure it for good: that pass has every lane
+    visible at once, so every `SpecItem` uploads and none is ever empty
+    again.  A test that asks `isVisible()` sees none of this -- the panel is
+    visible, the row is the right height, and there is nothing in it -- so
+    this one asks for the image.
+    """
+    view = wide_browser
+    restore = view.current_channel
+    try:
+        view.rail_clicked(4, False)
+        settle()
+        pump(0.4)
+        assert spec_channel(view) == 4
+        forget_spectrogram(view, 5)
+        assert spec_image(view, 5) is None
+        if gesture == "rail_clicked":
+            view.rail_clicked(5, False)
+        else:
+            view.next_channel()
+        settle()
+        pump(0.6)
+        assert view.current_channel == 5
+        assert spec_channel(view) == 5
+        image = spec_image(view, 5)
+        assert image is not None and image.size > 0, (
+            f"lane 5 has a {row_height(view, 'spectrogram', 5)} px spectrogram "
+            f"row with nothing in it"
+        )
+    finally:
+        view.rail_clicked(restore, False)
+        settle()
+
+
 def test_an_arrow_key_steps_over_a_channel_that_is_not_drawn(wide_browser):
     """The focus has to land somewhere the reader can see.
 
