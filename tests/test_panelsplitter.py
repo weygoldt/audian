@@ -16,7 +16,7 @@ event loop turn is reading the frame before the one it means.
 Three windows are built, because the three cases differ in kind.  Four
 channels at 1200x900 is *dense*: the lane is 34 px, the whole of it goes to
 the trace, and the spectrogram's 120 px allowance leaves nothing over -- so
-the boundary can be dragged one way only.  Two channels have 130 px of lane
+the boundary can be dragged one way only.  Two channels have 127 px of lane
 to share, so that is where a drag is measured in both directions.  Sixteen
 collapse the spectrogram onto a single focused lane (`spectrogram_channels`)
 and are the case whose cost is measured.
@@ -162,7 +162,7 @@ def browser(app, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def roomy_browser(app, tmp_path_factory):
-    """Two channels: 130 px of lane over the allowance, room to drag."""
+    """Two channels: 127 px of lane over the allowance, room to drag."""
     yield from open_stack(app, tmp_path_factory.mktemp("split2"), 2)
 
 
@@ -287,7 +287,7 @@ def test_a_lane_opens_with_the_spectrogram_at_the_height_it_grew_the_lane_by(
     before the reader had touched anything.
 
     Measured at 1200x900: four channels and sixteen open 120 / 34, two open
-    120 / 130.
+    120 / 127.
     """
     from audian.spectrogramplot import SpectrogramPlot
 

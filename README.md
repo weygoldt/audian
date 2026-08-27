@@ -186,7 +186,13 @@ Basic plot items:
 #### Controller
 
 - `audian.py`: Main GUI, handles DataBrowser widgets and key shortcuts.
+  Its `ToolStrip` is the tool bar: it gives up the words on its buttons, then
+  the space around its group rules, then whole groups into an overflow menu,
+  so that the window's minimum width does not grow with the bar.
 - `databrowser.py`: Each data file is displayed in a DataBrowser widget.
+  Its `ParameterTabs` is the bottom bar: one tab per group of parameters and
+  one group on screen, so the bar asks for the width of its widest page
+  rather than the sum of all of them.
 - `compresseddata.py`: Handle compressed and cached data for FullTracePlot.
 
 #### Plugins

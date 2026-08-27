@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import QLayout
 from PyQt5.QtWidgets import QScrollArea, QSplitter, QFrame, QSlider
 from PyQt5.QtWidgets import QLineEdit, QToolButton
 from PyQt5.QtWidgets import QSizePolicy, QSpacerItem, QAbstractSpinBox
+from PyQt5.QtWidgets import QButtonGroup, QStackedLayout
 from PyQt5.QtWidgets import QAction, QMenu, QComboBox
 from PyQt5.QtWidgets import QLabel
 from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QFileDialog
@@ -134,11 +135,14 @@ ANNOTATION_SURFACE_TIPS = {
 #: row's empty set is the catch-all.
 #:
 #: Two rows and not one, because the ten chips of a session bundle measure
-#: 1133 px of a 678 px field.  Two and not three, because the group is 104 px
-#: tall at two chip rows against the 108 px the tallest other group of the bar
-#: already spends -- so a loaded bundle leaves the bar at the 141 px it has
-#: with nothing loaded, where a third row would take 24 px out of every lane
-#: in the stack.
+#: 1133 px, which did not fit the 678 px field a group had when every group
+#: was on screen at once.  Behind tabs the page is the whole bar -- measured
+#: 1183 px on a 1200 px window -- so they would now fit on one row, and the
+#: rows stay two anyway: they are captioned SENT and HEARD, which is the
+#: division the reader thinks in, not a way of coping with a narrow column.
+#: Two and not three because this group is the tallest in the bar and the
+#: bar is as tall as its tallest page, so a third row would take 24 px out
+#: of every lane in the stack.
 ANNOTATION_CHIP_ROWS = (
     (
         "Sent",
@@ -225,31 +229,100 @@ def caption_label(text: str, shortcut: str = "") -> QLabel:
 class ParameterGroup(QWidget):
     """A labelled and boxed group of related parameter widgets.
 
-    A caption in small caps sits above a framed body into which
-    parameter rows are added with `add_row()`.
+    A framed body into which parameter rows are added with `add_row()`,
+    under a small-caps caption -- except in the parameter bar, where the
+    group's tab button carries the name and `caption=False` drops it.
 
-    Groups are meant to be laid out side by side in equal grid columns and
-    then `equalize()`d, so that the bottom bar reads as one band: every
-    caption on one baseline, every frame the same height, every right edge
-    on the same x.
+    One group is on screen at a time, in the bar's `QStackedLayout`, and
+    `equalize()` gives every group the same frame height so that changing
+    tab cannot change the height of the bar and resize every lane in the
+    channel stack.
     """
 
-    def __init__(self, title: str, parent: Optional[QWidget] = None):
+    #: Grid column that soaks up the width the fields do not want.
+    #:
+    #: A group used to get 1/N of the bar and every field was starved, so
+    #: the stretch sat on column 1 and the fields took what was going.  A
+    #: group now gets the WHOLE bar: measured on a 1449 px window, that put
+    #: the Audio group's Source and Speed combo boxes at 1327 px each and
+    #: the spectrogram's overlap slider at 1182.  A 1182 px slider is a
+    #: genuine gain in resolution; a 1327 px combo box reading "1" is a
+    #: defect.  So the stretch moves out here, past any column `add_row`
+    #: will ever fill, and the widgets that actually want the width ask for
+    #: it themselves with `expanding()`.
+    SPACER_COLUMN = 8
+
+    def __init__(
+        self, title: str, parent: Optional[QWidget] = None, caption: bool = True
+    ):
         super().__init__(parent)
+        #: the group's name.  Read by the bar's tab strip, by the settings
+        #: key that remembers which tab was open, and by the tests -- which
+        #: used to recover it from the caption widget that `caption=False`
+        #: now removes.
+        self.title = title
         vbox = QVBoxLayout(self)
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(theme.S2)
-        vbox.addWidget(caption_label(title))
+        if caption:
+            vbox.addWidget(caption_label(title))
         self.body = QWidget(self)
         frame_widget(self.body)
         self.grid = QGridLayout(self.body)
         self.grid.setContentsMargins(theme.S8, theme.S4, theme.S8, theme.S4)
         self.grid.setHorizontalSpacing(theme.S6)
         self.grid.setVerticalSpacing(theme.S2)
-        # the fields, not their captions, take the width the column has:
-        self.grid.setColumnStretch(1, 1)
+        self.grid.setColumnStretch(ParameterGroup.SPACER_COLUMN, 1)
         vbox.addWidget(self.body)
         self.rows = 0
+        #: ``(row name, shortcut)`` for every row that prints one.  The bar
+        #: shows one group at a time now, so a reader looking for a key can
+        #: no longer read every group's off the screen at once; the tab's
+        #: tool tip carries its own group's, and the cheat sheet and the
+        #: command palette carry all of them.
+        self.shortcuts: list = []
+
+    @staticmethod
+    def expanding(widget: QWidget) -> QWidget:
+        """Mark one field as wanting the width the group has, and return it.
+
+        For the fields where width IS resolution -- the filter and envelope
+        cutoff sliders, the overlap slider, the chip strips -- and for
+        nothing else.  `add_row` reads the policy back and hands that column
+        the stretch instead of the spacer; see `SPACER_COLUMN`.
+        """
+        policy = widget.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Expanding)
+        widget.setSizePolicy(policy)
+        return widget
+
+    #: Horizontal policies that mean "give me the leftover".  `Ignored` is
+    #: in here on purpose: it does NOT carry Qt's ExpandFlag, but the two
+    #: labels that use it in this bar -- the annotation pointer readout and
+    #: the Labels file row -- elide themselves to whatever width they are
+    #: given and are useless at their size hint, which is zero.
+    WIDE_POLICIES = (
+        QSizePolicy.Expanding,
+        QSizePolicy.MinimumExpanding,
+        QSizePolicy.Ignored,
+    )
+
+    @staticmethod
+    def wants_width(widget: QWidget) -> bool:
+        return widget.sizePolicy().horizontalPolicy() in ParameterGroup.WIDE_POLICIES
+
+    def claim_stretch(self, column: int, widget: QWidget) -> None:
+        """Give `column` the leftover width if its widget asked for it.
+
+        The spacer keeps the leftover only while no field wants it.  Both
+        with stretch would split it, and a slider that gets half of what is
+        going is a slider whose resolution depends on how many combo boxes
+        happen to share its group.
+        """
+        if not self.wants_width(widget):
+            return
+        self.grid.setColumnStretch(column, 1)
+        self.grid.setColumnStretch(ParameterGroup.SPACER_COLUMN, 0)
 
     def add_row(self, label: str, shortcut: str, *widgets: QWidget) -> list:
         """Add a labelled row of widgets, and return everything it placed.
@@ -259,9 +332,12 @@ class ParameterGroup(QWidget):
         reads as a control that failed to load.
         """
         caption = caption_label(label, shortcut)
+        if shortcut:
+            self.shortcuts.append((label, shortcut))
         self.grid.addWidget(caption, self.rows, 0)
         for i, w in enumerate(widgets):
             self.grid.addWidget(w, self.rows, 1 + i)
+            self.claim_stretch(1 + i, w)
         self.rows += 1
         return [caption, *widgets]
 
@@ -270,11 +346,15 @@ class ParameterGroup(QWidget):
 
         For a field that is a strip of controls naming themselves, and whose
         caption would only repeat the group title.  What it buys is the
-        caption column: measured at a 1482x900 window, the LABELS group is
-        317 px and its field column 198, so spanning is 80 px more of strip
-        on every line of it.
+        caption column: measured on a 1200 px window, the chip strip gets
+        1167 px of the Labels page's 1183 rather than stopping at the field
+        column.
         """
         self.grid.addWidget(widget, self.rows, 0, 1, columns)
+        # unconditionally: a row spans because its widget wants the whole
+        # width, which is the only reason to give up the caption column
+        self.grid.setColumnStretch(columns - 1, 1)
+        self.grid.setColumnStretch(ParameterGroup.SPACER_COLUMN, 0)
         self.rows += 1
         return widget
 
@@ -319,6 +399,176 @@ class ParameterGroup(QWidget):
             # absorb the added height below the last row, not between rows:
             group.grid.setRowStretch(group.rows, 1)
             group.body.setFixedHeight(height)
+
+
+class ParameterTabs(QWidget):
+    """The parameter bar's groups, one on screen at a time behind a tab.
+
+    Why
+    ---
+
+    The groups used to sit side by side in equal grid columns, which made the
+    bar's minimum width the SUM of theirs.  Measured on a four channel
+    recording in a window asked to be 1200x900: 1445 px empty, and **2456 px
+    once a session bundle is loaded** and the annotations group grows its ten
+    layer chips -- at which point `window.resize(1200, 900)` returns a
+    2456 px window.  That is the second step of this fork's own workflow, and
+    it did not fit any laptop.  A `QStackedLayout` hints the MAX over its
+    pages rather than the sum, which is the whole of the fix.
+
+    Not a `QTabWidget`
+    ------------------
+
+    `theme`'s stylesheet styles `QTabBar` with unconditional *type* selectors
+    written for the file spine down the left edge of the window -- zero
+    padding, no right border, and a selected mark that is a rule down the
+    LEFT side.  A horizontal strip at the bottom of the window would inherit
+    all of it, and the only way out would be re-scoping the file tabs' own
+    styling.  Checkable `QToolButton`s in an exclusive `QButtonGroup` inherit
+    none of it and are the same idiom as the tool bar's region-mode segment,
+    which the reader already knows.
+
+    Height
+    ------
+
+    Two things keep a tab change from resizing every lane in the stack.
+    `QStackedLayout` reports the max over ALL pages, hidden ones included, so
+    the bar's height does not depend on which tab is current; and this widget
+    is `QSizePolicy.Fixed` vertically, because `QStackedLayout` inherits
+    `QLayout.expandingDirections()` -- which is both directions -- and
+    `QWidgetItem` hands that to its widget.  Measured without the policy: the
+    bar took 402 px against a 154 px size hint and the channel stack's scroll
+    viewport fell to 247 px over 616 px of content.
+    """
+
+    #: Emitted with the group title when the reader picks a tab.
+    sigTabChanged = Signal(str)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.groups: list[ParameterGroup] = []
+        self.buttons: dict[str, QToolButton] = {}
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(theme.S2)
+
+        self.strip = QWidget(self)
+        row = QHBoxLayout(self.strip)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(theme.S2)
+        row.addStretch(1)
+        self.strip.setFixedHeight(theme.CHIP_HEIGHT)
+        outer.addWidget(self.strip)
+
+        host = QWidget(self)
+        self.stack = QStackedLayout(host)
+        self.stack.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(host)
+        # see the class docstring: without this the stack's inherited
+        # expandingDirections() grows the bar into the channel stack
+        host.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+        self.group_buttons = QButtonGroup(self)
+        self.group_buttons.setExclusive(True)
+        self.stack.currentChanged.connect(self._changed)
+
+    def add(self, group: ParameterGroup) -> QToolButton:
+        """Give `group` a page and a tab, and return the tab button."""
+        button = QToolButton(self.strip)
+        button.setObjectName("paramTab")
+        button.setText(group.title.upper())
+        button.setCheckable(True)
+        button.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        button.setFixedHeight(theme.CHIP_HEIGHT)
+        # NoFocus, the way the channel rail's toggles are: a focused
+        # checkable QToolButton eats Space, which is play-window, and the
+        # arrow keys, which nudge the view -- and a tab is clicked often.
+        button.setFocusPolicy(Qt.NoFocus)
+        button.setToolTip(self.group_tip(group))
+        index = len(self.groups)
+        button.clicked.connect(lambda _c=False, i=index: self.show_index(i))
+        self.group_buttons.addButton(button, index)
+        # ahead of the trailing stretch, so the tabs stay left-aligned
+        layout = self.strip.layout()
+        layout.insertWidget(layout.count() - 1, button)
+        self.stack.addWidget(group)
+        self.groups.append(group)
+        self.buttons[group.title] = button
+        if index == 0:
+            button.setChecked(True)
+        return button
+
+    @staticmethod
+    def group_tip(group: ParameterGroup) -> str:
+        """What one tab says: its name, and the keys its rows print."""
+        lines = [f"{group.title} parameters"]
+        for name, shortcut in group.shortcuts:
+            lines.append(f"  {name}  {shortcut}")
+        return "\n".join(lines)
+
+    def _changed(self, index: int) -> None:
+        if 0 <= index < len(self.groups):
+            button = self.group_buttons.button(index)
+            if button is not None and not button.isChecked():
+                button.setChecked(True)
+            self.sigTabChanged.emit(self.groups[index].title)
+
+    def show_index(self, index: int) -> None:
+        if 0 <= index < len(self.groups):
+            self.stack.setCurrentIndex(index)
+
+    def show_group(self, title: str) -> bool:
+        """Raise the tab called `title`.  False when there is no such tab."""
+        for index, group in enumerate(self.groups):
+            if group.title == title:
+                self.stack.setCurrentIndex(index)
+                return True
+        return False
+
+    def current_title(self) -> str:
+        index = self.stack.currentIndex()
+        if 0 <= index < len(self.groups):
+            return self.groups[index].title
+        return ""
+
+    def set_alert(self, title: str, on: bool, tip: str = "") -> None:
+        """Mark a tab whose page is saying something that must not be missed.
+
+        The Labels page can read READ-ONLY or SAVE FAILED, and the
+        annotations badge can say the bundle names another recording;  behind
+        an unraised tab those are the two states where a hidden page costs
+        data rather than convenience.
+
+        The mark is a "!" appended to the tab's name, and the reason it is a
+        glyph rather than a colour is the reason the spectrogram's colour map
+        is CET-CBL2: a reader who cannot separate the hues would be told
+        nothing.  It is not tinted at all -- a per-widget ``color:`` would
+        also have to fight the checked state's own colour, for a cue that
+        would then be the weaker half of this one.
+
+        The button is left at the width it was given when the bar was built,
+        so a state arriving never reflows the strip and slides a tab out
+        from under the pointer.
+        """
+        button = self.buttons.get(title)
+        if button is None:
+            return
+        on = bool(on)
+        if button.property("alert") == on and button.property("alertTip") == tip:
+            return
+        button.setProperty("alert", on)
+        button.setProperty("alertTip", tip)
+        button.setText(f"{title.upper()} !" if on else title.upper())
+        base = self.group_tip(self.groups[list(self.buttons).index(title)])
+        button.setToolTip(f"{tip}\n\n{base}" if on and tip else base)
+
+    def polish(self) -> None:
+        """Re-apply the theme's metrics to the strip after a live switch."""
+        for button in self.buttons.values():
+            button.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+            button.setFixedHeight(theme.CHIP_HEIGHT)
+        self.strip.setFixedHeight(theme.CHIP_HEIGHT)
 
 
 class LogSlider(QSlider):
@@ -758,6 +1008,16 @@ class DataBrowser(QWidget):
     #: Bumped when the shape of that value changes.
     LABEL_SETTING_VERSION = 1
 
+    #: Key the parameter bar's open tab is saved under, by group NAME.  Not
+    #: by index: the Filter and Envelope groups only exist when the data has
+    #: those traces, so the same index is a different tab on a different
+    #: recording.  Not per recording either -- a reader walking the file
+    #: spine of one session is doing one job, and a tab that flipped as they
+    #: stepped would be a control moving under them.
+    PARAM_TAB_SETTING = "parameter-tab"
+    #: Bumped when the shape of that value changes.
+    PARAM_TAB_SETTING_VERSION = 1
+
     #: Key the trace / spectrogram split is saved under.  One key holding one
     #: number per F3 preset, for the same reason as above.
     #:
@@ -1075,6 +1335,11 @@ class DataBrowser(QWidget):
         #: the parameter bar's groups, kept so the bar can be re-equalised
         #: when the annotation chips change the height of their group
         self.param_groups = []
+        #: the tab strip over those groups; None until `setup_parameter_bar`
+        self.param_tabs = None
+        #: the tab name last written to the settings file, so a restore and
+        #: a rebuild do not rewrite it
+        self._param_tab_saved = ""
         self.annotation_showw = None
         self.annotation_surfacew = {}
         self.annotation_hoverw = None
@@ -1475,8 +1740,6 @@ class DataBrowser(QWidget):
         # bumps the revision has something to repaint
         self.attach_label_overlays()
         self.load_labels()
-        if self.label_group is not None:
-            self.label_group.setVisible(True)
         self.update_label_status()
         # the joins are the loader's own knowledge and need no bundle, so
         # they are drawn as soon as there are plots to draw them on
@@ -1698,12 +1961,20 @@ class DataBrowser(QWidget):
         return None
 
     def setup_parameter_bar(self) -> None:
-        """Build the bottom bar of labelled parameter groups.
+        """Build the bottom bar: one tab per group, one group on screen.
 
         Replaces the row of single-letter labels ('N:', 'O:', ' L:') by
-        three boxed groups with captions that carry their own keyboard
-        shortcut, so that shortcuts are visible instead of hidden in
-        tool tips.
+        boxed groups of named rows, each row carrying its own keyboard
+        shortcut so that shortcuts are visible instead of hidden in tool
+        tips.  Behind tabs the reader sees one group's shortcuts at a time;
+        every group's are in its tab's tool tip, and all of them are in the
+        cheat sheet and the command palette.
+
+        The groups are stacked rather than laid side by side because side by
+        side made the bar's minimum width the SUM of theirs -- 1445 px on a
+        four channel recording, and 2456 px once a session bundle loaded ten
+        layer chips into the annotations group, which is more than a laptop
+        panel has.  See `ParameterTabs`.
         """
         self.parambar = QWidget(self)
         # A chrome band, not canvas: it gets the chrome ground and a rule
@@ -1711,10 +1982,17 @@ class DataBrowser(QWidget):
         # the data above them is stated rather than implied by a gap.
         self.parambar.setObjectName("audianParamBar")
         theme.band(self.parambar, top=True)
+        # Fixed, explicitly, all the way down.  `ParameterTabs` pins its own
+        # stack host for the reason its docstring gives; pinning the band
+        # around it as well means a future row added to this bar cannot make
+        # the whole thing elastic without somebody noticing.
+        self.parambar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         grid = QGridLayout(self.parambar)
         grid.setContentsMargins(theme.S8, theme.S8, theme.S8, theme.S6)
         grid.setHorizontalSpacing(theme.S16)
         grid.setVerticalSpacing(0)
+        self.param_tabs = ParameterTabs(self.parambar)
+        self.param_tabs.sigTabChanged.connect(self.parameter_tab_changed)
         groups = []
 
         nyquist = self.data.rate / 2
@@ -1722,7 +2000,7 @@ class DataBrowser(QWidget):
         # filter:
         if "filtered" in self.data:
             filtered = self.data["filtered"]
-            group = ParameterGroup("Filter", self.parambar)
+            group = ParameterGroup("Filter", self.parambar, caption=False)
             min_step = 10 ** floor(log10(0.01 * nyquist))
             self.hpfw = pg.SpinBox(
                 self,
@@ -1744,7 +2022,12 @@ class DataBrowser(QWidget):
             self.hpsliderw.valueChanged.connect(
                 lambda v: self.update_filter(highpass_cutoff=self.hpsliderw.value_hz())
             )
-            group.add_row("High-pass", "H / ⇧H", self.hpsliderw, self.hpfw)
+            group.add_row(
+                "High-pass",
+                "H / ⇧H",
+                ParameterGroup.expanding(self.hpsliderw),
+                self.hpfw,
+            )
 
             self.lpfw = pg.SpinBox(
                 self,
@@ -1766,7 +2049,12 @@ class DataBrowser(QWidget):
             self.lpsliderw.valueChanged.connect(
                 lambda v: self.update_filter(lowpass_cutoff=self.lpsliderw.value_hz())
             )
-            group.add_row("Low-pass", "L / ⇧L", self.lpsliderw, self.lpfw)
+            group.add_row(
+                "Low-pass",
+                "L / ⇧L",
+                ParameterGroup.expanding(self.lpsliderw),
+                self.lpfw,
+            )
 
             self.linkbandw = QToolButton(self.parambar)
             self.linkbandw.setText("Linked band")
@@ -1793,7 +2081,7 @@ class DataBrowser(QWidget):
         # spectrogram:
         if "spectrogram" in self.data:
             spectrogram = self.data["spectrogram"]
-            group = ParameterGroup("Spectrogram", self.parambar)
+            group = ParameterGroup("Spectrogram", self.parambar, caption=False)
             self.nfftw = QComboBox(self)
             self.nfftw.tooltip = "Number of samples of a Fourier window"
             self.nfftw.setToolTip(self.nfftw.tooltip)
@@ -1820,7 +2108,12 @@ class DataBrowser(QWidget):
             )
             self.ofraclabelw = QLabel()
             self.ofraclabelw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-            group.add_row("Overlap", "O / ⇧O", self.ofracw, self.ofraclabelw)
+            group.add_row(
+                "Overlap",
+                "O / ⇧O",
+                ParameterGroup.expanding(self.ofracw),
+                self.ofraclabelw,
+            )
 
             self.cmapw = ColorMapCombo(self.parambar)
             self.cmapw.setCurrentIndex(self.color_map)
@@ -1836,7 +2129,7 @@ class DataBrowser(QWidget):
         # envelope:
         if "envelope" in self.data:
             envelope = self.data["envelope"]
-            group = ParameterGroup("Envelope", self.parambar)
+            group = ParameterGroup("Envelope", self.parambar, caption=False)
             self.envfw = pg.SpinBox(
                 self,
                 envelope.envelope_cutoff,
@@ -1859,7 +2152,12 @@ class DataBrowser(QWidget):
                     envelope_cutoff=self.envsliderw.value_hz()
                 )
             )
-            group.add_row("Cutoff", "E / ⇧E", self.envsliderw, self.envfw)
+            group.add_row(
+                "Cutoff",
+                "E / ⇧E",
+                ParameterGroup.expanding(self.envsliderw),
+                self.envfw,
+            )
             groups.append(group)
         else:
             self.envfw = None
@@ -1870,7 +2168,7 @@ class DataBrowser(QWidget):
             self.acts.envelope_down.setEnabled(False)
 
         # audio playback:
-        group = ParameterGroup("Audio", self.parambar)
+        group = ParameterGroup("Audio", self.parambar, caption=False)
         self.audiosrcw = QComboBox(self.parambar)
         self.audiosrcw.setToolTip(
             "What playback sends to the speakers: the current channel on its "
@@ -1965,16 +2263,19 @@ class DataBrowser(QWidget):
         groups.append(self.setup_annotation_group())
         groups.append(self.setup_label_group())
 
-        # One band, not three boxes: equal columns on a fixed gutter, every
-        # caption on one baseline and every frame the same height, so the
-        # right edges line up instead of landing wherever the widest field
-        # in each group happened to put them.
-        for column, group in enumerate(groups):
+        # One band, one group at a time.  `equalize` is still what packs a
+        # short group's rows at the top of a frame the stack stretches to the
+        # full height -- but it is no longer what keeps the bar's height
+        # constant across a tab change.  QStackedLayout is: it reports the
+        # max over ALL its pages, hidden ones included.
+        for group in groups:
             group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-            grid.addWidget(group, 0, column, Qt.AlignTop)
-            grid.setColumnStretch(column, 1)
+            self.param_tabs.add(group)
+        grid.addWidget(self.param_tabs, 0, 0)
+        grid.setColumnStretch(0, 1)
         self.param_groups = groups
         ParameterGroup.equalize(groups)
+        self.restore_parameter_tab()
         if "spectrogram" in self.data:
             self.set_resolution(dispatch=False)
 
@@ -2065,6 +2366,8 @@ class DataBrowser(QWidget):
         # `theme.marker_color` and the chip swatches are baked pixmaps
         for overlay in self.label_overlays:
             overlay.polish()
+        if self.param_tabs is not None:
+            self.param_tabs.polish()
         self.build_category_chips()
         self.update_label_status()
         # style_plotitem() has just reset every view box to bg.plot:
@@ -3305,26 +3608,27 @@ class DataBrowser(QWidget):
     def setup_label_group(self) -> "ParameterGroup":
         """Build the Labels group of the parameter bar.
 
-        Three rows, against the annotation group's five, so the new column
-        costs the lanes no height at all: `ParameterGroup.equalize` gives
-        every group the tallest one's frame, and that is still the
-        annotations.  A row of this bar is about 24 px off every lane in a
-        sixteen channel stack, which is why the row count is a design
-        constraint rather than an afterthought.
+        Three rows, against the annotation group's five.  The bar is as
+        tall as its tallest page whichever page is showing, so this group
+        costs the lanes no height at all; a row of this bar is about 24 px
+        off every lane in a sixteen channel stack, which is why the row
+        count is still a design constraint rather than an afterthought.
 
-        Width is the harder half, and it is why the chips live in a
-        `CategoryStrip` rather than a `QHBoxLayout`.  Measured on a four
-        channel recording, the window asked to be 1200x900: the bar alone
-        already forces it to 1372 px, and a plain layout of two chips plus
-        an Edit button took that to 1572.  The bar does not wrap or scroll,
-        so a row that asks for more than its column has widens the whole
-        application -- see `CategoryStrip`.
+        Width is no longer the hard half.  It was, when the groups sat
+        side by side and this one had a fifth of the bar: a plain
+        `QHBoxLayout` of two chips and a button took the window's minimum
+        from 1372 px to 1572.  Behind tabs the page gets the whole bar --
+        measured 1183 px on a 1200 px window -- and twelve categories fit
+        over the strip's two lines with nothing folded.  `CategoryStrip`
+        stays because the number of categories is still the reader's to
+        choose and a strip that could outgrow any width is still the one row
+        of this bar that could.
 
         Always built, hidden until a file is open, for the same reason the
         annotation group is: a control that appears and disappears is one
         nobody learns to look at.
         """
-        group = ParameterGroup("Labels", self.parambar)
+        group = ParameterGroup("Labels", self.parambar, caption=False)
 
         # Captionless and spanning: the chips name themselves and carry
         # their own keys, so "CATEGORY 1-9" beside them would be the group
@@ -3381,7 +3685,10 @@ class DataBrowser(QWidget):
         group.add_row("File", "", self.label_statusw)
 
         self.label_group = group
-        group.setVisible(False)
+        # No setVisible here: the stack owns which page is on screen.  The
+        # Labels tab is available from the moment the bar exists -- the
+        # vocabulary is a preference and does not need a file -- and the
+        # group's own file row states the empty case.
         return group
 
     def build_category_chips(self) -> None:
@@ -3458,6 +3765,7 @@ class DataBrowser(QWidget):
         label.setText(metrics.elidedText(text, Qt.ElideRight, max(label.width(), 1)))
         if self.label_undow is not None:
             self.label_undow.setEnabled(bool(self.labels.labels))
+        self.update_label_alert()
 
     # --- annotations -----------------------------------------------------
 
@@ -4347,7 +4655,7 @@ class DataBrowser(QWidget):
         disappears is one nobody learns to look at.  It is hidden while no
         table is loaded and shown the moment one is.
         """
-        group = ParameterGroup("Annotations", self.parambar)
+        group = ParameterGroup("Annotations", self.parambar, caption=False)
 
         self.annotation_sourcew = QLabel("—", self.parambar)
         self.annotation_sourcew.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
@@ -4363,9 +4671,21 @@ class DataBrowser(QWidget):
         )
         loadw.setFixedHeight(theme.CHIP_HEIGHT)
         loadw.clicked.connect(self.open_annotations)
-        group.add_row(
-            "Source", "", self.annotation_sourcew, self.annotation_badgew, loadw
-        )
+        # One cell, not three.  The pointer readout further down this group
+        # asks for the leftover width, which puts the stretch on column 1 --
+        # so a badge in column 2 and a button in column 3 ended up against
+        # the far edge of a page that is now the whole bar rather than a
+        # fifth of it.  Packed into one container with a trailing stretch
+        # they stay beside the name they belong to at any width.
+        sourcebox = QWidget(self.parambar)
+        sourcerow = QHBoxLayout(sourcebox)
+        sourcerow.setContentsMargins(0, 0, 0, 0)
+        sourcerow.setSpacing(theme.S6)
+        sourcerow.addWidget(self.annotation_sourcew)
+        sourcerow.addWidget(self.annotation_badgew)
+        sourcerow.addWidget(loadw)
+        sourcerow.addStretch(1)
+        group.add_row("Source", "", sourcebox)
 
         # Where the marks are drawn: the master switch and one chip per
         # surface.  Separate from the layer chips below on purpose -- "which
@@ -4402,6 +4722,9 @@ class DataBrowser(QWidget):
             )
             where.addWidget(chip)
             self.annotation_surfacew[surface] = chip
+        # left packed: without this the HBox shares the leftover between the
+        # chips, and on a full-width page they drift apart across the window
+        where.addStretch(1)
 
         group.add_row("Show", "F8", wherebox)
 
@@ -4410,16 +4733,13 @@ class DataBrowser(QWidget):
         # It rode at the end of the Show row to save a row of the parameter
         # bar, which is 24 px off every lane in the stack -- a real cost, and
         # the right trade while the readout was one clause.  It is not one
-        # clause any more.  Since the trial summary landed the line runs to
-        # ~227 characters, and measured in the running app the leftover of the
-        # Show row is a flat 271 px from a 1280 px window all the way to 3200:
-        # 34 characters, elided before the counts begin.  The counts only
-        # became visible at a 6000 px window, which is not a window anybody
-        # has.  A readout nobody can read is worth less than the 24 px it was
-        # saving, and the counts are the whole reason the readout was asked
-        # for -- they answer "how many unexplained detections fell inside THIS
-        # trial", which is the question the second stage of the field workflow
-        # is made of.
+        # clause any more: since the trial summary landed the line runs to
+        # ~227 characters, and on the Show row it was elided long before the
+        # counts began.  The counts are the whole reason the readout was
+        # asked for -- they answer "how many unexplained detections fell
+        # inside THIS trial", the question the second stage of the field
+        # workflow is made of.  On its own row it now gets 1097 px of a
+        # 1200 px window, measured, which is most of the line.
         self.annotation_hoverw = QLabel("", self.parambar)
         self.annotation_hoverw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         self.annotation_hoverw.setWordWrap(False)
@@ -4457,7 +4777,12 @@ class DataBrowser(QWidget):
             self.annotation_rowboxes.append(box)
 
         self.annotation_group = group
-        group.setVisible(False)
+        # No setVisible, and no disabled tab either.  An unloaded
+        # Annotations page is not blank: it holds the source line, the Show
+        # chips and the Load... button, which is the only route into the
+        # feature for a reader who does not know Ctrl+Shift+A.  Disabling
+        # the tab would hide the one control that fixes the state it is
+        # complaining about.
         return group
 
     def build_annotation_chips(self) -> None:
@@ -4483,8 +4808,7 @@ class DataBrowser(QWidget):
         self.annotation_chips = []
         self.annotation_layer_chips = {}
         if not self.annotations.loaded:
-            if self.annotation_group is not None:
-                self.annotation_group.setVisible(False)
+            self.update_annotation_alert()
             return
 
         unvalidated = self.annotations.unvalidated
@@ -4516,8 +4840,13 @@ class DataBrowser(QWidget):
             layout = box.layout()
             layout.insertWidget(layout.count() - 1, chip)
 
-        if self.annotation_group is not None:
-            self.annotation_group.setVisible(True)
+        # A bundle just loaded is the one gesture where raising the tab is
+        # right: the reader asked for that data, and the source line, the
+        # badge and the layer chips they asked for are all on this page.
+        # Not on `open()`, which runs for every file and would override the
+        # tab the reader chose.
+        self.raise_parameter_tab("Annotations")
+        self.update_annotation_alert()
         # The group grew or shrank by a row of chips, and equalize() froze
         # every frame height when the bar was built.  Deferred by one turn
         # of the event loop rather than run here: widgets added a moment ago
@@ -4525,6 +4854,137 @@ class DataBrowser(QWidget):
         # layout invalidation, and measuring before that leaves the group a
         # row-spacing short and clips the last row of chips.
         QTimer.singleShot(0, self.equalize_parameter_bar)
+
+    # --- the parameter bar's tabs ----------------------------------------
+
+    def parameter_tab_settings(self) -> dict:
+        """The saved tab choice, or {} when it is from another build."""
+        from .audian import settings
+
+        saved = settings().get(DataBrowser.PARAM_TAB_SETTING)
+        if not isinstance(saved, dict):
+            return {}
+        if saved.get("version") != DataBrowser.PARAM_TAB_SETTING_VERSION:
+            log.warning(
+                "ignoring %s settings written in version %r; this audian "
+                "writes version %d",
+                DataBrowser.PARAM_TAB_SETTING,
+                saved.get("version"),
+                DataBrowser.PARAM_TAB_SETTING_VERSION,
+            )
+            return {}
+        return saved
+
+    def restore_parameter_tab(self) -> None:
+        """Open the bar on the tab this reader last chose.
+
+        By NAME and not by index: the Envelope group only exists when the
+        data has an envelope, and the Filter group only when it has a
+        filtered trace, so the same index is a different tab on a different
+        recording.  An unknown name falls back to the first tab rather than
+        to nothing.
+        """
+        if self.param_tabs is None:
+            return
+        wanted = self.parameter_tab_settings().get("tab")
+        if isinstance(wanted, str) and self.param_tabs.show_group(wanted):
+            return
+        self.param_tabs.show_index(0)
+
+    def parameter_tab_changed(self, title: str) -> None:
+        """Everything that has to happen when a different group is raised.
+
+        A `QStackedLayout` gives geometry to the current page only, so a
+        page that has never been raised has a stale width -- and three
+        things in this bar size themselves off their own `width()`: the
+        Labels file row and the annotation pointer readout elide to it, and
+        the category chip strip folds to it.  Measured on a page that had
+        never been current: 100 px against the 1162 it gets once raised, so
+        without this the file row is elided to a sliver and every category
+        folds into the `+N` menu.
+
+        `apply_resize` already makes the same calls after a window resize,
+        for the same reason.
+        """
+        self.save_parameter_tab(title)
+        self.update_label_status()
+        if self.label_chipbox is not None:
+            self.label_chipbox.relayout()
+        self.reelide_annotation_hover()
+
+    def save_parameter_tab(self, title: str) -> None:
+        """Remember the tab, unless nothing has actually changed.
+
+        Written on a reader's pick, never on restore and never at build:
+        `save_setting` reads, updates and rewrites the whole settings file,
+        and a browser that wrote its own default at construction would
+        overwrite the choice made in the window beside it.
+        """
+        if not title or title == self._param_tab_saved:
+            return
+        self._param_tab_saved = title
+        from .audian import save_setting
+
+        save_setting(
+            DataBrowser.PARAM_TAB_SETTING,
+            {
+                "version": DataBrowser.PARAM_TAB_SETTING_VERSION,
+                "tab": title,
+            },
+        )
+
+    def raise_parameter_tab(self, title: str) -> None:
+        """Bring one group to the front, if the bar has been built."""
+        if self.param_tabs is not None:
+            self.param_tabs.show_group(title)
+
+    def reelide_annotation_hover(self) -> None:
+        """Re-elide the pointer readout to the width it has now.
+
+        Off its own tool tip, which is where `show_annotation_under` keeps
+        the full line.  The readout is rewritten on every mouse move, so it
+        heals itself the moment the pointer moves -- this is only for the
+        text already on screen when the tab is raised.
+        """
+        label = self.annotation_hoverw
+        if label is None:
+            return
+        metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
+        label.setText(
+            metrics.elidedText(label.toolTip(), Qt.ElideRight, max(label.width(), 1))
+        )
+
+    def update_label_alert(self) -> None:
+        """Mark the Labels tab when its file row is saying something bad.
+
+        READ-ONLY and SAVE FAILED are the two states in this bar where a
+        page nobody is looking at costs the reader their work rather than a
+        glance, so they get a mark on the tab as well as the row.
+        """
+        if self.param_tabs is None:
+            return
+        bad = bool(self.labels.blocked or self.label_error)
+        self.param_tabs.set_alert(
+            "Labels", bad, self.label_status_text() if bad else ""
+        )
+
+    def update_annotation_alert(self) -> None:
+        """Mark the Annotations tab when the badge is not plain agreement.
+
+        A bundle fitted to another recording draws nothing at all, so the
+        badge is the only place on screen that says so.
+        """
+        if self.param_tabs is None:
+            return
+        bad, tip = False, ""
+        if self.annotations.loaded:
+            # (text, token, tooltip); the token is the colour the badge is
+            # painted in, and it is `danger` for WRONG RECORDING and for an
+            # UNVALIDATED fit, `accent` for a fit with warnings recorded
+            # against it, and `success` when it is simply validated.
+            _text, token, tip = self.annotations.badge()
+            bad = token in ("danger", "accent")
+        self.param_tabs.set_alert("Annotations", bad, tip if bad else "")
 
     def equalize_parameter_bar(self) -> None:
         """Re-level the parameter bar's frames after a group changed size."""
@@ -4535,10 +4995,13 @@ class DataBrowser(QWidget):
         """What one layer chip says when the pointer rests on it.
 
         The count lives here rather than on the chip.  Ten chips carrying
-        their counts measure 1514 px against the 678 px the group has, and
-        the count is the one part of a chip that can be moved without losing
-        the legend -- a layer with no rows still reads `0 in session`, which
-        is the difference between a layer that is empty and one that is off.
+        their counts measured 1514 px against the 678 px a group had when
+        every group was on screen at once.  The page is the whole bar now
+        (1183 px measured), so it is closer than it was -- and the count
+        stays in the tip because it is the one part of a chip that can move
+        without losing the legend: a layer with no rows still reads
+        `0 in session`, which is the difference between a layer that is
+        empty and one that is off.
         """
         count = f"{state.count} in session"
         drawn = (
@@ -6507,6 +6970,13 @@ class DataBrowser(QWidget):
         movable = mode != DataBrowser.MODE_LABEL
         for ax in self.spectrogram_plots():
             ax.set_handles_movable(movable)
+        if mode == DataBrowser.MODE_LABEL:
+            # The other gesture worth raising a tab for.  Pressing b, or
+            # clicking Label on the tool bar, is an unambiguous "I am about
+            # to write labels", and which category the next drag writes is
+            # on that page.  Not raised again on the way out: leaving the
+            # mode says nothing about what the reader wants to look at.
+            self.raise_parameter_tab("Labels")
 
     def region_menu_at(self, channel, vbox, rect, scene_pos):
         """Act on a selected region, popping up the menu at the drag.
@@ -6663,12 +7133,21 @@ class DataBrowser(QWidget):
 
         Hiding only the field left the word "Pair" floating beside nothing,
         which reads as a control that failed to load.
+
+        Re-levels the bar afterwards, which it never used to.  `equalize`
+        freezes every frame at the tallest group's height and
+        `totalSizeHint` EXCLUDES a hidden widget, so a row revealed later is
+        a row the frozen frame was not measured for -- it fitted only
+        because the Audio group happened to have slack under the taller
+        Annotations group, which is a coincidence of which group is tallest
+        and not something to rely on.
         """
         if self.audiopairw is None:
             return
         self.audiopairw.setVisible(visible)
         for widget in getattr(self, "audiopairrow", None) or []:
             widget.setVisible(visible)
+        QTimer.singleShot(0, self.equalize_parameter_bar)
 
     def set_audio_pair(self, left=None, right=None, dispatch: bool = True) -> None:
         """Choose the channel in each ear for `AUDIO_PAIR` playback."""

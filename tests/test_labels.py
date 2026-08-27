@@ -562,6 +562,12 @@ def test_a_point_category_places_a_point_at_the_cross_hair(labelling):
     browser.set_cross_hair(True)
     ax = panel(browser, "spectrogram").axs[0]
     rect = ax.sceneBoundingRect()
+    # Drained first.  Every lane's scene feeds `mouse_moved` through a
+    # `pg.SignalProxy` at 60 Hz, so a move made by an earlier test in another
+    # lane is still in flight; delivered after the call below it would leave
+    # `hover_channel` pointing at that lane, and the point would be placed on
+    # the wrong electrode.
+    pump(0.3)
     browser.mouse_moved((QPointF(rect.center().x(), rect.center().y()),), 0)
     settle()
     browser.category_key("pulse")
@@ -604,13 +610,13 @@ def test_the_digit_keys_are_bound_to_the_first_nine_categories(labelling):
 def test_undo_removes_the_last_label_and_rewrites_the_file(labelling):
     browser = labelling
     ax = panel(browser, "spectrogram").axs[0]
-    drag(browser, 0, ax, 0.8, 1000.0, 2.4, 2600.0)
-    # not down at 100 Hz: within 3.5 px of the bottom of the lane the press
-    # belongs to the trace/spectrogram grab band, which reaches equally into
-    # both panels.  Measured, a drag from 100 Hz in a 120 px lane moved the
-    # panel split instead and made no label -- the splitter's claim on the
-    # boundary is older than this feature's.
-    drag(browser, 0, ax, 3.0, 600.0, 3.5, 1400.0)
+    # Both drags well inside the lane.  Not near the bottom, where within
+    # 3.5 px of the boundary the press belongs to the trace/spectrogram grab
+    # band; and not near the right edge either, because the lane's width
+    # drifts as the y gutter is reclaimed and given back, and a drag mapped
+    # to the far end of a lane that has just widened lands outside it.
+    drag(browser, 0, ax, 0.5, 800.0, 1.2, 1800.0)
+    drag(browser, 0, ax, 2.0, 900.0, 2.6, 2100.0)
     browser.save_labels()
     path = browser.labels_path()
     assert len(read_rows(path)) == 3  # header plus two
@@ -673,10 +679,10 @@ def test_the_labels_group_costs_the_lanes_no_height(browser):
     bar is about 24 px off every lane of a sixteen channel stack, which is
     why this is asserted rather than assumed.
     """
-    titles = [g.layout().itemAt(0).widget().text() for g in browser.param_groups]
-    assert "LABELS" in titles
-    labels_group = browser.param_groups[titles.index("LABELS")]
-    annotations = browser.param_groups[titles.index("ANNOTATIONS")]
+    titles = [g.title for g in browser.param_groups]
+    assert "Labels" in titles
+    labels_group = browser.param_groups[titles.index("Labels")]
+    annotations = browser.param_groups[titles.index("Annotations")]
     assert labels_group.rows <= annotations.rows
     heights = {g.body.height() for g in browser.param_groups}
     assert len(heights) == 1
@@ -709,14 +715,39 @@ def test_no_category_is_lost_to_the_fold(browser):
     )
     browser.sync_category_state()
     settle()
+    # Raised first, and through the real click: a QStackedLayout gives
+    # geometry to the current page only, so an unraised strip has never had a
+    # width to fold against.
+    browser.param_tabs.buttons["Labels"].click()
+    settle()
     strip = browser.label_chipbox
-    shown = [n for n in names if strip.chips[n].isVisible()]
-    folded = [c.name for c in strip.folded]
+
+    def state():
+        # isHidden, not isVisible: every widget on a page the stack is not
+        # showing reports isVisible False, so isVisible() here would be a
+        # test that passes for a reason unrelated to what it claims.
+        shown = [n for n in names if not strip.chips[n].isHidden()]
+        return shown, [c.name for c in strip.folded]
+
+    # Wide: the page now gets the whole bar rather than a fifth of it, so
+    # twelve categories fit over the strip's two lines and nothing folds.
+    shown, folded = state()
+    assert shown + folded == names
+    assert folded == []
+    assert not strip.more.isVisible()
+
+    # Narrow: the invariant that matters.  Every category is either on the
+    # strip or in the +N menu, in order, and the shown set stays a PREFIX so
+    # what the reader sees is in step with the digit keys under it.
+    strip.resize(240, strip.height())
+    settle()
+    shown, folded = state()
     assert shown + folded == names
     assert folded
     assert strip.more.isVisible()
     assert strip.more.text() == f"+{len(folded)}"
     assert [a.text().split()[0] for a in strip.menu.actions()] == folded
+
     browser.labels.set_categories(DEFAULT_CATEGORIES)
     browser.sync_category_state()
     settle()

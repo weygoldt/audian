@@ -124,6 +124,11 @@ class PanelBrowser(DataBrowser):
         self.data = None
         self.control_panel = None
         self.param_groups = []
+        # No tab strip: this fake builds one group by hand and never runs
+        # `setup_parameter_bar`, which is the same state a real browser is in
+        # before a file is open.  The bar's code guards on None.
+        self.param_tabs = None
+        self._param_tab_saved = ""
         self.parambar = QWidget(self)
         self.param_groups = [self.setup_annotation_group()]
 

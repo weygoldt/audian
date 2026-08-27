@@ -22,10 +22,39 @@ producing work, and only then lets the run end.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+import pyqtgraph as pg  # noqa: E402
+
+# --- synthetic drags -------------------------------------------------------
+#
+# pyqtgraph DROPS mouse move events that arrive too soon after the last one.
+# `GraphicsScene._moveEventIsAllowed` compares the clock against
+# `1000 / mouseRateLimit` ms -- 10 ms at its default of 100 -- and a move that
+# loses that race is delivered to `QGraphicsScene` and to nothing else, so the
+# scene never adds the button to `dragButtons` and no drag is ever begun.
+#
+# A test that posts a whole drag inside one turn of the event loop is well
+# inside 10 ms, so whether the drag happens at all comes down to how much
+# other work landed between the events.  It reproduced exactly that way: the
+# same two drags passed under `-s` and failed under pytest's output capture,
+# with the lane geometry identical to the pixel in both runs and
+# `dragButtons` simply staying empty.  Earlier notes on this codebase read
+# that as "a second drag in the same scene is swallowed", which is the
+# symptom rather than the cause -- the first drag is just as fragile, and a
+# slow enough machine loses it too.
+#
+# Zero disables the limit outright, which is what a test wants: every event
+# it sends is delivered, and the result stops depending on the clock.  It is
+# a process-wide pyqtgraph option and nothing in `src/audian` reads it.
+pg.setConfigOption("mouseRateLimit", 0)
 
 
 @pytest.fixture(scope="session", autouse=True)

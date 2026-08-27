@@ -245,6 +245,26 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         path.lineTo(m + e * 0.7, m + e * 0.4)
         painter.drawPath(path)
         painter.drawLine(int(m), int(m + e), int(m + e), int(m + e))
+    elif kind == "more":
+        # Three dots, the universal "there is more behind this".  Filled, so
+        # it reads at 16 px where an outline would be three rings.
+        for u in (0.15, 0.5, 0.85):
+            painter.setBrush(theme.brush(color, alpha))
+            painter.setPen(Qt.NoPen)
+            r = e * 0.09
+            painter.drawEllipse(QPointF(m + e * u, size / 2), r, r)
+    elif kind == "play-region":
+        # The transport's triangle between the two end stops the "home" glyph
+        # already uses for "a bounded stretch of time".  `play_region` shared
+        # the plain "play" pixmap with `play_window`, which the words told
+        # apart; without the words they were the same mark twice.
+        painter.drawLine(int(m), int(m + e * 0.1), int(m), int(m + e * 0.9))
+        painter.drawLine(int(m + e), int(m + e * 0.1), int(m + e), int(m + e * 0.9))
+        path.moveTo(m + e * 0.28, m + e * 0.18)
+        path.lineTo(m + e * 0.82, m + e * 0.5)
+        path.lineTo(m + e * 0.28, m + e * 0.82)
+        path.closeSubpath()
+        painter.fillPath(path, theme.brush(color, alpha))
     elif kind == "label":
         # A box with a corner tag: the mark this mode makes, plus the thing
         # that tells it apart from the zoom rectangle beside it on the bar.
@@ -580,6 +600,158 @@ class RecentFiles:
         self.entries.insert(0, entry)
         del self.entries[self.max_entries :]
         self.save()
+
+
+class ToolStrip(QWidget):
+    """The tool bar, able to narrow without the window having to.
+
+    Why
+    ---
+
+    Every button on this bar is `QSizePolicy.Minimum`, so the bar's minimum
+    width is the plain SUM of them: 1372 px measured on a four channel
+    recording, and 1458 once the amplitude and channel buttons are showing
+    their longest text.  That is a floor the window cannot go under, and on a
+    14 inch laptop at 150% display scaling the whole screen is 1280 logical
+    pixels -- so audian could not be made to fit at all.
+
+    What it gives up, and in what order
+    -----------------------------------
+
+    Words before controls.  339 px of that 1372 is text wrapped around glyphs
+    that are already there, so the first thing to go is the wording on the
+    six region-mode buttons and on Fit Y; every control stays on the bar and
+    stays one click away, and the tool tips -- written for exactly this --
+    carry the name and the shortcut.
+
+    Then the 12 px breathing space either side of the three group rules.
+
+    Only then do controls leave, a whole group at a time, into the overflow
+    menu at the end of the bar, and **right to left** so that every button
+    still on the bar keeps its x and the reader's aim stays good.  A folded
+    control is not gone: it is in a menu that renders the same `QAction`, so
+    it keeps its name, its glyph, its checked state, and -- better than the
+    bar ever managed -- its shortcut.  The transport never folds, and neither
+    does the channel button: the hidden-channel count is the only place in
+    the interface that says the other channels are there.
+
+    The floor it publishes
+    ----------------------
+
+    `minimumSizeHint` returns the width of the LAST stage, always, whatever
+    stage is showing.  A hint that tracked the current stage would raise the
+    window's own minimum as the bar relaxed, and Qt would push the window
+    back out again the moment it had room.  A constant means the floor is one
+    number that never moves, and because that number is the real content
+    width of the tightest stage, Qt is never asked to squeeze a button below
+    its own minimum -- which is what `QSizePolicy.Ignored` here would have
+    done instead: measured, it let Analyze shrink from a 98 px hint to 30 px
+    and clipped the glyphs inside the icon-only buttons.
+
+    Still a plain QWidget with a QHBoxLayout, for the reason
+    `Audian.setup_toolbar` gives: `QToolBar` recomputes its layout from the
+    style on every stylesheet re-apply.  That is also why the overflow
+    button is built with the bar rather than created on demand -- the
+    build-time loop that caps every item's height runs exactly once.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        #: ``(name, apply, width)`` per stage, widest first, measured at build
+        self._stages: list = []
+        self._stage = 0
+        self._fitting = False
+        #: groups that can fold, each ``(name, widgets, actions)``
+        self._folding: list = []
+        self._folded: list = []
+        self.overflow_button = None
+        self.overflow_menu = None
+
+    # --- measuring --------------------------------------------------------
+
+    def set_stages(self, stages) -> None:
+        """Take the stage table and measure every stage's width, once.
+
+        Measured rather than added up: the numbers that end up in the
+        comments have to come from the layout, and a stage's width is not the
+        sum of its buttons -- spacing, hidden items and the overflow button
+        all move it.
+        """
+        layout = self.layout()
+        if layout is None:
+            return
+        self._stages = []
+        for name, apply in stages:
+            apply(True)
+            layout.invalidate()
+            layout.activate()
+            self._stages.append((name, apply, layout.totalMinimumSize().width()))
+        # back to the roomiest, and let `fit` choose from the real width
+        for _name, apply, _width in self._stages:
+            apply(False)
+        self._stage = 0
+        if self._stages:
+            self._stages[0][1](True)
+        layout.invalidate()
+        layout.activate()
+        self.updateGeometry()
+
+    def stage_widths(self) -> dict:
+        """``{name: width}``, for the tests and for the commit message."""
+        return {name: width for name, _apply, width in self._stages}
+
+    def sizeHint(self):
+        layout = self.layout()
+        hint = layout.sizeHint() if layout is not None else super().sizeHint()
+        return QSize(hint.width(), theme.TOOLBAR_HEIGHT + theme.HAIRLINE)
+
+    def minimumSizeHint(self):
+        """The tightest stage's measured width, whatever stage is showing."""
+        width = self._stages[-1][2] if self._stages else 0
+        return QSize(width, theme.TOOLBAR_HEIGHT + theme.HAIRLINE)
+
+    # --- fitting ----------------------------------------------------------
+
+    @property
+    def compact(self) -> bool:
+        """True once the bar has given up its words."""
+        return self._stage > 0
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.fit()
+
+    def fit(self) -> None:
+        """Show the roomiest stage that fits the width the bar has."""
+        if self._fitting or not self._stages:
+            return
+        room = self.width()
+        if room <= 0:
+            return
+        wanted = len(self._stages) - 1
+        for index, (_name, _apply, width) in enumerate(self._stages):
+            if width <= room:
+                wanted = index
+                break
+        if wanted == self._stage:
+            return
+        self._fitting = True
+        try:
+            self._stages[self._stage][1](False)
+            self._stages[wanted][1](True)
+            self._stage = wanted
+            layout = self.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            self.updateGeometry()
+        except RuntimeError:
+            # a resize can still reach a bar whose buttons Qt has already
+            # deleted on the C++ side, on the way out of a window; the same
+            # guard `refresh_glyph_icons` keeps for the same reason
+            pass
+        finally:
+            self._fitting = False
 
 
 class RecentRow(QPushButton):
@@ -1655,10 +1827,26 @@ class Audian(QMainWindow):
         self.message_label = QLabel("", bar)
         self.message_label.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.message_label.setStyleSheet(f"color: {theme.token('fg.muted')};")
+        self.message_label.setWordWrap(False)
+        # Ignored, and elided by hand, which is what every other elastic
+        # label in this application already does (`annotation_hoverw`, the
+        # Labels file row, `progress_label`, `RecentRow`'s path).  This one
+        # was missed, and it is the worst place to miss it: a QLabel at the
+        # default Preferred policy reports its whole text as its minimum
+        # width, and it sits in the status bar's stretch slot, so the bar
+        # takes that as ITS minimum and the window cannot be narrower than
+        # the longest thing audian has said in the last four seconds.
+        # Measured: a 137 character "can not read annotations from ..." took
+        # the status bar's minimum from 1184 px to 2148 and the window with
+        # it.
+        self.message_label.setMinimumWidth(0)
+        self.message_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        #: the unelided line, for the tool tip and for re-eliding on a resize
+        self._message_full = ""
         bar.addWidget(self.message_label, 1)
         self.message_timer = QTimer(self)
         self.message_timer.setSingleShot(True)
-        self.message_timer.timeout.connect(lambda: self.message_label.setText(""))
+        self.message_timer.timeout.connect(self.clear_message)
         # a bar left sitting at 100% is just an unlabelled sliver of
         # chrome; a finished job clears the slot by itself:
         self.progress_timer = QTimer(self)
@@ -1674,9 +1862,14 @@ class Audian(QMainWindow):
         rbox = QHBoxLayout(self.readout_box)
         rbox.setContentsMargins(0, 0, 0, 0)
         rbox.setSpacing(0)
+        self._readout_separators = {}
         for i, field in enumerate(self.READOUTS):
             if i > 0:
-                rbox.addWidget(StatusSeparator(self.readout_box))
+                rule = StatusSeparator(self.readout_box)
+                rbox.addWidget(rule)
+                # kept, because hiding a field without its rule leaves a 16 px
+                # slot of nothing where the field used to be
+                self._readout_separators[field] = rule
             label = QLabel(self.readout_box)
             label.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
             label.setTextFormat(Qt.RichText)
@@ -1692,6 +1885,9 @@ class Audian(QMainWindow):
         bar.addPermanentWidget(self.readout_box)
         for field in self.READOUTS:
             self.set_readout(field, None, False)
+        # the cross hair starts off (DataBrowser.__init__), so these start
+        # hidden rather than showing three dashes until it is turned on
+        self.set_crosshair_readouts_visible(False)
 
         # persistent error indicator, opens the log:
         self.error_button = QToolButton(bar)
@@ -1715,6 +1911,12 @@ class Audian(QMainWindow):
         progress_box = QWidget(bar)
         make_transparent(progress_box, "audian_progress")
         progress_box.setFixedWidth(10 * theme.S16)
+        # Hidden until there is a job.  `set_progress(None)` used to hide only
+        # the bar inside it and blank the label, leaving the 160 px container
+        # standing for the life of the session -- 160 px of the status bar's
+        # minimum width, reserved for something that is almost never running.
+        self.progress_box = progress_box
+        progress_box.setVisible(False)
         pbox = QHBoxLayout(progress_box)
         pbox.setContentsMargins(0, 0, 0, 0)
         pbox.setSpacing(theme.S6)
@@ -1747,6 +1949,41 @@ class Audian(QMainWindow):
         if self.statusbar is None:
             return
         self.readout_box.setVisible(bool(visible))
+
+    #: Readouts that only ever carry a value while the cross hair is on.
+    #: Every write to them in `DataBrowser.mouse_moved` is inside
+    #: ``if self.cross_hair:``, and the cross hair is off by default and is
+    #: not persisted -- so in a default session these three read
+    #: ``Δt --  f --  P --`` from the first file to the last.  Measured, they
+    #: and their rules are 482 px of a 909 px row: more than half of it,
+    #: carrying nothing.
+    CROSSHAIR_READOUTS = ("dt", "f", "p")
+
+    def set_crosshair_readouts_visible(self, visible: bool) -> None:
+        """Show or hide the three readouts only the cross hair fills.
+
+        The field AND the rule in front of it, or hiding the labels alone
+        leaves three empty 16 px slots where they were.  Nothing is lost by
+        hiding one: `set_readout` records every value it is given and
+        `refresh_readouts` replays it, so a field that comes back is current.
+        """
+        if self.statusbar is None:
+            return
+        visible = bool(visible)
+        for field in self.CROSSHAIR_READOUTS:
+            label = self.readouts.get(field)
+            if label is not None:
+                label.setVisible(visible)
+            rule = self._readout_separators.get(field)
+            if rule is not None:
+                rule.setVisible(visible)
+        layout = self.readout_box.layout()
+        if layout is not None:
+            # without this the row keeps the width it was measured at and
+            # the hiding buys nothing
+            layout.invalidate()
+            layout.activate()
+        self.readout_box.updateGeometry()
 
     # -- the additive API the browser calls through hasattr guards --------
 
@@ -1801,6 +2038,36 @@ class Audian(QMainWindow):
             + self.readout_markup(value, "fg" if active else "fg.muted")
         )
 
+    def set_message(self, message: str) -> None:
+        """Show `message` in the status bar, elided to the room it has.
+
+        The whole line stays in the tool tip, so nothing said is lost --
+        which is the rule the folded label chips follow too.
+        """
+        self._message_full = str(message)
+        self.message_label.setToolTip(self._message_full)
+        self.elide_message()
+
+    def elide_message(self) -> None:
+        """Re-cut the transient message to the width the slot has now."""
+        label = getattr(self, "message_label", None)
+        if label is None:
+            return
+        metrics = QFontMetrics(label.font())
+        label.setText(
+            metrics.elidedText(self._message_full, Qt.ElideRight, max(label.width(), 1))
+        )
+
+    def clear_message(self) -> None:
+        """Drop the transient message, tool tip and all.
+
+        The tool tip has to go with the text, or a line the reader can no
+        longer see is still reachable by hovering the empty slot.
+        """
+        self._message_full = ""
+        self.message_label.setToolTip("")
+        self.message_label.setText("")
+
     def notify(self, level: str, message: str) -> None:
         """Report something to the user in the status bar.
 
@@ -1827,7 +2094,7 @@ class Audian(QMainWindow):
             return
         color = theme.token(self.NOTIFY_COLORS[level])
         self.message_label.setStyleSheet(f"color: {color};")
-        self.message_label.setText(message)
+        self.set_message(message)
         self.message_timer.start(4000)
         if level == "error":
             self.error_count += 1
@@ -1858,7 +2125,9 @@ class Audian(QMainWindow):
             self.progress_bar.setVisible(False)
             self.progress_label.setText("")
             self.progress_bar.setToolTip("")
+            self.progress_box.setVisible(False)
             return
+        self.progress_box.setVisible(True)
         try:
             value = int(100 * float(fraction))
         except (TypeError, ValueError):
@@ -1906,10 +2175,17 @@ class Audian(QMainWindow):
     # ------------------------------------------------------------------
 
     def toolbar_gap(self) -> None:
-        """A 12px gap, a hairline, another 12px gap."""
+        """A 12px gap, a hairline, another 12px gap.
+
+        The two spacers are kept so that a narrow bar can collapse them and
+        leave the rules: measured, the six of them are 96 px including the
+        layout spacing they take with them, which is one whole group's worth
+        of buttons for nothing but air.
+        """
         left = QWidget(self.toolbar_content)
         make_transparent(left, "audian_toolbar_gap")
         left.setFixedWidth(theme.S12)
+        self._toolbar_gaps.append(left)
         self.toolbar_box.addWidget(left)
         line = QFrame(self.toolbar_content)
         line.setFrameShape(QFrame.VLine)
@@ -1920,6 +2196,7 @@ class Audian(QMainWindow):
         right = QWidget(self.toolbar_content)
         make_transparent(right, "audian_toolbar_gap")
         right.setFixedWidth(theme.S12)
+        self._toolbar_gaps.append(right)
         self.toolbar_box.addWidget(right)
 
     def repolish(self) -> None:
@@ -2011,11 +2288,12 @@ class Audian(QMainWindow):
         a widget with an ordinary QHBoxLayout simply does the same thing
         twice.
         """
-        tb = QWidget(self)
+        tb = ToolStrip(self)
         tb.setObjectName("audian_toolbar")
         theme.band(tb, bottom=True)
         self.toolbar = tb
         self.toolbar_content = tb
+        self._toolbar_gaps = []
         self.toolbar_box = QHBoxLayout(tb)
         self.toolbar_box.setContentsMargins(theme.S8, theme.S4, theme.S8, theme.S4)
         self.toolbar_box.setSpacing(theme.S4)
@@ -2034,7 +2312,7 @@ class Audian(QMainWindow):
 
         # region mode, exclusive, legible:
         self._set_glyph(self.acts.zoom_region, "zoom")
-        self._set_glyph(self.acts.play_region, "play")
+        self._set_glyph(self.acts.play_region, "play-region")
         self._set_glyph(self.acts.analyze_region, "analyze")
         self._set_glyph(self.acts.save_region, "save")
         self._set_glyph(self.acts.ask_region, "ask")
@@ -2059,6 +2337,7 @@ class Audian(QMainWindow):
         self._set_glyph(self.acts.toggle_power, "power")
         self._set_glyph(self.acts.toggle_cbars, "colorbar")
         self._set_glyph(self.acts.toggle_fulldata, "navigator")
+        self.panel_buttons = []
         for act in (
             self.acts.toggle_traces,
             self.acts.toggle_spectrograms,
@@ -2068,12 +2347,14 @@ class Audian(QMainWindow):
             self.acts.toggle_fulldata,
         ):
             act.setCheckable(True)
-            self.toolbar_button(act)
+            self.panel_buttons.append(self.toolbar_button(act))
         self.toolbar_gap()
 
         # amplitude:
         self._set_glyph(self.acts.auto_zoom_amplitude, "fit")
-        self.toolbar_button(self.acts.auto_zoom_amplitude, Qt.ToolButtonTextBesideIcon)
+        self.fit_y_button = self.toolbar_button(
+            self.acts.auto_zoom_amplitude, Qt.ToolButtonTextBesideIcon
+        )
         self.ampl_button = QToolButton(tb)
         self.ampl_button.setPopupMode(QToolButton.InstantPopup)
         self.ampl_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -2100,6 +2381,7 @@ class Audian(QMainWindow):
         ampl_menu.addAction(self.acts.link_amplitude)
         ampl_menu.addAction(self.acts.reset_amplitude)
         ampl_menu.addAction(self.acts.center_amplitude)
+        self.ampl_menu = ampl_menu
         self.ampl_button.setMenu(ampl_menu)
         self.update_amplitude_button()
         self.ampl_button.setFixedHeight(theme.TOOLBAR_BUTTON_BOX)
@@ -2128,6 +2410,8 @@ class Audian(QMainWindow):
         self.channel_button.setFixedHeight(theme.TOOLBAR_BUTTON_BOX)
         self.toolbar_box.addWidget(self.channel_button)
 
+        self.setup_toolbar_stages()
+
         # The height is fixed only once the bar is populated, otherwise the
         # toolbar layout raises the minimum height from its contents.  The
         # bottom hairline is a QSS border and Qt adds it to the box, so the
@@ -2141,6 +2425,139 @@ class Audian(QMainWindow):
                 widget.setMaximumHeight(theme.TOOLBAR_HEIGHT - theme.S4)
         tb.setFixedHeight(theme.TOOLBAR_HEIGHT + theme.HAIRLINE)
         self.toolbar.setEnabled(False)
+
+    def setup_toolbar_stages(self) -> None:
+        """Build the overflow button and hand `ToolStrip` its stage table.
+
+        Called with the bar populated and before the height loop at the end
+        of `setup_toolbar`: that loop caps every item's height exactly once,
+        over whatever is in the layout at that instant, so a button created
+        later would stand proud of the 37 px band.
+
+        The stages are widest first.  `ToolStrip.set_stages` measures each
+        one off the real layout rather than adding button widths up, so the
+        numbers quoted anywhere about this bar come from the bar.
+        """
+        self.overflow_button = QToolButton(self.toolbar_content)
+        self._set_glyph(self.overflow_button, "more")
+        self.overflow_button.setPopupMode(QToolButton.InstantPopup)
+        self.overflow_button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.overflow_button.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        self.overflow_button.setAutoRaise(True)
+        self.overflow_button.setFixedHeight(theme.TOOLBAR_BUTTON_BOX)
+        self.overflow_menu = QMenu(self.overflow_button)
+        self.overflow_menu.aboutToShow.connect(self.build_overflow_menu)
+        self.overflow_button.setMenu(self.overflow_menu)
+        self.overflow_button.setVisible(False)
+        # Immediately after the last control and before the expanding
+        # spacer: only a SUFFIX of the run is ever folded, so this slot is
+        # always right after whatever is still on the bar.
+        index = self.toolbar_box.indexOf(self.ampl_button) + 1
+        self.toolbar_box.insertWidget(index, self.overflow_button)
+
+        modes = list(self.mode_buttons) + [self.fit_y_button]
+        styles = {b: b.toolButtonStyle() for b in modes}
+
+        def unlabel(on: bool) -> None:
+            for button in modes:
+                button.setToolButtonStyle(
+                    Qt.ToolButtonIconOnly if on else styles[button]
+                )
+
+        def collapse_gaps(on: bool) -> None:
+            for spacer in self._toolbar_gaps:
+                spacer.setFixedWidth(0 if on else theme.S12)
+
+        # Right to left, so every button still on the bar keeps its x and the
+        # reader's aim keeps working.  Each group owns the rule that precedes
+        # it, or folding one would leave a hairline in front of nothing.
+        amplitude = ([self.fit_y_button, self.ampl_button], 3)
+        panels = (list(self.panel_buttons), 2)
+        region = (list(self.mode_buttons), 1)
+
+        def folder(group, rule_index, name):
+            widgets, _ = group
+
+            def apply(on: bool) -> None:
+                for widget in widgets:
+                    widget.setVisible(not on)
+                if 0 <= rule_index - 1 < len(self._toolbar_separators):
+                    self._toolbar_separators[rule_index - 1].setVisible(not on)
+                if on and name not in self._folded_groups:
+                    self._folded_groups.append(name)
+                elif not on and name in self._folded_groups:
+                    self._folded_groups.remove(name)
+                self.overflow_button.setVisible(bool(self._folded_groups))
+                self.overflow_button.setToolTip(
+                    "Moved off the bar: " + ", ".join(self._folded_groups)
+                    if self._folded_groups
+                    else ""
+                )
+
+            return apply
+
+        self._folded_groups = []
+        fold_amplitude = folder(amplitude, 3, "amplitude")
+        fold_panels = folder(panels, 2, "panels")
+        fold_region = folder(region, 1, "region modes")
+
+        def stage(*applies):
+            def apply(on: bool) -> None:
+                for one in applies:
+                    one(on)
+
+            return apply
+
+        self.toolbar.set_stages(
+            [
+                ("full", lambda on: None),
+                ("glyphs", unlabel),
+                ("tight", stage(unlabel, collapse_gaps)),
+                ("no-amplitude", stage(unlabel, collapse_gaps, fold_amplitude)),
+                (
+                    "no-panels",
+                    stage(unlabel, collapse_gaps, fold_amplitude, fold_panels),
+                ),
+                (
+                    "no-modes",
+                    stage(
+                        unlabel,
+                        collapse_gaps,
+                        fold_amplitude,
+                        fold_panels,
+                        fold_region,
+                    ),
+                ),
+            ]
+        )
+
+    def build_overflow_menu(self) -> None:
+        """Fill the overflow with whatever is off the bar right now.
+
+        The same `QAction` objects the buttons carry, so a folded control
+        keeps its name, its glyph and its check state -- and gains a rendered
+        shortcut, which the bar itself never showed.  Built on `aboutToShow`
+        rather than on every resize, the way the channel menu is.
+        """
+        menu = self.overflow_menu
+        menu.clear()
+        groups = (
+            ("region modes", [b.defaultAction() for b in self.mode_buttons]),
+            ("panels", [b.defaultAction() for b in self.panel_buttons]),
+            ("amplitude", [self.acts.auto_zoom_amplitude]),
+        )
+        for name, actions in groups:
+            if name not in self._folded_groups:
+                continue
+            if not menu.isEmpty():
+                menu.addSeparator()
+            for act in actions:
+                if act is not None:
+                    menu.addAction(act)
+            if name == "amplitude" and self.ampl_menu is not None:
+                # the submenu's TITLE is the readout, so "Y: per-channel"
+                # survives the fold rather than becoming a bare "Y"
+                menu.addMenu(self.ampl_menu)
 
     def set_y_mode(self, mode: int) -> None:
         """Apply an amplitude-range policy to the current browser."""
@@ -2530,6 +2947,10 @@ class Audian(QMainWindow):
     def set_cross_hair(self, checked):
         for b in self.browsers:
             b.set_cross_hair(checked)
+        # The three readouts only the cross hair fills come and go with it.
+        # The row visibly grows and shrinks on Ctrl+C, which is the point:
+        # it stops reserving half its width for fields that say "--".
+        self.set_crosshair_readouts_visible(bool(checked))
 
     def setup_region_actions(self, menu):
         self.acts.rect_zoom = QAction("&Rectangle zoom", self)
@@ -2570,26 +2991,41 @@ class Audian(QMainWindow):
         self.acts.zoom_region = QAction("&Zoom", self)
         self.acts.zoom_region.setCheckable(True)
         self.acts.zoom_region.setShortcut("z")
+        self.acts.zoom_region.setToolTip("Drag a region to zoom into it  (z)")
         self.acts.zoom_region.toggled.connect(self.set_zoom)
 
         self.acts.play_region = QAction("&Play", self)
         self.acts.play_region.setCheckable(True)
         self.acts.play_region.setShortcut("P")
+        self.acts.play_region.setToolTip(
+            "Drag a region to play it  (P).\n"
+            "Shift+drag plays a region whatever this mode is."
+        )
         self.acts.play_region.toggled.connect(self.set_play)
 
         self.acts.analyze_region = QAction("&Analyze", self)
         self.acts.analyze_region.setCheckable(True)
         self.acts.analyze_region.setShortcut("a")
+        self.acts.analyze_region.setToolTip(
+            "Drag a region to run the analyzers over it  (a).\n"
+            "Alt+drag analyses a region whatever this mode is."
+        )
         self.acts.analyze_region.toggled.connect(self.set_analyze)
 
         self.acts.save_region = QAction("&Save", self)
         self.acts.save_region.setCheckable(True)
         self.acts.save_region.setShortcut("s")
+        self.acts.save_region.setToolTip(
+            "Drag a region to write it out as its own recording  (s)"
+        )
         self.acts.save_region.toggled.connect(self.set_save)
 
         self.acts.ask_region = QAction("Re&quest", self)
         self.acts.ask_region.setCheckable(True)
         self.acts.ask_region.setShortcut("q")
+        self.acts.ask_region.setToolTip(
+            "Drag a region and choose what to do with it from a menu  (q)"
+        )
         self.acts.ask_region.toggled.connect(self.set_ask)
 
         # 'b' for box.  Every bound sequence in this file and in
@@ -2939,6 +3375,9 @@ class Audian(QMainWindow):
 
         self.acts.auto_zoom_amplitude = QAction("&Fit Y", self)
         self.acts.auto_zoom_amplitude.setShortcut("v")
+        self.acts.auto_zoom_amplitude.setToolTip(
+            "Fit the amplitude axis to what is on screen  (v)"
+        )
         self.acts.auto_zoom_amplitude.triggered.connect(self.auto_amplitude)
 
         self.acts.reset_amplitude = QAction("&Reset", self)

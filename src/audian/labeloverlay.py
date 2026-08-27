@@ -757,10 +757,13 @@ class CategoryStrip(QWidget):
     categories the reader defined -- so it is the one row of the bar that can
     grow without anybody choosing to grow it.
 
-    Measured on a four channel recording, the window asked to be 1200x900:
-    the parameter bar alone already forces it to 1372 px, and a plain
-    ``QHBoxLayout`` of two chips plus an Edit button took that to 1572.  Two
-    categories.  With sixteen the row would be wider than any screen.
+    Measured on a four channel recording, the window asked to be 1200x900,
+    back when every group was on screen at once and this one had a fifth of
+    the bar: a plain ``QHBoxLayout`` of two chips plus an Edit button took
+    the window's minimum from 1372 px to 1572.  Two categories.  The groups
+    are behind tabs now and this strip gets 1167 px rather than 198, so
+    twelve categories fit -- but the number of them is still the reader's,
+    and a strip that grew with it would put the problem straight back.
 
     So the chips are placed by hand rather than by a layout -- a layout would
     re-impose exactly the minimum this exists to avoid -- and the ones that
@@ -768,10 +771,11 @@ class CategoryStrip(QWidget):
     key.  Folded, never dropped: the menu is a second place every category
     is, not the only place some of them are.
 
-    Two lines rather than one, because the height is free.  `equalize` gives
-    every group of the bar the tallest one's frame and the annotations group
-    is five rows to this group's four, so the second line of chips costs the
-    lanes nothing and doubles what the reader can see at once.
+    Two lines rather than one, because the height is free: the bar is as
+    tall as its tallest page whichever page is showing, and that is the
+    annotations group's five rows against this group's four.  So the second
+    line of chips costs the lanes nothing and doubles what is visible at
+    once.
 
     What is shown is always a *prefix* of the vocabulary, never a
     best-fit selection: the first nine categories are the ones with the

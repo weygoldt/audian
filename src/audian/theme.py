@@ -2114,6 +2114,38 @@ QToolButton#railToggle {
     margin: 0px;
 }
 
+/* The parameter bar's tab strip.  Scoped by object name, not by type, for
+   the same reason the strip is QToolButtons rather than a QTabWidget: the
+   QTabBar rules above are unconditional type selectors written for the file
+   spine on the LEFT edge, and a horizontal strip would inherit a selected
+   mark down its leading side and a zero padding meant for a bar that paints
+   its own labels.
+
+   Marked by a rule along the bottom -- the same device the rail and the file
+   spine use on their leading edge, turned through ninety degrees for a
+   horizontal strip.  The unchecked state states the same border in
+   transparent, so checking a tab cannot change the strip's height.  NOT the
+   generic QToolButton:checked flood of primary.dim: that is the idiom for a
+   toggle that is doing something, and a tab is not a toggle. */
+QToolButton#paramTab {
+    background-color: transparent;
+    color: $fg_muted;
+    border: 0px;
+    border-bottom: ${focus_width}px solid transparent;
+    border-radius: 0px;
+    padding: ${s2}px ${s8}px;
+}
+QToolButton#paramTab:hover {
+    color: $fg;
+    background-color: $bg_surface;
+}
+QToolButton#paramTab:checked {
+    color: $fg;
+    background-color: transparent;
+    border-bottom: ${focus_width}px solid $primary;
+}
+QToolButton#paramTab:disabled { color: $fg_faint; }
+
 /* --- menus ---------------------------------------------------------- */
 
 QMenuBar {
