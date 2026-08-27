@@ -6,9 +6,15 @@ import pyqtgraph as pg
 from math import floor
 from thunderlab.powerspectrum import decibel
 
+from .bufferedspectrogram import channel_power
+
 
 class SpecItem(pg.ImageItem):
     """Spectrogram image of one channel of a BufferedSpectrogram.
+
+    Or, once `set_mean_channels()` has been called, of the mean power over
+    several of them: the item is the same object with the channel axis
+    reduced instead of indexed, which is all a mean spectrogram is.
 
     Only the part of the buffer that can actually be seen is converted to
     decibel and uploaded.  Uploading the whole buffer cost 23.4 ms of
@@ -32,6 +38,8 @@ class SpecItem(pg.ImageItem):
 
         self.data = data
         self.channel = channel
+        # channels the image averages over; None means "just self.channel"
+        self.mean_channels = None
         # visible time range as told by the panel; None means "whole buffer"
         self._view_range = None
         # index range and stride of what is currently uploaded
@@ -48,14 +56,61 @@ class SpecItem(pg.ImageItem):
         """
         self._view_range = (float(t0), float(t1))
 
+    def set_mean_channels(self, channels) -> bool:
+        """Draw the mean power over `channels`, or `None` for own channel.
+
+        Returns True when the source actually changed, and throws the
+        uploaded crop away when it did.  That is not housekeeping: the
+        hysteresis in `update_plot` keys off the time range and the buffer's
+        own change flag, and neither knows what the pixels were computed
+        *from*.  Measured with the reset taken back out, sixteen channels:
+        the range, the stride and the flag are all unchanged by the switch,
+        so `update_plot` returns early and the panel comes up captioned
+        `MEAN 00-15` with channel 0 in it.
+        """
+        channels = None if channels is None else [int(c) for c in channels]
+        if channels == self.mean_channels:
+            return False
+        self.mean_channels = channels
+        self._image_range = None
+        return True
+
+    def power_block(self, rows):
+        """Reduce `rows` -- a (time, channel, freq) slice -- to (time, freq).
+
+        `channel_power` carries the measurement: averaging the power and
+        converting once is the only correct order, and on this array the
+        other order draws nothing at all.
+        """
+        return channel_power(
+            rows, self.channel if self.mean_channels is None else self.mean_channels
+        )
+
+    def noise_levels(self):
+        """Colour ramp the data suggests for what this item actually draws.
+
+        The mean's floor lands 2.3 dB from a single channel's and its top
+        37.5 dB from it, so asking per channel and using the answer for the
+        mean gets the dark end right and throws the contrast away; see
+        `BufferedSpectrogram.estimate_noiselevels`.
+        """
+        if self.mean_channels is None:
+            return self.data.estimate_noiselevels(self.channel)
+        return self.data.estimate_noiselevels(self.mean_channels)
+
     def get_power(self, t, f):
-        """Get power next to cursor position."""
+        """Get power next to cursor position.
+
+        Averaged over the same channels the image is, so the readout cannot
+        disagree with the pixel it is standing on.
+        """
         ti = int(floor(t * self.data.rate))
         fi = int(floor(f / self.data.fresolution))
-        if ti < self.data.shape[0] and fi < self.data.shape[2]:
-            return decibel(self.data[ti, self.channel, fi])
-        else:
+        if ti >= self.data.shape[0] or fi >= self.data.shape[2]:
             return None
+        if self.mean_channels is None:
+            return decibel(self.data[ti, self.channel, fi])
+        return decibel(float(np.mean(self.data[ti, self.mean_channels, fi])))
 
     def max_columns(self) -> int:
         """Number of image columns worth uploading for our own width."""
@@ -90,6 +145,8 @@ class SpecItem(pg.ImageItem):
         # stride the visible range alone would need; panning must not change
         # it, otherwise every pan invalidates the upload:
         needed = max(1, (v1 - v0) // columns)
+        # every channel of the buffer is refilled in one go, so this one
+        # flag answers for the mean as well as for a single channel:
         changed = bool(self.data.buffer_changed[self.channel])
         if not changed and self._image_range is not None:
             i0, i1, stride = self._image_range
@@ -101,7 +158,7 @@ class SpecItem(pg.ImageItem):
         i1 = min(n, v1 + pad)
         stride = max(1, (i1 - i0) // columns)
         self._image_range = (i0, i1, stride)
-        block = self.data.buffer[i0:i1:stride, self.channel, :]
+        block = self.power_block(self.data.buffer[i0:i1:stride])
         with np.errstate(all="ignore"):
             self.setImage(decibel(block.T), autoLevels=False)
         # rect covers the CROPPED extent, not data.spec_rect:

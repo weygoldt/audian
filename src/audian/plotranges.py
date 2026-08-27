@@ -499,6 +499,13 @@ class PlotRange(object):
             self.set_ranges(-r, +r, None, [c], do_set)
 
     def set_powers(self):
+        """Start the colour ramp off at what the data suggests.
+
+        Each item is asked for its own levels rather than being looked up by
+        channel index: an item drawing the mean over the array is not
+        channel `c`, and a per-channel answer would leave its ramp short of
+        the span the mean actually has.
+        """
         if not self.is_power() or not self.is_used():
             return
         zmin = None
@@ -507,8 +514,8 @@ class PlotRange(object):
             for ax in self.axzs[c]:
                 if hasattr(ax, "data_items"):
                     for item in ax.data_items:
-                        if hasattr(item, "data"):
-                            z0, z1 = item.data.estimate_noiselevels(c)
+                        if hasattr(item, "noise_levels"):
+                            z0, z1 = item.noise_levels()
                             if z0 is not None and z1 is not None:
                                 if zmin is None or z0 < zmin:
                                     zmin = z0

@@ -183,6 +183,25 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         for i, frac in enumerate((0.35, 0.75, 0.55)):
             y = m + e * (0.28 + 0.22 * i)
             painter.drawLine(int(m + e * 0.12), int(y), int(m + e * frac), int(y))
+    elif kind == "meanspec":
+        # x-bar: the spectrogram glyph with the overbar that is the notation
+        # for a mean.  A picture of the mechanism -- lanes folding into one --
+        # needs three strips, an arrow and a panel inside 12 px of drawable
+        # extent; the notation needs one line, and the reader of this
+        # application already knows it.  The pair reads as a pair on the tool
+        # bar, which they are: F2's mode and the mean of it.
+        bar = m + e * 0.06
+        painter.drawLine(int(m), int(bar), int(m + e), int(bar))
+        field = QRectF(m, m + e * 0.28, e, e * 0.72)
+        painter.drawRect(field)
+        for i, frac in enumerate((0.35, 0.75, 0.55)):
+            y = field.top() + field.height() * (0.24 + 0.26 * i)
+            painter.drawLine(
+                int(field.left() + e * 0.12),
+                int(y),
+                int(field.left() + e * frac),
+                int(y),
+            )
     elif kind == "power":
         # a peaked curve rising from the left
         path.moveTo(m, m + e)
@@ -2015,12 +2034,14 @@ class Audian(QMainWindow):
         # panels:
         self._set_glyph(self.acts.toggle_traces, "trace")
         self._set_glyph(self.acts.toggle_spectrograms, "spectrogram")
+        self._set_glyph(self.acts.toggle_mean_spec, "meanspec")
         self._set_glyph(self.acts.toggle_power, "power")
         self._set_glyph(self.acts.toggle_cbars, "colorbar")
         self._set_glyph(self.acts.toggle_fulldata, "navigator")
         for act in (
             self.acts.toggle_traces,
             self.acts.toggle_spectrograms,
+            self.acts.toggle_mean_spec,
             self.acts.toggle_power,
             self.acts.toggle_cbars,
             self.acts.toggle_fulldata,
@@ -2145,6 +2166,7 @@ class Audian(QMainWindow):
         states = (
             (self.acts.toggle_traces, bool(browser.show_traces)),
             (self.acts.toggle_spectrograms, bool(browser.show_specs)),
+            (self.acts.toggle_mean_spec, bool(browser.mean_spec)),
             (self.acts.toggle_power, bool(browser.show_powers)),
             (self.acts.toggle_cbars, bool(browser.show_cbars)),
             (self.acts.toggle_fulldata, bool(browser.show_fulldata)),
@@ -3433,6 +3455,26 @@ class Audian(QMainWindow):
                     )
         self.sync_toolbar()
 
+    def toggle_mean_spectrogram(self):
+        """Shift+F2: one mean spectrogram over the array, or back to the stack.
+
+        Not propagated by `link_panels`.  That switch links which panels the
+        tabs *show*, and the mean is a statement about one recording's own
+        channels: two tabs on a 16 channel array and a stereo file do not
+        owe each other an average.
+
+        The mode is announced in the status bar because the caption
+        abbreviates: it says `MEAN 00-15` on the full array, but a scattered
+        selection is folded to a count, and the abbreviated form must never
+        be the only place the set is stated.
+        """
+        browser = self.browser()
+        if not isinstance(browser, DataBrowser):
+            return
+        browser.toggle_mean_spectrogram()
+        browser.notify("info", browser.mean_spectrogram_message())
+        self.sync_toolbar()
+
     def reset_panel_split(self):
         """Shift+F3: the current spectrogram size back to its own default.
 
@@ -3733,6 +3775,18 @@ class Audian(QMainWindow):
         )
         self.acts.reset_panel_split.triggered.connect(self.reset_panel_split)
 
+        # Shift+F2 rather than a key of its own: this mode lives inside the
+        # one F2 opens, and it was the only unclaimed modifier on that key
+        # (Shift+F3 resets the split, Shift+F6 and Alt+F6 are the
+        # navigator's, Shift+F8 the annotations').
+        self.acts.toggle_mean_spec = QAction("Toggle &mean spectrogram", self)
+        self.acts.toggle_mean_spec.setShortcut("Shift+F2")
+        self.acts.toggle_mean_spec.setToolTip(
+            "One full-height spectrogram of the mean power over the visible "
+            "channels, instead of one per channel"
+        )
+        self.acts.toggle_mean_spec.triggered.connect(self.toggle_mean_spectrogram)
+
         self.acts.toggle_power = QAction("Toggle power", self)
         self.acts.toggle_power.setShortcut("F4")
         self.acts.toggle_power.triggered.connect(self.toggle_powers)
@@ -3766,6 +3820,7 @@ class Audian(QMainWindow):
         panel_menu.addAction(self.acts.link_panels)
         panel_menu.addAction(self.acts.toggle_traces)
         panel_menu.addAction(self.acts.toggle_spectrograms)
+        panel_menu.addAction(self.acts.toggle_mean_spec)
         panel_menu.addAction(self.acts.reset_panel_split)
         panel_menu.addAction(self.acts.toggle_power)
         panel_menu.addAction(self.acts.toggle_cbars)

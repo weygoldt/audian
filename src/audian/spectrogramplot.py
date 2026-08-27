@@ -12,10 +12,50 @@ except ImportError:
 from thunderlab.powerspectrum import decibel
 
 from . import theme
+from .bufferedspectrogram import channel_power
 from .panels import Panel, resolve_colormap
 from .rangeplot import RangePlot
 from .specitem import SpecItem
 from .timeplot import TimePlot
+
+#: Longest a caption's channel list may get before it is folded to a count.
+#:
+#: Measured in the mono face at `theme.SIZE_SMALL_PT`: `MEAN 00-15` is 78 px
+#: and the longest caption this cap allows -- `MEAN 00,03,06,09,12,15`, every
+#: third electrode of sixteen -- is 172 px, against the 1532 px view box the
+#: mean panel measured at in a 1748 px window.  Without a cap the list has no
+#: bound the panel can rely on: every other electrode of sixteen is already
+#: `00,02,04,06,08,10,12,14`, 23 glyphs, and a wider array only grows it.  A
+#: caption is one line, so the overflow is folded rather than wrapped, and
+#: the toggle names the full set in the status bar -- the folded form is
+#: never the only place the selection is stated.
+MAX_CHANNEL_LABEL_CHARS = 17
+
+
+def channel_range_label(channels) -> str:
+    """Name a set of channels in one short line: `00-15`, `00-03,09`, `11 ch`.
+
+    Runs are collapsed because the interesting selections are contiguous --
+    an electrode grid solo'd down to one row, a muted pair at the end of the
+    array -- and a run written out is three glyphs where the channels are
+    two each plus a comma.  `MAX_CHANNEL_LABEL_CHARS` carries what happens
+    when the selection is scattered enough that collapsing does not help.
+    """
+    channels = sorted({int(c) for c in channels})
+    if not channels:
+        return "none"
+    runs = [[channels[0], channels[0]]]
+    for c in channels[1:]:
+        if c == runs[-1][1] + 1:
+            runs[-1][1] = c
+        else:
+            runs.append([c, c])
+    text = ",".join(
+        f"{lo:02d}" if lo == hi else f"{lo:02d}-{hi:02d}" for lo, hi in runs
+    )
+    if len(text) > MAX_CHANNEL_LABEL_CHARS:
+        return f"{len(channels)} ch"
+    return text
 
 
 class PowerPlot(RangePlot):
@@ -75,6 +115,11 @@ class SpectrogramPlot(TimePlot):
 
     # SI prefix currently shown on the frequency axis:
     _caption_prefix = None
+
+    #: Channels this panel averages, or None while it is one channel's own.
+    #: A class level default for the same reason the flags below are: the
+    #: PlotItem constructor reaches setVisible() before __init__ runs.
+    mean_channels = None
 
     # Class level defaults: pg.PlotItem's constructor can reach setVisible()
     # before __init__ gets to the instance attributes.
@@ -227,7 +272,21 @@ class SpectrogramPlot(TimePlot):
     # --- caption ----------------------------------------------------------
 
     def caption_text(self) -> str:
-        text = f"CH {self.channel:02d}"
+        """Name what the panel draws: one channel, or the mean of several.
+
+        An averaged panel must not claim to be a channel.  `MEAN 00-15` is
+        as long as `CH 00` plus three glyphs and stays on the one line the
+        caption has, and it names the channels that were *actually*
+        averaged, so that a solo or a mute narrowing the set is visible in
+        the picture rather than only in the rail that mean mode hides.
+        `channel_range_label` keeps it to one line whatever the selection
+        is; the toggle says the full set in the status bar, so the
+        abbreviated form is never the only place it exists.
+        """
+        if self.mean_channels is None:
+            text = f"CH {self.channel:02d}"
+        else:
+            text = f"MEAN {channel_range_label(self.mean_channels)}"
         if self._show_tick_values:
             # the axis says it; saying it twice is clutter
             return text
@@ -235,6 +294,26 @@ class SpectrogramPlot(TimePlot):
         if unit:
             text += f"   frequency ({unit})"
         return text
+
+    def set_mean_channels(self, channels) -> bool:
+        """Draw the mean power over `channels`, or `None` for own channel.
+
+        Pushed on to every `SpecItem` the panel holds, and the level fit is
+        re-armed either way: the mean and a single channel share a noise
+        floor but not a span, so the mapping fitted for one is wrong for the
+        other by the whole top half of the ramp -- 30 dB of the 60 the mean
+        needs, measured.  See `fit_levels`.
+        """
+        channels = None if channels is None else [int(c) for c in channels]
+        if channels == self.mean_channels:
+            return False
+        self.mean_channels = channels
+        for item in self.data_items:
+            if isinstance(item, SpecItem):
+                item.set_mean_channels(channels)
+        self._levels_fitted = False
+        self._update_caption()
+        return True
 
     def _place_caption(self) -> None:
         prefix = self.getAxis("left").si_prefix
@@ -292,7 +371,10 @@ class SpectrogramPlot(TimePlot):
             self.fit_levels(block)
 
     def visible_block(self):
-        """The in-view slice of the spectrogram for this channel, or None.
+        """The in-view slice of the spectrogram this panel draws, or None.
+
+        The same reduction the image gets, so the power curve beside it and
+        the level fit made from it are all statements about one picture.
 
         Never index `spec_data` outside this: a slice of a `BufferedArray`
         triggers `update_buffer()`, so an unclamped range would re-read from
@@ -311,7 +393,9 @@ class SpectrogramPlot(TimePlot):
                 i0 = max(0, i1 - 1)
         if i1 <= i0:
             return None
-        return self.spec_data[i0:i1, self.channel, :]
+        if self.mean_channels is None:
+            return self.spec_data[i0:i1, self.channel, :]
+        return channel_power(self.spec_data[i0:i1], self.mean_channels)
 
     # --- level mapping ----------------------------------------------------
 
@@ -339,9 +423,33 @@ class SpectrogramPlot(TimePlot):
         """
         rearm = bool(visible) and not self.isVisible()
         super().setVisible(visible)
-        if rearm and self.channel == 0:
+        if rearm and self.fits_levels():
             self._levels_fitted = False
             self._refit_pending = True
+
+    def fits_levels(self) -> bool:
+        """Is this the panel that owns the shared colour mapping?
+
+        The *first lane drawn* owns it, which on an untouched stack is
+        channel 0 and was until now spelt that way.  Solo and mute can take
+        channel 0 off the screen, and a rule that named it anyway left the
+        whole stack on whatever ramp was last in force with no panel able to
+        replace it -- soloing electrodes 3 and 5 of the array is an ordinary
+        gesture, not a corner.
+
+        It also puts the mean panel and the level owner on the same lane by
+        construction: mean mode draws on the first visible channel, so the
+        panel that has the averaged block in its hands is the one allowed to
+        fit a ramp to it, entering and leaving alike.
+
+        Falls back to channel 0 before the browser has opened a file: this is
+        reachable from `pg.PlotItem`'s constructor, ahead of `self.browser`.
+        """
+        browser = getattr(self, "browser", None)
+        channels = browser.visible_channels() if browser is not None else []
+        if not channels:
+            return self.channel == 0
+        return self.channel == channels[0]
 
     def _refit_levels(self) -> None:
         """Deferred half of the refit armed by `setVisible()`."""
@@ -360,13 +468,25 @@ class SpectrogramPlot(TimePlot):
         estimator uses -- 95 % of the way from the floor to the loudest bin --
         so switching between the two does not change the apparent gain.
 
-        Runs from channel 0 only: all channels of one recording share the
-        mapping, so that a quiet electrode still *looks* quieter than a loud
-        one rather than being normalised into looking the same.
+        Runs from one panel only -- see `fits_levels` -- because all
+        channels of one recording share the mapping, so that a quiet
+        electrode still *looks* quieter than a loud one rather than being
+        normalised into looking the same.
+
+        A mean panel has to make its own.  Averaging the array pushes the
+        noise floor down while a signal coherent across it stays put, so the
+        mean has close to twice the contrast of any one electrode: measured
+        on the flona block, 99.9th percentile minus median is 23.50 dB for
+        channel 0 and 46.25 dB for the mean.  The fitted ramp follows --
+        -75..-45 dB for the channel, -75..-15 dB for the mean, the same
+        floor and twice the span.  A mean drawn against a channel's mapping
+        is still a spectrogram, just a flatter one, which is why entering
+        and leaving mean mode re-arms this rather than trusting the ramp
+        that is already there.
 
         Returns True when a new mapping was applied.
         """
-        if self.spec_data is None or self.channel != 0:
+        if self.spec_data is None or not self.fits_levels():
             return False
         if block is None:
             block = self.visible_block()

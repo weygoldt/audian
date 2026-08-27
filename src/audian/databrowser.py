@@ -891,6 +891,13 @@ class DataBrowser(QWidget):
         self.show_powers = False
         self.show_cbars = True
         self.show_fulldata = True
+        # One full-height spectrogram of the mean power over the array,
+        # instead of one stripe per electrode.  Lives inside the traces-off
+        # all-spectrograms mode and `set_panels` holds it to that.
+        self.mean_spec = False
+        # whether Shift+F2 was the thing that turned the traces off, so that
+        # pressing it twice puts the reader back exactly where they were
+        self.traces_before_mean = False
 
         # auto scroll:
         self.scroll_step = 0.0
@@ -2091,36 +2098,79 @@ class DataBrowser(QWidget):
 
     # --- channel rail -----------------------------------------------------
 
+    def rail_shown(self) -> bool:
+        """Is the channel rail on screen right now?
+
+        `rail_visible` is the reader's F7 setting and is never touched by
+        anything else, so that leaving a mode gives the rail back exactly as
+        they left it.  The mean spectrogram is the one mode that overrides
+        it: the rail is a column of per-channel controls beside per-channel
+        lanes, and mean mode has one lane that is no channel at all.  A rail
+        row reading `00` with its own solo and mute buttons, pinned next to
+        a panel captioned `MEAN 00-15`, names the wrong thing twice over.
+        """
+        return self.rail_visible and not self.mean_spec
+
+    def apply_rail_width(self) -> None:
+        """Give the rail column, the Y readout and the control panel one width.
+
+        The three columns that have to line up -- the lanes, the time axis
+        and the control panel -- are told to change width here, and
+        `align_time_axis` measures the finished geometry.  Run now it reads
+        one of them before Qt has moved it and lands 48 px out; the axis
+        then stays wrong until something else resizes the window.  One turn
+        of the event loop later every width is real.
+        """
+        width = DataBrowser.RAIL_WIDTH if self.rail_shown() else 0
+        if self.stack_grid is None or self.stack_grid.columnMinimumWidth(0) == width:
+            # nothing to move, and nothing to re-align: this runs from
+            # `set_panels`, which every panel toggle goes through
+            return
+        self.stack_grid.setColumnMinimumWidth(0, width)
+        if self.y_readout is not None:
+            self.y_readout.setFixedWidth(width)
+        if self.control_panel is not None:
+            self.control_panel.set_rail_width(width)
+        self.schedule_axis_alignment()
+
     def toggle_rail(self) -> None:
-        """Show or hide the channel rail (F7)."""
+        """Show or hide the channel rail (F7).
+
+        The setting is flipped even while the mean spectrogram is holding
+        the rail off screen -- it is the reader's preference for when they
+        come back, not a description of what is drawn -- but a key that
+        changes nothing visible has to say so, or the next F7 appears to be
+        the one that did nothing.
+        """
         self.rail_visible = not self.rail_visible
         for row in self.rail_rows:
-            row.setVisible(self.rail_visible and row.channel in self.visible_channels())
-        self.stack_grid.setColumnMinimumWidth(
-            0, DataBrowser.RAIL_WIDTH if self.rail_visible else 0
-        )
-        if self.y_readout is not None:
-            self.y_readout.setFixedWidth(
-                DataBrowser.RAIL_WIDTH if self.rail_visible else 0
+            row.setVisible(self.rail_shown() and row.channel in self.visible_channels())
+        self.apply_rail_width()
+        if self.mean_spec:
+            state = "shown" if self.rail_visible else "hidden"
+            self.notify(
+                "info",
+                f"channel rail {state} -- it stays off screen while the mean "
+                f"spectrogram does (Shift+F2)",
             )
-        if self.control_panel is not None:
-            self.control_panel.set_rail_width(
-                DataBrowser.RAIL_WIDTH if self.rail_visible else 0
-            )
-        # The three columns that have to line up -- the lanes, the time axis
-        # and the control panel -- have just been told to change width, and
-        # `align_time_axis` measures the finished geometry.  Run now it reads
-        # one of them before Qt has moved it and lands 48 px out; the axis
-        # then stays wrong until something else resizes the window.  One turn
-        # of the event loop later every width is real.
-        QTimer.singleShot(0, self.align_time_axis)
 
-    def visible_channels(self) -> list:
-        """Channels actually drawn, in display order.
+    # --- which channels are on screen -------------------------------------
+
+    def selected_channels_in_order(self) -> list:
+        """Channels the reader has asked to see, in display order.
 
         `show_channels` stays the user's channel selection; solo and mute
         are non-destructive filters on top of it, and maximising a channel
         temporarily hides the others.
+
+        This is the set *before* the mean spectrogram collapses it onto one
+        lane, which is why it is separate from `visible_channels`: the mean
+        needs to know which electrodes it is averaging, and the layout needs
+        to know that only one lane is drawn.  Solo and mute are therefore
+        the mean's channel selector as well as the stack's -- an ordinary
+        thing to want on an electrode grid, and cheap to allow because the
+        mean's level does not jump when the count changes the way a sum's
+        would.
         """
         if self.show_channels is None:
             return []
@@ -2134,6 +2184,29 @@ class DataBrowser(QWidget):
             return solo
         visible = [c for c in order if c not in self.muted_channels]
         return visible if visible else order
+
+    def visible_channels(self) -> list:
+        """Lanes actually drawn, in display order.
+
+        One lane while the mean spectrogram is showing, and that lane is the
+        first selected channel's.  Deliberately an existing lane rather than
+        a seventeenth pseudo-channel: the stack, the rail, the borders,
+        selection and playback are all indexed over `range(data.channels)`,
+        and a mean that is not a channel has no business in any of them.
+        """
+        channels = self.selected_channels_in_order()
+        if self.mean_spec and channels:
+            return channels[:1]
+        return channels
+
+    def mean_channels(self) -> list:
+        """Channels the mean spectrogram averages, or [] when it is off."""
+        return self.selected_channels_in_order() if self.mean_spec else []
+
+    def mean_spec_lane(self):
+        """The lane the mean is drawn on, or None when the mean is off."""
+        channels = self.visible_channels()
+        return channels[0] if (self.mean_spec and channels) else None
 
     def focus_channel(self, channel: int) -> None:
         """Point the focus at `channel`, and let the layout follow it.
@@ -2278,16 +2351,43 @@ class DataBrowser(QWidget):
         self.apply_channel_visibility()
 
     def apply_channel_visibility(self) -> None:
-        """Push solo/mute/order/maximise onto the widgets."""
-        visible = self.visible_channels()
-        for c in range(len(self.figs)):
-            self.figs[c].setVisible(c in visible)
-            self.rail_rows[c].setVisible(self.rail_visible and c in visible)
+        """Push solo/mute/order/maximise onto the widgets.
+
+        Solo and mute pick the channels the mean averages as well as the
+        lanes the stack draws, so the mean is re-aimed here and redrawn
+        after the layout: `adjust_layout` only draws the panels *it*
+        revealed, and a mean panel that was already on screen is not one of
+        them -- it is the same panel with a different set of electrodes
+        behind it.
+        """
+        self.apply_mean_spectrogram()
+        visible = self.apply_lane_visibility()
         if self.current_channel not in visible and visible:
             self.current_channel = visible[0]
         self.update_rail()
         self.update_borders()
         self.adjust_layout(self.width(), self.height())
+        if self.mean_spec:
+            self.panels.update_plots()
+
+    def apply_lane_visibility(self) -> list:
+        """Show exactly the lanes `visible_channels()` names, and the rail
+        rows beside them.  Returns those channels.
+
+        Hiding the widget is what actually collapses a lane: `lane_geometry`
+        gives a row it is not drawing a minimum height of zero, but the
+        figure keeps the `setFixedHeight` of the last pass it *was* drawn
+        in, and a fixed height a hidden row still honours.  Measured at
+        1200x900 on the sixteen channel array: entering mean mode without
+        this left one 498 px panel over fifteen 120 px ghosts and a
+        scrollbar 1830 px long, on a mode whose whole point is that it fits
+        on one screen.
+        """
+        visible = self.visible_channels()
+        for c in range(len(self.figs)):
+            self.figs[c].setVisible(c in visible)
+            self.rail_rows[c].setVisible(self.rail_shown() and c in visible)
+        return visible
 
     def update_rail(self) -> None:
         for row in self.rail_rows:
@@ -2304,9 +2404,18 @@ class DataBrowser(QWidget):
         primary, and the channel rail runs a 2 px rule down its row.  In a
         sixteen lane stack the raised ground is the one that works at a
         glance, because it is the whole lane rather than a glyph in it.
+
+        No lane is marked while the mean spectrogram is showing.  There is
+        one lane and it is no channel, so "this is the one you selected" has
+        nothing to distinguish it from -- and marking it by whether the
+        focus happens to sit on the channel whose lane the mean borrowed
+        would put a raised ground and a bold caption on the same panel for a
+        reason the reader cannot see.  The focus itself is left where it is,
+        so leaving the mode gives it back.
         """
+        marked = -1 if self.mean_spec else self.current_channel
         for c, axs in enumerate(self.axs):
-            current = c == self.current_channel
+            current = c == marked
             for ax in axs:
                 if hasattr(ax, "set_current"):
                     ax.set_current(current)
@@ -4202,6 +4311,17 @@ class DataBrowser(QWidget):
                     return panel.axs[channel]
         return None
 
+    def spectrogram_plots(self):
+        """Every spectrogram plot of the stack, one per channel.
+
+        The panels themselves, not the lanes they happen to be in: mean mode
+        has to reach the hidden ones too, to take the average back off them.
+        """
+        for panel in self.panels.values():
+            if panel.is_spectrogram() and not panel.is_power():
+                for ax in panel.axs:
+                    yield ax
+
     def spectrogram_channels(self, channels: list[int]) -> list[int]:
         """Channels that get a spectrogram row.
 
@@ -4990,6 +5110,7 @@ class DataBrowser(QWidget):
         self.update_stretches(height)
         self.link_time_axis()
         self.align_time_axis()
+        self.schedule_axis_alignment()
         # fix full data plot:
         if self.datafig is not None:
             data_height = 5 * xheight // 2 if nrows <= 1 else 3 * xheight // 2
@@ -5019,6 +5140,27 @@ class DataBrowser(QWidget):
         # hidden ancestor can produce here harmless.
         for ax in revealed:
             ax.update_plot()
+
+    def schedule_axis_alignment(self) -> None:
+        """Line the axis up again once Qt has finished moving the lanes.
+
+        `align_time_axis` measures a lane's view box, and a lane's view box
+        is a `pyqtgraph.GraphicsView` central item, which is only re-fitted
+        when the widget itself resizes -- `fit_figure_layout` says as much
+        and leans on "the resize that is coming".
+
+        On a stack of sixteen a resize always is coming, because the scroll
+        area's content changed height; the mean spectrogram is the one mode
+        where it is not, and there the inline measurement was simply left
+        standing.  Measured at 1200x900 on the mean panel: F5 widened the
+        lane's view box from 1320 px to 1456 and the axis stayed at 1320,
+        so the ticks under a full-screen spectrogram were 136 px short of
+        it and stayed that way until the window was resized.
+
+        One turn of the event loop is enough, and the call is idempotent:
+        `align_time_axis` only writes the margins when they changed.
+        """
+        QTimer.singleShot(0, self.align_time_axis)
 
     def align_time_axis(self) -> None:
         """Line the shared time axis up with the lanes above it.
@@ -5610,14 +5752,17 @@ class DataBrowser(QWidget):
                         break
                 if self.current_channel not in show_selected_channels:
                     self.current_channel = show_selected_channels[-1]
-            visible = self.visible_channels()
+            # `show_channels` narrows what the mean averages, the same way
+            # solo and mute do - see `apply_channel_visibility`:
+            self.apply_mean_spectrogram()
+            self.apply_lane_visibility()
             for c in range(self.data.channels):
-                self.figs[c].setVisible(c in visible)
-                self.rail_rows[c].setVisible(self.rail_visible and c in visible)
                 self.acts.channels[c].setChecked(c in self.show_channels)
             self.update_rail()
             self.adjust_layout(self.width(), self.height())
             self.update_borders()
+            if self.mean_spec:
+                self.panels.update_plots()
 
     def toggle_channel(self, channel):
         if self.setting:
@@ -5680,6 +5825,21 @@ class DataBrowser(QWidget):
             self.show_cbars = cbars
         if fulldata is not None:
             self.show_fulldata = fulldata
+        # The mean lives inside the traces-off all-spectrograms mode and
+        # cannot outlive it.  A mean over the array beside one channel's
+        # waveform is two different pictures of two different things stacked
+        # in one lane, and with the spectrograms off there is nothing left
+        # to average at all -- so F2 and F3 drop it rather than leaving a
+        # toggle checked over a stack that stopped obeying it.
+        if self.mean_spec and (self.show_traces or self.show_specs <= 0):
+            self.mean_spec = False
+            self.traces_before_mean = False
+        self.apply_mean_spectrogram()
+        # `set_panels` is the one panel-level call that can change how many
+        # *lanes* there are, because the mean collapses sixteen onto one.
+        # Every other caller reaches the stack through
+        # `apply_channel_visibility`:
+        self.apply_lane_visibility()
         for panel in self.panels.values():
             if panel.is_trace():
                 panel.set_visible(self.show_traces)
@@ -5711,6 +5871,68 @@ class DataBrowser(QWidget):
         if self.show_specs == 0:
             self.show_traces = True
         self.set_panels()
+
+    def apply_mean_spectrogram(self) -> bool:
+        """Push the current mean state onto the spectrogram panels.
+
+        Every panel is told, not only the one on screen: a panel that keeps
+        an average it is no longer allowed to draw would put it back the
+        next time solo or mute made it visible again.
+
+        Returns True when a panel actually changed, which is the moment the
+        selection cue has to be redrawn: the mean borrows a lane and is no
+        channel, so which lane counts as the current one changes with it --
+        see `update_current_plot`.  It runs on every `set_panels`, so it
+        does that work only when there is work.
+        """
+        lane = self.mean_spec_lane()
+        channels = self.mean_channels()
+        changed = False
+        for ax in self.spectrogram_plots():
+            if ax.set_mean_channels(channels if ax.channel == lane else None):
+                changed = True
+        self.apply_rail_width()
+        if changed:
+            self.update_current_plot()
+        return changed
+
+    def set_mean_spectrogram(self, on: bool) -> None:
+        """Show one full-height mean spectrogram, or go back to the stack.
+
+        Turning it on turns the traces off, the way `toggle_traces` turns
+        the spectrograms on: this mode only means anything with the lanes
+        given over to spectrograms, and a shortcut that silently does
+        nothing outside its mode is a shortcut the reader stops trusting.
+        Turning it off puts the traces back only if this is what took them
+        away, so that pressing the key twice is a round trip from wherever
+        the reader started.
+        """
+        on = bool(on)
+        if on == self.mean_spec:
+            return
+        if on:
+            self.traces_before_mean = self.show_traces
+            self.mean_spec = True
+            self.show_traces = False
+            if self.show_specs <= 0:
+                self.show_specs = 1
+        else:
+            self.mean_spec = False
+            if self.traces_before_mean:
+                self.show_traces = True
+            self.traces_before_mean = False
+        self.set_panels()
+
+    def toggle_mean_spectrogram(self) -> None:
+        self.set_mean_spectrogram(not self.mean_spec)
+
+    def mean_spectrogram_message(self) -> str:
+        """What the status bar says about the mode that was just entered."""
+        if not self.mean_spec:
+            return "mean spectrogram off"
+        channels = self.mean_channels()
+        listed = ", ".join(f"{c:02d}" for c in sorted(channels))
+        return f"mean spectrogram over {len(channels)} channels: {listed}"
 
     def toggle_colorbars(self):
         self.show_cbars = not self.show_cbars

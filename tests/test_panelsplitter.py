@@ -75,8 +75,27 @@ def settle():
         app.processEvents()
 
 
-def build_window(app, directory, channels):
+RATE = 8000
+FRAMES = RATE * 4
+
+
+def tones(channels):
+    """One steady tone per channel, each at its own frequency.
+
+    Enough to give every lane something to draw, which is all a layout test
+    needs.  Anything that cares what the *channels* have in common -- the
+    mean spectrogram does -- passes its own signal instead.
+    """
+    signal = np.zeros((FRAMES, channels), dtype=np.float32)
+    for c in range(channels):
+        signal[:, c] = 0.1 * np.sin(np.arange(FRAMES) / (50.0 + c))
+    return signal
+
+
+def build_window(app, directory, channels, signal=None):
     """The whole application on a synthetic recording of `channels` channels.
+
+    `signal` is a (frames, channels) float array; `tones` is the default.
 
     Both persistence stores are redirected into `directory` first.  This file
     writes a preference -- the split is saved at the end of every gesture --
@@ -87,11 +106,9 @@ def build_window(app, directory, channels):
     import audian.audian as audian_app
     from audian.plugins import Plugins
 
-    rate = 8000
-    frames = rate * 4
-    signal = np.zeros((frames, channels), dtype=np.float32)
-    for c in range(channels):
-        signal[:, c] = 0.1 * np.sin(np.arange(frames) / (50.0 + c))
+    rate = RATE
+    if signal is None:
+        signal = tones(channels)
     recording = directory / "rec.wav"
     soundfile.write(recording, signal, rate)
 
@@ -112,13 +129,13 @@ def build_window(app, directory, channels):
     return window
 
 
-def open_stack(app, directory, channels):
+def open_stack(app, directory, channels, signal=None):
     """A browser showing both panels, and the teardown that follows it."""
     import audian.audian as audian_app
 
     original = audian_app.settings_path
     home = Path(QSettings("audian", "audian").fileName()).parent.parent
-    window = build_window(app, directory, channels)
+    window = build_window(app, directory, channels, signal)
     view = window.browser()
     view.set_panels(specs=1)
     pump(1.0)

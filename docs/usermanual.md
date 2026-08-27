@@ -211,6 +211,40 @@ Right-click and drag are unaffected: dragging still selects a region and
 right-click still opens the region menu.
 
 
+## The mean spectrogram
+
+`F2` gives the lanes over to spectrograms and takes the traces away. On a
+sixteen channel array that is sixteen readable spectrograms, 1952 px of
+stack in a 500 px viewport, four on screen at a time — and a hundred
+milliseconds of `decibel()` every time the view leaves what is uploaded.
+
+`Shift+F2` replaces them with **one** spectrogram, full height, of the mean
+power over the channels. It costs 8.7 ms instead of 103, the stack is 500 px
+with nothing left to scroll, and on an electrode array it is sharper than
+any of the panels it replaces: averaging pushes the noise floor down while a
+signal that is coherent across the array stays where it is. Measured on a
+16 channel eel recording, 99.9th percentile minus median is 23.50 dB for one
+channel and 46.25 dB for the mean.
+
+The panel is captioned `MEAN 00-15` rather than with a channel number, and
+the colour bar is refitted — same noise floor, twice the span. The pointer
+readout under it reports the same average the picture is drawn from.
+
+**Solo and mute choose what is averaged.** Solo channels 3 and 5 and the
+caption becomes `MEAN 03,05`; mute the electrodes that were not in the water
+and they leave the average. The channel rail goes off screen while the mean
+is showing — its rows are per-channel controls and there are no per-channel
+lanes left — so narrow the selection first, or press `Shift+F2` again to get
+the rail back. Your `F7` setting is not touched either way.
+
+`Shift+F2` from the ordinary view turns the traces off on the way in and
+puts them back on the way out, so pressing it twice returns you exactly
+where you started. Turning the traces back on with `F2`, or the
+spectrograms off with `F3`, leaves the mode: a mean over the array beside
+one channel's waveform would be two pictures of two different things in one
+lane.
+
+
 ## Amplitude operations and the Y mode
 
 Reset (`Shift+V`), Center (`C`), Fit Y (`v`) and the amplitude zoom steps
