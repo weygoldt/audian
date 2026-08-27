@@ -16,7 +16,7 @@ try:
 except ImportError:
     from PyQt5.QtCore import pyqtSignal as Signal
 from PyQt5.QtCore import Qt, QEvent, QPoint, QRectF, QSettings, QSize, QTimer
-from PyQt5.QtGui import QCursor, QIcon, QKeySequence, QPainter, QPixmap
+from PyQt5.QtGui import QCursor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout
 from PyQt5.QtWidgets import QLayout
@@ -24,9 +24,9 @@ from PyQt5.QtWidgets import QScrollArea, QSplitter, QFrame, QSlider
 from PyQt5.QtWidgets import QLineEdit, QToolButton
 from PyQt5.QtWidgets import QSizePolicy, QSpacerItem, QAbstractSpinBox
 from PyQt5.QtWidgets import QAction, QMenu, QComboBox
-from PyQt5.QtWidgets import QLabel, QTableView
+from PyQt5.QtWidgets import QLabel
 from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QFileDialog
-from PyQt5.QtWidgets import QAbstractItemView, QGraphicsRectItem
+from PyQt5.QtWidgets import QGraphicsRectItem
 from audioio import fade
 from audioio import update_starttime
 from audioio import bext_history_str, add_history
@@ -50,9 +50,26 @@ from .selectviewbox import SelectViewBox
 from .timeaxisitem import TimeAxisItem
 from .timeplot import TICK_VALUES_MIN_HEIGHT, TimePlot
 from .spectrogramplot import SpectrogramPlot
-from .markerdata import colors, color_value
-from .markerdata import MarkerLabel, MarkerLabelsModel
-from .markerdata import MarkerData, MarkerDataModel
+from .labels import (
+    DEFAULT_CATEGORIES,
+    Label,
+    LabelSet,
+    categories_from_settings,
+    categories_to_settings,
+    sidecar_path,
+)
+
+# `layers.KIND_POINT` below is the same string for the same idea in the
+# immutable half; aliased rather than renamed so neither module has to know
+# about the other.
+from .labels import KIND_POINT as LABEL_POINT
+from .labeloverlay import (
+    CategoryDialog,
+    CategoryStrip,
+    LabelOverlay,
+    LabelTable,
+    category_tip,
+)
 from .eventoverlay import (
     LEGEND_H,
     LEGEND_W,
@@ -181,14 +198,6 @@ def annotation_chip_row(track: str) -> int:
 pg.setConfigOption("useNumba", True)
 
 
-def marker_tip(x, y, data):
-    s = ""
-    if data:
-        s += data + "\n"
-    s += "time=" + secs_to_str(x)
-    return s
-
-
 def frame_widget(widget: QWidget) -> None:
     """Give a container widget the 1px hairline frame of the design system."""
     theme.frame(widget)
@@ -255,6 +264,19 @@ class ParameterGroup(QWidget):
             self.grid.addWidget(w, self.rows, 1 + i)
         self.rows += 1
         return [caption, *widgets]
+
+    def add_span_row(self, widget: QWidget, columns: int = 2) -> QWidget:
+        """Add a captionless row whose widget takes the group's whole width.
+
+        For a field that is a strip of controls naming themselves, and whose
+        caption would only repeat the group title.  What it buys is the
+        caption column: measured at a 1482x900 window, the LABELS group is
+        317 px and its field column 198, so spanning is 80 px more of strip
+        on every line of it.
+        """
+        self.grid.addWidget(widget, self.rows, 0, 1, columns)
+        self.rows += 1
+        return widget
 
     #: Qt's "no maximum", for releasing a previous setFixedHeight.
     UNBOUNDED = 16777215
@@ -727,6 +749,15 @@ class DataBrowser(QWidget):
     #: settings can be recognised rather than half-read.
     ANNOTATION_SETTING_VERSION = 1
 
+    #: Key the hand-made label *categories* are saved under.  The labels
+    #: themselves are not a preference and never go here: they belong to one
+    #: recording and live in a CSV beside it (`labels.sidecar_path`).  The
+    #: vocabulary is the other way round -- the same reader labels many
+    #: recordings with the same words.
+    LABEL_SETTING = "labels"
+    #: Bumped when the shape of that value changes.
+    LABEL_SETTING_VERSION = 1
+
     #: Key the trace / spectrogram split is saved under.  One key holding one
     #: number per F3 preset, for the same reason as above.
     #:
@@ -774,6 +805,10 @@ class DataBrowser(QWidget):
     MODE_ANALYZE = 2
     MODE_SAVE = 3
     MODE_ASK = 4
+    #: label the selection with the current category, and keep labelling.
+    #: The mode a reader working through a recording stays in; the one-off
+    #: is the "Label as" submenu of MODE_ASK.
+    MODE_LABEL = 5
 
     #: Play only the current channel, in mono.
     AUDIO_SELECTED = "selected"
@@ -977,15 +1012,36 @@ class DataBrowser(QWidget):
 
         # cross hair:
         self.cross_hair = False
-        self.marker_data = MarkerData()
-        self.marker_model = MarkerDataModel(self.marker_data)
-        self.marker_labels = []
-        self.marker_labels.append(MarkerLabel("start", "s", "yellow"))
-        self.marker_labels.append(MarkerLabel("end", "e", "blue"))
-        self.marker_labels_model = MarkerLabelsModel(
-            self.marker_labels, self.acts, self
+
+        # labels: the marks this reader makes, in a sidecar CSV beside the
+        # recording.  Deliberately a separate store, file and parameter-bar
+        # group from the annotations below: one is a claim the log makes,
+        # the other a claim the reader makes, and the provenance of a mark
+        # must not be a flag on a shared row.  The vocabulary is a
+        # preference and is restored before any file is open, so the bar can
+        # show it whether or not this recording has any labels yet.
+        self.labels = LabelSet(self.restore_label_categories())
+        #: the category the next drag writes; "" while the vocabulary is empty
+        self.current_category = (
+            self.labels.categories[0].name if self.labels.categories else ""
         )
-        self.marker_orig_acts = []
+        self.label_overlays = []
+        #: QActions bound to the digit keys, one per category, rebuilt
+        #: whenever the vocabulary changes
+        self.category_acts = []
+        self.label_group = None
+        self.label_chipbox = None
+        self.label_chips = {}
+        self.label_showw = None
+        self.label_statusw = None
+        self.label_undow = None
+        #: a sidecar write is queued for the end of this turn of the loop
+        self.label_save_pending = False
+        #: the last message `save_labels` produced, so the bar can say
+        #: "save failed" rather than silently going back to "saved"
+        self.label_error = ""
+        self.label_dialog = None
+        self.label_table_dialog = None
 
         # annotations: events read from a CSV and drawn over every lane.
         # The layer is created up front and stays empty until a table is
@@ -1061,11 +1117,6 @@ class DataBrowser(QWidget):
         # nested lists (channel, panel):
         self.axs = []  # all plots
         self.axgs = []  # plots with grids
-        # lists with marker labels and regions:
-        self.trace_labels = []  # labels on traces
-        self.trace_region_labels = []  # regions with labels on traces
-        self.spec_labels = []  # labels on spectrograms
-        self.spec_region_labels = []  # regions with labels on spectrograms
         # full traces:
         self.datafig = None
         # colors and fonts are owned by theme.apply()
@@ -1195,7 +1246,6 @@ class DataBrowser(QWidget):
         # is quietly missing its last file looks completely normal.
         for message in getattr(self.data, "load_warnings", []):
             self.notify("warning", message)
-        self.marker_data.file_path = self.data.file_path
 
         # add traces to menu:
         self.trace_acts = []
@@ -1252,18 +1302,6 @@ class DataBrowser(QWidget):
             # empty by default - the rail badge already shows the index:
             self.channel_names.setdefault(c, "")
 
-        # load marker data:
-        locs, labels = self.data.data.markers()
-        self.marker_data.set_markers(locs, labels, self.data.rate)
-        if len(labels) > 0:
-            lbls = np.unique(labels[:, 0])
-            for i, lbl in enumerate(lbls):
-                self.marker_labels.append(
-                    MarkerLabel(
-                        lbl, lbl[0].lower(), list(colors.keys())[i % len(colors)]
-                    )
-                )
-
         # make panels:
         self.panels.fill(self.data)
         self.panels.insert_spacers()
@@ -1275,11 +1313,6 @@ class DataBrowser(QWidget):
         # nested lists (channel, panel):
         self.axs = []  # all plots
         self.axgs = []  # plots with grids
-        # lists with marker labels and regions:
-        self.trace_labels = []  # labels on traces
-        self.trace_region_labels = []  # regions with labels on traces
-        self.spec_labels = []  # labels on spectrograms
-        self.spec_region_labels = []  # regions with labels on spectrograms
         self.audio_markers = []  # vertical line showing position while playing
         # font size:
         xwidth = self.fontMetrics().averageCharWidth()
@@ -1355,20 +1388,6 @@ class DataBrowser(QWidget):
                     panel.add_ax(row, axt)
                     panel.add_traces(c, self.data)
                     self.plot_ranges.add_plot(axt)
-                    # add marker labels:
-                    labels = []
-                    for mlabel in self.marker_labels:
-                        label = pg.ScatterPlotItem(
-                            size=theme.S12,
-                            hoverSize=2 * theme.S12,
-                            hoverable=True,
-                            pen=pg.mkPen(None),
-                            brush=theme.brush(color_value(mlabel.color)),
-                        )
-                        axt.addItem(label)
-                        labels.append(label)
-                    self.trace_labels.append(labels)
-                    self.trace_region_labels.append([])
                 # spectrogram:
                 elif panel.is_spectrogram():
                     axs = SpectrogramPlot(
@@ -1393,18 +1412,6 @@ class DataBrowser(QWidget):
                     axs.polish()
                     self.axgs[-1].append(axs)
                     self.axs[-1].append(axs)
-                    # add marker labels:
-                    labels = []
-                    for mlabel in self.marker_labels:
-                        label = pg.ScatterPlotItem(
-                            size=theme.S12,
-                            pen=pg.mkPen(None),
-                            brush=theme.brush(color_value(mlabel.color)),
-                        )
-                        axs.addItem(label)
-                        labels.append(label)
-                    self.spec_labels.append(labels)
-                    self.spec_region_labels.append([])
                 # power:
                 elif panel.is_power():
                     # was already set up with spectrogram
@@ -1464,6 +1471,13 @@ class DataBrowser(QWidget):
         # after the navigator exists: its rows are one of the three surfaces
         # an annotation is drawn on, so there is one attach pass, not two
         self.attach_annotation_overlays()
+        # the labels: overlays first, then the sidecar, so the read that
+        # bumps the revision has something to repaint
+        self.attach_label_overlays()
+        self.load_labels()
+        if self.label_group is not None:
+            self.label_group.setVisible(True)
+        self.update_label_status()
         # the joins are the loader's own knowledge and need no bundle, so
         # they are drawn as soon as there are plots to draw them on
         self.attach_join_markers()
@@ -1499,54 +1513,6 @@ class DataBrowser(QWidget):
                     act.blockSignals(True)
                     act.setChecked(self.data.is_visible(name))
                     act.blockSignals(False)
-
-        # add marker data to plot:
-        labels = [m.label for m in self.marker_labels]
-        for t1, ddt, ls, ts in zip(
-            self.marker_data.times,
-            self.marker_data.delta_times,
-            self.marker_data.labels,
-            self.marker_data.texts,
-        ):
-            lidx = labels.index(ls)
-            for c, tl in enumerate(self.trace_labels):
-                ds = ts if ts else ls
-                t0 = t1 - ddt
-                idx1 = int(t1 * self.data.rate)
-                if ddt > 0:
-                    mcolor = color_value(self.marker_labels[lidx].color)
-                    region = pg.LinearRegionItem(
-                        (t0, t1),
-                        orientation="vertical",
-                        pen=theme.pen(mcolor),
-                        brush=theme.brush(mcolor, 0.35),
-                        movable=False,
-                        span=(0.02, 0.05),
-                    )
-                    region.setZValue(-10)
-                    self.panels["trace"].add_item(region, c, False)
-                    # text = pg.TextItem(ds, color='green', anchor=(0, 0))
-                    # text.setPos(t0, 0)
-                    # self.panels['trace'].add_item(text, c, False)
-                    self.trace_region_labels[c].append(region)
-                else:
-                    if idx1 >= len(self.data.data):
-                        idx1 = len(self.data.data) - 1
-                    if idx1 >= 0:
-                        tl[lidx].addPoints(
-                            (t1,),
-                            (self.data.data[idx1, c],),
-                            data=(ds,),
-                            tip=marker_tip,
-                        )
-            for c, sl in enumerate(self.spec_labels):
-                if ddt > 0:
-                    # TODO: self.spec_region_labels
-                    sl[lidx].addPoints(
-                        (t0, t1), (0.0, 0.0), data=(f"start: {ds}", f"end: {ds}")
-                    )
-                else:
-                    sl[lidx].addPoints((t1,), (0.0,), data=(ds,), tip=marker_tip)
 
         # fulltrace data:
         self.datafig.prepare()
@@ -1994,8 +1960,10 @@ class DataBrowser(QWidget):
             self.audiohetfw.setVisible(False)
         groups.append(group)
 
-        # annotations:
+        # annotations, then the labels: read-only first, writable second, in
+        # the reading order of the bar
         groups.append(self.setup_annotation_group())
+        groups.append(self.setup_label_group())
 
         # One band, not three boxes: equal columns on a fixed gutter, every
         # caption on one baseline and every frame the same height, so the
@@ -2093,6 +2061,12 @@ class DataBrowser(QWidget):
         self.build_annotation_chips()
         self.update_annotation_badge()
         self.redraw_annotations()
+        # the same for the labels: their pens carry a resolved
+        # `theme.marker_color` and the chip swatches are baked pixmaps
+        for overlay in self.label_overlays:
+            overlay.polish()
+        self.build_category_chips()
+        self.update_label_status()
         # style_plotitem() has just reset every view box to bg.plot:
         self.update_current_plot()
 
@@ -2654,84 +2628,21 @@ class DataBrowser(QWidget):
         dialog.show()
 
     def set_cross_hair(self, checked):
+        """Turn the readout cross hair on or off.
+
+        It is also the gesture that places a *point* label: with the cross
+        hair on, a point category's digit key puts one exactly where the
+        pointer is (`category_key`).  Nothing is bound or unbound here --
+        the digit keys are live either way and say what they need -- so this
+        is only the readout.
+        """
         self.cross_hair = checked
-        if self.cross_hair:
-            # disable existing key shortcuts:
-            self.marker_orig_acts = []
-            for mlabel in self.marker_labels:
-                ks = QKeySequence(mlabel.key_shortcut)
-                for a in dir(self.acts):
-                    act = getattr(self.acts, a)
-                    if isinstance(act, QAction) and act.shortcut() == ks:
-                        self.marker_orig_acts.append((act.shortcut(), act))
-                        act.setShortcut(QKeySequence())
-                        break
-            # setup marker actions:
-            for mlabel in self.marker_labels:
-                if mlabel.action is None:
-                    mlabel.action = QAction(mlabel.label, self)
-                    mlabel.action.triggered.connect(
-                        lambda x, label=mlabel.label: self.store_marker(label)
-                    )
-                    self.addAction(mlabel.action)
-                mlabel.action.setShortcut(mlabel.key_shortcut)
-                mlabel.action.setEnabled(True)
-            self.plot_ranges.clear_marker()
-            self.plot_ranges.clear_stored_marker()
-        else:
+        self.plot_ranges.clear_marker()
+        self.plot_ranges.clear_stored_marker()
+        if not self.cross_hair:
             for field in ("t", "dt", "a", "f", "p"):
                 self.set_readout(field, None)
-            self.plot_ranges.clear_marker()
-            self.plot_ranges.clear_stored_marker()
             self.plot_ranges.update_crosshair()
-            # disable marker actions:
-            for mlabel in self.marker_labels:
-                if mlabel.action is not None:
-                    mlabel.action.setEnabled(False)
-            # restore key shortcuts:
-            for key, act in self.marker_orig_acts:
-                act.setShortcuts(key)
-            self.marker_orig_acts = []
-
-    def set_marker(self):
-        pass
-        """
-        if not self.marker_ax is None and not self.marker_time is None:
-            if not self.marker_ampl is None:
-                self.marker_ax.prev_marker.setData((self.marker_time,),
-                                                   (self.marker_ampl,))
-            if not self.marker_freq is None:
-                self.marker_ax.prev_marker.setData((self.marker_time,),
-                                                   (self.marker_freq,))
-        """
-
-    def store_marker(self, label=""):
-        """
-        self.marker_model.add_data(self.marker_channel,
-                                   self.marker_time, self.marker_ampl,
-                                   self.marker_freq,
-                                   self.marker_power,self.delta_time,
-                                   self.delta_ampl, self.delta_freq,
-                                   self.delta_power, label)
-        # add new label point to scatter plots:
-        labels = [l.label for l in self.marker_labels]
-        if len(label) > 0 and label in labels and \
-           self.marker_time is not None:
-            lidx = labels.index(label)
-            for c, tl in enumerate(self.trace_labels):
-                if c == self.marker_channel and self.marker_ampl is not None:
-                    tl[lidx].addPoints((self.marker_time,),
-                                      (self.marker_ampl,),
-                                       tip=marker_tip)
-                else:
-                    tidx = int(self.marker_time*self.data.rate)
-                    tl[lidx].addPoints((self.marker_time,),
-                                       (self.data.data[tidx, c],),
-                                       tip=marker_tip)
-            for c, sl in enumerate(self.spec_labels):
-                y = 0.0 if self.marker_freq is None else self.marker_freq
-                sl[lidx].addPoints((self.marker_time,), (y,))
-        """
 
     def show_hover_value(self, channel: int, time: float, value: float) -> None:
         """Report a trace hover to the status bar.
@@ -2779,6 +2690,16 @@ class DataBrowser(QWidget):
         # find axes and position:
         self.hover_panel = None
         for panel in self.panels.values():
+            # A spacer is a `PanelSplitter`, a bare pg.GraphicsWidget with no
+            # view box, and its ax_spec is the word "spacer" -- so `x()` is
+            # 's' and `y()` is 'p', which makes `is_ypower()` spuriously true.
+            # With the cross hair on, the pointer in the grab band raised
+            # `AttributeError: 'GraphicsLayoutWidget' object has no attribute
+            # 'mapSceneToView'` below, because `getViewBox()` on a widget that
+            # has none returns the graphics view.  Measured on a four channel
+            # stack: the top 3 px of the 7 px band, on every move.
+            if panel.is_spacer():
+                continue
             if not panel.is_used() or not panel.is_visible(channel):
                 continue
             ax = panel.axs[channel]
@@ -2909,38 +2830,634 @@ class DataBrowser(QWidget):
             # (evt[0].modifiers() & Qt.ControlModifier) == Qt.ControlModifier:
             self.plot_ranges.store_marker()
 
-    def label_editor(self):
-        self.marker_labels_model.set(self.marker_labels)
-        self.marker_labels_model.edit(self)
+    # --- labels ----------------------------------------------------------
+    #
+    # The mutable half.  Everything here writes; nothing in the annotation
+    # section below it does.  The two are kept apart on purpose -- see
+    # `labels.py`.
 
-    def marker_table(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Audian marker table")
-        dialog.setWindowModality(Qt.NonModal)
-        dialog.setAttribute(Qt.WA_DeleteOnClose)
-        vbox = QVBoxLayout(dialog)
-        vbox.setContentsMargins(theme.S12, theme.S12, theme.S12, theme.S12)
-        vbox.setSpacing(theme.S8)
-        view = QTableView(dialog)
-        view.setModel(self.marker_model)
-        view.setFont(theme.font_mono())
-        view.resizeColumnsToContents()
-        view.setSelectionMode(QAbstractItemView.ContiguousSelection)
-        vbox.addWidget(view)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Close | QDialogButtonBox.Save | QDialogButtonBox.Reset,
-            dialog,
+    def label_settings(self) -> dict:
+        """The saved label preferences, or {} when they are from another build.
+
+        Whole-value-or-nothing, the rule `annotation_settings` states: a value
+        written under another shape holds keys this build would map onto the
+        wrong things, and a reader who finds their vocabulary half restored
+        has no way to tell that from a bug.
+        """
+        from .audian import settings
+
+        saved = settings().get(DataBrowser.LABEL_SETTING)
+        if not isinstance(saved, dict):
+            return {}
+        version = saved.get("version")
+        if version != DataBrowser.LABEL_SETTING_VERSION:
+            log.warning(
+                "ignoring %s settings written in version %r; this audian "
+                "writes version %d",
+                DataBrowser.LABEL_SETTING,
+                version,
+                DataBrowser.LABEL_SETTING_VERSION,
+            )
+            return {}
+        return saved
+
+    def restore_label_categories(self) -> tuple:
+        """The vocabulary this reader last used, or the defaults.
+
+        Called from `__init__`, before any file is open: the categories are a
+        preference and belong to the reader rather than to the recording, so
+        the parameter bar can show them with nothing loaded.
+        """
+        saved = categories_from_settings(self.label_settings().get("categories"))
+        return tuple(saved) if saved else DEFAULT_CATEGORIES
+
+    def save_label_settings(self) -> None:
+        """Write the vocabulary to the settings file.
+
+        The categories only.  Which category is current is not saved: it is
+        where the reader's hand is right now, not a preference, and one
+        restored from a previous session would make the first drag of the
+        next one write a word nobody chose.
+        """
+        from .audian import save_setting
+
+        save_setting(
+            DataBrowser.LABEL_SETTING,
+            {
+                "version": DataBrowser.LABEL_SETTING_VERSION,
+                "categories": categories_to_settings(self.labels.categories),
+            },
         )
-        buttons.rejected.connect(dialog.reject)
-        buttons.button(QDialogButtonBox.Reset).clicked.connect(self.marker_model.clear)
-        buttons.button(QDialogButtonBox.Save).clicked.connect(
-            lambda x: self.marker_model.save(self)
-        )
-        vbox.addWidget(buttons)
-        # no maximum width: a wide marker table must stay readable, and a
-        # width cap fights a tiling compositor.
-        dialog.adjustSize()
+
+    # -- the sidecar --
+
+    def labels_path(self) -> Path:
+        """Where this recording's hand-made labels are kept.
+
+        Off `recording_path`, which is file 0 of a split recording -- so a
+        reader who later opens file 2 on its own will not find them.  The
+        bundle convention solves that by listing every file in
+        ``[alignment].recording_files``; a header in a plain CSV would cost
+        the one property this file has, which is that anything can read it.
+        Named after the recording as it was opened, and left there.
+        """
+        return sidecar_path(self.recording_path())
+
+    def load_labels(self) -> None:
+        """Read the sidecar of the recording just opened.
+
+        A missing file is the state every recording starts in and is silent.
+        Anything else the reader is told about: a category the settings did
+        not know has just been added to their vocabulary, and rows that named
+        no category or no start time were dropped rather than drawn at t=0.
+        """
+        path = self.labels_path()
+        report = self.labels.read(path)
+        self.sync_category_state()
+        if report.error:
+            self.notify("error", f'could not read "{path.name}": {report.error}')
+            return
+        if report.dropped:
+            # and the store will now refuse to write over that file --
+            # `LabelSet.blocked` says why.  Reported as an error rather than
+            # a warning because labelling this recording is now read-only
+            # until the reader deals with the file.
+            self.notify(
+                "error",
+                f"{report.dropped} label row(s) of "
+                f'"{path.name}" name no category or no start time; '
+                "labels for this recording will not be saved until it is "
+                "fixed or moved away",
+            )
+        if report.added:
+            self.notify(
+                "info",
+                f"added {', '.join(report.added)} to the label categories, "
+                f'from "{path.name}"',
+            )
+            self.save_label_settings()
+        if report.read:
+            self.notify("info", f'{report.read} labels from "{path.name}"')
+
+    def schedule_label_save(self) -> None:
+        """Queue one sidecar write for the end of this turn of the loop.
+
+        Debounced the way `schedule_annotation_save` is, and for a stronger
+        reason: removing a category removes every label under it, so one
+        click can be fifty mutations, and each one would otherwise rewrite
+        the file.
+        """
+        if self.label_save_pending:
+            return
+        self.label_save_pending = True
+        QTimer.singleShot(0, self.save_labels)
+
+    def save_labels(self) -> None:
+        """Write the sidecar now, and say so in the parameter bar.
+
+        Hand-made labels are the only user-authored data this application
+        holds, so a failed write reaches the reader rather than a debug log:
+        `save_setting` swallowing an OSError costs a preference, this one
+        would cost their work.  `LabelSet.save` writes atomically and removes
+        the sidecar when the last label goes.
+        """
+        self.label_save_pending = False
+        if self.data is None or self.data.file_path is None:
+            return
+        error = self.labels.save(self.labels_path())
+        if error and error != self.label_error:
+            self.notify("error", f"could not save labels: {error}")
+        self.label_error = error
+        self.update_label_status()
+
+    def flush_labels(self) -> None:
+        """Write any pending labels before this browser goes away.
+
+        There is no `closeEvent` anywhere in audian and `Audian.quit` never
+        goes through Qt's close machinery at all, so both exit paths call
+        this by hand.  A queued zero-timer save would otherwise be dropped
+        with the event loop, and the last label of a session is exactly the
+        one a reader has not written down anywhere else.
+        """
+        if self.labels.dirty or self.label_save_pending:
+            self.save_labels()
+
+    # -- the overlays --
+
+    def attach_label_overlays(self) -> None:
+        """Give every trace and spectrogram plot a label overlay.
+
+        Not the navigator.  That strip shows the whole session at once -- a
+        one second label in an hour of recording is a third of a pixel there
+        -- and it is not a surface anything can be drawn on, so a mark on it
+        would be a mark the reader cannot check.
+        """
+        self.label_overlays = []
+        for panel in self.panels.values():
+            if panel.is_spacer() or panel.is_power():
+                continue
+            if panel.is_trace():
+                surface = SURFACE_TRACE
+            elif panel.is_spectrogram():
+                surface = SURFACE_SPECTROGRAM
+            else:
+                continue
+            for ax in panel.axs:
+                self.label_overlays.append(LabelOverlay(ax, self.labels, surface))
+
+    def redraw_labels(self) -> None:
+        """Repaint every lane's labels, whatever the view state is.
+
+        The overlays gate their redraw on `LabelSet.revision` *and* the view
+        range, so a lane that did not move redraws only because this drops
+        its last-drawn state first.
+        """
+        for overlay in self.label_overlays:
+            overlay.invalidate()
+            overlay.update_plot()
+
+    def set_labels_visible(self, on: bool) -> None:
+        """Take the labels off the lanes for a moment, or put them back."""
+        for overlay in self.label_overlays:
+            overlay.set_visible(on)
+        if self.label_showw is not None and self.label_showw.isChecked() != bool(on):
+            blocked = self.label_showw.blockSignals(True)
+            self.label_showw.setChecked(bool(on))
+            self.label_showw.blockSignals(blocked)
+
+    def labels_visible(self) -> bool:
+        return bool(self.label_overlays and self.label_overlays[0].visible)
+
+    def toggle_labels(self) -> None:
+        self.set_labels_visible(not self.labels_visible())
+
+    # -- the vocabulary --
+
+    def sync_category_state(self) -> None:
+        """Put the current category, the digit keys and the chips back in step.
+
+        Called after anything changes the vocabulary: the editor, a CSV that
+        named a category the settings did not know, or a category being
+        removed out from under the one that was current.
+        """
+        names = [c.name for c in self.labels.categories]
+        if self.current_category not in names:
+            self.current_category = names[0] if names else ""
+        self.rebuild_category_actions()
+        self.build_category_chips()
+        self.redraw_labels()
+
+    def rebuild_category_actions(self) -> None:
+        """Bind the digit keys to the first nine categories.
+
+        Plain digits, which nothing else in audian uses: channels are
+        ``Alt+<n>`` and selection is ``Ctrl+<n>``, so 1-9 were free at every
+        level.  Nine and not ten, because a vocabulary is read as a list
+        starting at one and a category on ``0`` would be the tenth entry
+        under the first key.
+
+        Rebuilt rather than re-labelled: a category can be renamed, removed
+        or reordered in the editor, and an action left bound to the old name
+        would write a word the vocabulary no longer has.
+        """
+        for act in self.category_acts:
+            self.removeAction(act)
+            act.setParent(None)
+            act.deleteLater()
+        self.category_acts = []
+        for i, category in enumerate(self.labels.categories[:9]):
+            act = QAction(category.name, self)
+            act.setShortcut(str(i + 1))
+            act.setShortcutContext(Qt.WindowShortcut)
+            act.triggered.connect(
+                lambda _checked=False, name=category.name: self.category_key(name)
+            )
+            self.addAction(act)
+            self.category_acts.append(act)
+
+    @staticmethod
+    def category_key_for(index: int) -> str:
+        """The digit that picks category `index`, or "" past the ninth."""
+        return str(index + 1) if index < 9 else ""
+
+    def set_current_category(self, name: str) -> None:
+        """Choose what the next drag writes."""
+        if self.labels.category(name) is None:
+            return
+        self.current_category = name
+        self.update_category_chips()
+
+    def category_key(self, name: str) -> None:
+        """What a category's digit key does.
+
+        It picks the category.  And, because a point has no extent to drag,
+        it *places* one when the current category is a point category and the
+        cross hair is on -- which is the gesture requirement 3 asks for and
+        the only one that snaps to a single sample.  With the cross hair off
+        it only picks, and says how to place one, so the key never silently
+        does nothing.
+        """
+        category = self.labels.category(name)
+        if category is None:
+            return
+        self.set_current_category(name)
+        if not category.is_point():
+            return
+        if not self.cross_hair:
+            self.notify(
+                "info",
+                f"{name} is a point category -- turn the cross hair on "
+                f"(Ctrl+C) and press {name}'s key to place one",
+            )
+            return
+        self.add_point_label()
+
+    def edit_label_categories(self) -> None:
+        """Open the category editor (Ctrl+L).
+
+        One dialog at a time, and parented: an unparented top level window is
+        tiled by the compositor this fork's user runs.
+        """
+        if self.label_dialog is not None:
+            self.label_dialog.raise_()
+            return
+        dialog = CategoryDialog(self.labels, self)
+        self.label_dialog = dialog
+
+        def finished(result=0):
+            self.label_dialog = None
+            if result != QDialog.Accepted:
+                return
+            self.sync_category_state()
+            self.save_label_settings()
+            if dialog.dropped:
+                self.notify(
+                    "info", f"removed label categories: {', '.join(dialog.dropped)}"
+                )
+            self.schedule_label_save()
+            self.update_label_status()
+
+        dialog.finished.connect(finished)
         dialog.show()
+
+    def show_label_table(self) -> None:
+        """Open the list of labels (Ctrl+M), where a label is removed."""
+        if self.label_table_dialog is not None:
+            self.label_table_dialog.raise_()
+            return
+
+        def changed():
+            self.redraw_labels()
+            self.schedule_label_save()
+            self.update_label_status()
+
+        dialog = LabelTable(self.labels, self, on_change=changed)
+        self.label_table_dialog = dialog
+        dialog.finished.connect(lambda _r=0: setattr(self, "label_table_dialog", None))
+        dialog.show()
+
+    # -- making a label --
+
+    def label_from_region(self, channel, vbox, rect) -> bool:
+        """Turn one rubber-band drag into a label.  False when it cannot.
+
+        `rect` is already in data coordinates: seconds on x, and on a
+        spectrogram **Hz on y, with `top()` the LOW frequency** -- the view
+        box y-flips, so the mapped rect's top edge is its numerically smaller
+        one.  Measured on a 0-4000 Hz lane at 1200x900: a drag asking for
+        1000 -> 2600 Hz arrived as ``top=983.1 bottom=2610.2``, and dragging
+        the same box in the opposite direction gave the identical rect.  Get
+        this the wrong way round and every label's band is inverted with
+        nothing on screen to say so.
+
+        On a trace there is no frequency to store.  That y axis is amplitude,
+        and writing ``0..Nyquist`` instead would be a claim that the signal
+        fills the band.
+        """
+        panel = self.panels.get_panel(vbox)
+        if panel is None or not panel.is_time():
+            return False
+        category = self.labels.category(self.current_category)
+        if category is None:
+            self.notify("warning", "no label category yet -- add one with Ctrl+L")
+            return False
+        t0, t1 = float(rect.left()), float(rect.right())
+        if t1 < t0:
+            t0, t1 = t1, t0
+        f0 = f1 = None
+        if panel.is_spectrogram():
+            f0, f1 = float(rect.top()), float(rect.bottom())
+            if f1 < f0:
+                f0, f1 = f1, f0
+        ax = panel.axs[channel] if channel < len(panel.axs) else None
+        self.store_label(category, ax, channel, t0, t1, f0, f1)
+        return True
+
+    def store_label(self, category, ax, channel, t0, t1, f0, f1) -> None:
+        """Add one label of `category`, and start the save that follows it.
+
+        A label made on the mean spectrogram carries **no channel**: that
+        panel is an average over the whole selected array and is no electrode
+        at all, so naming one would be a claim nobody made.  Every other
+        label carries the lane it was drawn on, which is what makes "there
+        was a discharge at 12.3 s, 400-900 Hz" into a statement about an
+        electrode.
+
+        A point category takes the low corner of whatever was dragged -- the
+        earliest time and, on a spectrogram, the lowest frequency.  A point
+        has no extent, so there is nothing else the drag could mean, and
+        refusing the gesture would leave the mode doing nothing.
+        """
+        mean = getattr(ax, "mean_channels", None) if ax is not None else None
+        stored_channel = None if mean else int(channel)
+        if category.is_point():
+            label = Label(
+                category=category.name,
+                kind=LABEL_POINT,
+                channel=stored_channel,
+                t0=t0,
+                t1=None,
+                f0=f0,
+                f1=f0,
+            )
+        else:
+            label = Label(
+                category=category.name,
+                kind=category.kind,
+                channel=stored_channel,
+                t0=t0,
+                t1=t1,
+                f0=f0,
+                f1=f1,
+            )
+        self.labels.add(label)
+        self.redraw_labels()
+        self.refresh_label_table()
+        self.schedule_label_save()
+        self.update_label_status()
+        self.notify("info", self.describe_label(label))
+
+    def add_point_label(self) -> bool:
+        """Place a point label where the cross hair is.  False when it cannot.
+
+        The position comes from `plot_ranges`, which is where the cross hair
+        keeps it, so a point on a trace lands on the extreme sample of the
+        pointer's own pixel column (`TimePlot.get_marker_pos`) -- literally a
+        single sample -- and one on a spectrogram lands on the exact (t, f)
+        under the pointer.
+        """
+        category = self.labels.category(self.current_category)
+        if category is None:
+            return False
+        panel = self.hover_panel
+        if panel is None or not panel.is_time():
+            self.notify("warning", "point the cross hair at a lane first")
+            return False
+        _name, t = self.plot_ranges.marker_time()
+        if t is None:
+            return False
+        f = None
+        if panel.is_spectrogram():
+            _name, f = self.plot_ranges.marker_frequency()
+        channel = self.hover_channel
+        ax = panel.axs[channel] if channel < len(panel.axs) else None
+        self.store_label(category, ax, channel, float(t), None, f, f)
+        return True
+
+    def remove_last_label(self) -> None:
+        """Undo the last label.  The whole of this feature's undo.
+
+        There is no undo stack anywhere in audian, and a real one is a
+        different feature.  This plus the label table -- where any row can be
+        selected and removed -- covers the mistake a reader actually makes,
+        which is drawing one box in the wrong place and noticing at once.
+        """
+        label = self.labels.remove_last()
+        if label is None:
+            self.notify("warning", "no labels to remove")
+            return
+        self.redraw_labels()
+        self.refresh_label_table()
+        self.schedule_label_save()
+        self.update_label_status()
+        self.notify("info", f"removed {self.describe_label(label)}")
+
+    def describe_label(self, label) -> str:
+        """One line naming a label, for the status bar."""
+        where = "mean" if label.channel is None else f"ch {label.channel:02d}"
+        when = secs_to_str(label.t0)
+        if not label.is_point():
+            when += f"-{secs_to_str(label.t_end())}"
+        band = ""
+        if label.has_frequency() and label.f1 > label.f0:
+            band = f", {label.f0:.0f}-{label.f1:.0f} Hz"
+        elif label.has_frequency():
+            band = f", {label.f0:.0f} Hz"
+        return f"{label.category} on {where} at {when}{band}"
+
+    def refresh_label_table(self) -> None:
+        """Keep an open label table in step with a change made on a lane."""
+        if self.label_table_dialog is not None:
+            self.label_table_dialog.model.refresh()
+
+    # -- the parameter bar group --
+
+    def setup_label_group(self) -> "ParameterGroup":
+        """Build the Labels group of the parameter bar.
+
+        Three rows, against the annotation group's five, so the new column
+        costs the lanes no height at all: `ParameterGroup.equalize` gives
+        every group the tallest one's frame, and that is still the
+        annotations.  A row of this bar is about 24 px off every lane in a
+        sixteen channel stack, which is why the row count is a design
+        constraint rather than an afterthought.
+
+        Width is the harder half, and it is why the chips live in a
+        `CategoryStrip` rather than a `QHBoxLayout`.  Measured on a four
+        channel recording, the window asked to be 1200x900: the bar alone
+        already forces it to 1372 px, and a plain layout of two chips plus
+        an Edit button took that to 1572.  The bar does not wrap or scroll,
+        so a row that asks for more than its column has widens the whole
+        application -- see `CategoryStrip`.
+
+        Always built, hidden until a file is open, for the same reason the
+        annotation group is: a control that appears and disappears is one
+        nobody learns to look at.
+        """
+        group = ParameterGroup("Labels", self.parambar)
+
+        # Captionless and spanning: the chips name themselves and carry
+        # their own keys, so "CATEGORY 1-9" beside them would be the group
+        # title said twice at the cost of 80 px of chips per line.
+        self.label_chipbox = CategoryStrip(self.parambar, on_pick=self.chip_clicked)
+        self.label_chipbox.setToolTip(
+            "The label categories.  Click one, or press its digit, to make it "
+            "the one the next drag writes."
+        )
+        group.add_span_row(self.label_chipbox)
+
+        wherebox = QWidget(self.parambar)
+        where = QHBoxLayout(wherebox)
+        where.setContentsMargins(0, 0, 0, 0)
+        where.setSpacing(theme.S4)
+        self.label_showw = QToolButton(wherebox)
+        self.label_showw.setText("Show")
+        self.label_showw.setCheckable(True)
+        self.label_showw.setChecked(True)
+        self.label_showw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        self.label_showw.setFixedHeight(theme.CHIP_HEIGHT)
+        self.label_showw.setToolTip("Show the labels over the lanes  (F9)")
+        self.label_showw.toggled.connect(self.set_labels_visible)
+        where.addWidget(self.label_showw)
+        editw = QToolButton(wherebox)
+        editw.setText("Edit…")
+        editw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        editw.setFixedHeight(theme.CHIP_HEIGHT)
+        editw.setToolTip("Add, rename and remove label categories  (Ctrl+L)")
+        editw.clicked.connect(self.edit_label_categories)
+        where.addWidget(editw)
+        tablew = QToolButton(wherebox)
+        tablew.setText("List…")
+        tablew.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        tablew.setFixedHeight(theme.CHIP_HEIGHT)
+        tablew.setToolTip(
+            "Every label of this recording, and the control that removes one  "
+            "(Ctrl+M).  Undo the last one with Shift+B."
+        )
+        tablew.clicked.connect(self.show_label_table)
+        where.addWidget(tablew)
+        where.addStretch(1)
+        group.add_row("Show", "F9", wherebox)
+
+        self.label_statusw = QLabel("", self.parambar)
+        self.label_statusw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+        self.label_statusw.setWordWrap(False)
+        # Ignored, not Preferred: this line changes on every label added, and
+        # a label that asks for the width of its longest string would relayout
+        # the whole bar under the pointer -- the failure `annotation_hoverw`
+        # was rebuilt to stop.  The full text stays in the tool tip.
+        self.label_statusw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        theme.tint(self.label_statusw, "fg.muted")
+        group.add_row("File", "", self.label_statusw)
+
+        self.label_group = group
+        group.setVisible(False)
+        return group
+
+    def build_category_chips(self) -> None:
+        """Rebuild the category chips.
+
+        The chips are the legend as well as the picker: which colour means
+        which word is read off the bar rather than remembered, exactly as the
+        annotation layer chips work.  Built from `LabelSet.categories` and
+        never from a list in this file, so the chips, the digit keys and the
+        saved vocabulary are the same set by construction.
+        """
+        if self.label_chipbox is None:
+            return
+        keys = {
+            c.name: self.category_key_for(i)
+            for i, c in enumerate(self.labels.categories)
+        }
+        self.label_chipbox.set_categories(
+            self.labels.categories, self.current_category, keys
+        )
+        self.label_chips = self.label_chipbox.chips
+        # The group grew or shrank by a chip, and `equalize` froze every frame
+        # height when the bar was built.  Deferred by one turn of the loop:
+        # widgets added a moment ago are not in their parent's size hint yet,
+        # and measuring before Qt has processed the invalidation clips the
+        # last row.
+        QTimer.singleShot(0, self.equalize_parameter_bar)
+
+    def chip_clicked(self, name: str) -> None:
+        """A chip picks its category, and a point chip also places one.
+
+        The same rule the digit key follows, so the two ways of choosing a
+        category cannot mean different things.
+        """
+        self.category_key(name)
+
+    def update_category_chips(self) -> None:
+        """Check exactly the chip of the current category."""
+        if self.label_chipbox is not None:
+            self.label_chipbox.set_current(self.current_category)
+
+    def label_status_text(self) -> str:
+        """What the File row says.
+
+        Empty states are separate sentences on purpose.  "no labels yet"
+        with the gesture beside it is the difference between a reader who
+        starts and one who looks for a menu; the alternative -- a bare
+        ``0`` -- says nothing about how to make it a 1.
+        """
+        count = len(self.labels)
+        if self.labels.blocked:
+            # ahead of everything else: a reader labelling into a store that
+            # cannot save is doing work that will be lost, and the count
+            # would read as "saved" the moment they stopped
+            return f"READ-ONLY -- {self.labels.blocked}"
+        if self.label_error:
+            return f"{count} labels -- SAVE FAILED: {self.label_error}"
+        if not count:
+            if not self.labels.categories:
+                return "no categories yet -- add one with Edit…"
+            return "no labels yet -- press b, then drag over a lane"
+        name = self.labels.path.name if self.labels.path is not None else "?"
+        state = "unsaved" if (self.labels.dirty or self.label_save_pending) else "saved"
+        return f"{count} label{'' if count == 1 else 's'} · {name} · {state}"
+
+    def update_label_status(self) -> None:
+        """Redraw the File row, elided to the width the row already has."""
+        label = self.label_statusw
+        if label is None:
+            return
+        text = self.label_status_text()
+        label.setToolTip(text)
+        metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
+        label.setText(metrics.elidedText(text, Qt.ElideRight, max(label.width(), 1)))
+        if self.label_undow is not None:
+            self.label_undow.setEnabled(bool(self.labels.labels))
 
     # --- annotations -----------------------------------------------------
 
@@ -4212,6 +4729,11 @@ class DataBrowser(QWidget):
         # previous layout, so there is nothing left to converge.
         self.adjust_layout(self.width(), self.height())
         self.data.set_need_update()
+        # The Labels file row elides itself to the width the row has, and
+        # is otherwise redrawn only when a label changes -- so without this
+        # a widened window keeps the text cut to the old column, and a
+        # narrowed one keeps a line that no longer fits.
+        self.update_label_status()
 
     def lane_axes(self, plot: pg.PlotItem, values: bool, left_width: int) -> None:
         """Strip the axis chrome of one lane that the stack now shares.
@@ -5973,7 +6495,18 @@ class DataBrowser(QWidget):
                 ax.getViewBox().zoom_home()
 
     def set_region_mode(self, mode):
+        """Choose what a rubber-band drag does.
+
+        Label mode takes the mouse away from the spectrogram's filter
+        handles for as long as it lasts.  Both want the same pixels -- see
+        `SpectrogramPlot.set_handles_movable` -- and on this fork's data the
+        band worth labelling is the bottom of the lane, which is exactly
+        where the highpass cutoff sits.
+        """
         self.region_mode = mode
+        movable = mode != DataBrowser.MODE_LABEL
+        for ax in self.spectrogram_plots():
+            ax.set_handles_movable(movable)
 
     def region_menu_at(self, channel, vbox, rect, scene_pos):
         """Act on a selected region, popping up the menu at the drag.
@@ -6002,6 +6535,8 @@ class DataBrowser(QWidget):
             self.analyze_region(rect.left(), rect.right(), channel)
         elif mode == DataBrowser.MODE_SAVE:
             self.save_region(rect.left(), rect.right())
+        elif mode == DataBrowser.MODE_LABEL:
+            self.label_from_region(channel, vbox, rect)
         elif mode == DataBrowser.MODE_ASK:
             menu = QMenu(self)
             zoom_act = menu.addAction("&Zoom")
@@ -6010,6 +6545,22 @@ class DataBrowser(QWidget):
             analyze_act.setEnabled(self.acts.analyze_region.isEnabled())
             analyze_act.setVisible(self.acts.analyze_region.isVisible())
             save_act = menu.addAction("&Save as")
+            # One entry per category, so a single label can be made without
+            # leaving whatever mode the reader is in.  The submenu is built
+            # from `LabelSet.categories` and dispatched through a dict rather
+            # than the chain of `act is` tests the four fixed entries use:
+            # the categories are not a fixed set, and a chain would have to be
+            # edited in two places every time one is added.
+            label_acts = {}
+            if self.labels.categories:
+                submenu = menu.addMenu("&Label as")
+                for i, category in enumerate(self.labels.categories):
+                    key = self.category_key_for(i)
+                    act = submenu.addAction(
+                        f"{category.name}  {key}" if key else category.name
+                    )
+                    act.setToolTip(category_tip(category, key))
+                    label_acts[act] = category.name
             act = menu.exec(self.region_menu_pos(vbox, scene_pos))
             if act is zoom_act:
                 vbox.zoom_region(rect)
@@ -6019,6 +6570,9 @@ class DataBrowser(QWidget):
                 self.analyze_region(rect.left(), rect.right(), channel)
             elif act is save_act:
                 self.save_region(rect.left(), rect.right())
+            elif act in label_acts:
+                self.set_current_category(label_acts[act])
+                self.label_from_region(channel, vbox, rect)
         vbox.hide_region()
 
     def region_menu_pos(self, vbox, scene_pos):
@@ -6398,7 +6952,11 @@ class DataBrowser(QWidget):
                 hkey,
                 bext_code + f",T={self.data.file_path}",
             )
-            locs, labels = self.marker_data.get_markers(self.data.rate)
+            # Read off the FILE, not off a store.  These are the markers
+            # the recording came with; audian neither writes them nor lets
+            # them be edited, and routing them through a seconds-based copy
+            # only cost a rounding trip in each direction.
+            locs, labels = self.data.data.markers()
             sel = (locs[:, 0] + locs[:, 1] >= i0) & (locs[:, 0] <= i1)
             locs = locs[sel]
             labels = labels[sel]

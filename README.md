@@ -145,7 +145,16 @@ part in memory (buffer).
 
 - `class Data`: Handles all the raw and derived data traces like filtered data, spectrogram data, etc (`data.py`).
 
-- `markerdata.py`: All marker related stuff. TODO: Split it into widgets and marker data.
+- `labels.py`: Hand-made labels -- the store, and the sidecar CSV beside the
+  recording. Pure data, no Qt.
+- `labeloverlay.py`: The Qt half of `labels.py`: one overlay per plot, the
+  category editor and the label table.
+
+Replaces `markerdata.py`, whose authoring path had been commented out for
+long enough that its store could not delete a row and its per-category
+scatter layers were frozen at file-open time. Markers embedded in a WAV are
+still carried into a saved region; they are read off the file, which is
+where they live.
 
 #### View
 

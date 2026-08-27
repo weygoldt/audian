@@ -242,6 +242,36 @@ class SpectrogramPlot(TimePlot):
             if handle is not None:
                 handle.setPen(theme.handle_pen())
 
+    def set_handles_movable(self, movable: bool) -> None:
+        """Hand the filter cutoffs the mouse, or hand it back to the lane.
+
+        A movable `pg.InfiniteLine` takes the press before the view box sees
+        it, so a rubber-band drag that starts on a cutoff moves the cutoff
+        instead of selecting anything.  Measured on an 8 kHz recording with
+        the highpass parked at 2000 Hz, one drag from 2000 Hz to 3000 Hz in
+        each of two lanes:
+
+        =============  ================  ==============
+        handle          region signals    cutoff after
+        =============  ================  ==============
+        movable         0                 3017 Hz
+        not movable     1                 2000 Hz
+        =============  ================  ==============
+
+        The same drag started 500 Hz clear of the handle gave one region
+        signal either way, so it is the handle and nothing else.
+
+        Swallowing the drag is the right behaviour while the reader is
+        filtering and the wrong one while they are labelling, and there is no
+        way to tell those apart from the pixels -- a cutoff is a line across
+        the middle of the lane, which is exactly where the labels go.  So
+        `DataBrowser.set_region_mode` hands the pixels to whichever the
+        reader is currently in.
+        """
+        for handle in (self.highpass_handle, self.lowpass_handle):
+            if handle is not None:
+                handle.setMovable(bool(movable))
+
     # --- axis label -------------------------------------------------------
 
     def update_axis_label(self) -> None:

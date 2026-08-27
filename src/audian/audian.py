@@ -245,6 +245,13 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         path.lineTo(m + e * 0.7, m + e * 0.4)
         painter.drawPath(path)
         painter.drawLine(int(m), int(m + e), int(m + e), int(m + e))
+    elif kind == "label":
+        # A box with a corner tag: the mark this mode makes, plus the thing
+        # that tells it apart from the zoom rectangle beside it on the bar.
+        painter.drawRect(QRectF(m, m + e * 0.25, e * 0.75, e * 0.75))
+        painter.fillRect(
+            QRectF(m + e * 0.45, m, e * 0.55, e * 0.3), theme.brush(color, alpha)
+        )
     elif kind == "ask":
         painter.setFont(theme.font_ui(size - 5, bold=True))
         painter.drawText(QRectF(0, 0, size, size), Qt.AlignCenter, "?")
@@ -1141,10 +1148,21 @@ class CheatSheet(QDialog):
                 "analyze_region",
                 "save_region",
                 "ask_region",
+                "label_region",
                 "rect_zoom",
                 "pan_zoom",
                 "cross_hair",
                 "analysis_results",
+            ),
+        ),
+        (
+            "Labels",
+            (
+                "label_region",
+                "toggle_labels",
+                "label_editor",
+                "label_table",
+                "remove_last_label",
             ),
         ),
     )
@@ -1588,6 +1606,7 @@ class Audian(QMainWindow):
         DataBrowser.MODE_ANALYZE: "Analyze",
         DataBrowser.MODE_SAVE: "Save",
         DataBrowser.MODE_ASK: "Ask",
+        DataBrowser.MODE_LABEL: "Label",
     }
 
     def setup_mnemonics(self) -> None:
@@ -2019,6 +2038,7 @@ class Audian(QMainWindow):
         self._set_glyph(self.acts.analyze_region, "analyze")
         self._set_glyph(self.acts.save_region, "save")
         self._set_glyph(self.acts.ask_region, "ask")
+        self._set_glyph(self.acts.label_region, "label")
         self.mode_buttons = []
         for act in (
             self.acts.zoom_region,
@@ -2026,6 +2046,7 @@ class Audian(QMainWindow):
             self.acts.analyze_region,
             self.acts.save_region,
             self.acts.ask_region,
+            self.acts.label_region,
         ):
             button = self.toolbar_button(act, Qt.ToolButtonTextBesideIcon)
             self.mode_buttons.append(button)
@@ -2482,6 +2503,7 @@ class Audian(QMainWindow):
             ("analyze_region", DataBrowser.MODE_ANALYZE),
             ("save_region", DataBrowser.MODE_SAVE),
             ("ask_region", DataBrowser.MODE_ASK),
+            ("label_region", DataBrowser.MODE_LABEL),
         ):
             if getattr(self.acts, name).isChecked():
                 return mode
@@ -2501,6 +2523,9 @@ class Audian(QMainWindow):
 
     def set_ask(self):
         self.set_region_mode(DataBrowser.MODE_ASK)
+
+    def set_label(self):
+        self.set_region_mode(DataBrowser.MODE_LABEL)
 
     def set_cross_hair(self, checked):
         for b in self.browsers:
@@ -2567,12 +2592,29 @@ class Audian(QMainWindow):
         self.acts.ask_region.setShortcut("q")
         self.acts.ask_region.toggled.connect(self.set_ask)
 
+        # 'b' for box.  Every bound sequence in this file and in
+        # `databrowser.py` was enumerated: the free single letters are
+        # b f i m u w x y -- and of those, m is not really free, because
+        # `ChannelRailRow.keyPressEvent` answers m and s itself while a rail
+        # row has the focus (mute and solo).  b is free at both levels and
+        # says what the gesture draws.
+        self.acts.label_region = QAction("La&bel", self)
+        self.acts.label_region.setCheckable(True)
+        self.acts.label_region.setShortcut("b")
+        self.acts.label_region.setToolTip(
+            "Drag a box to label it with the current category (b).\n"
+            "On a spectrogram the box bounds time AND frequency; on a trace, "
+            "time alone."
+        )
+        self.acts.label_region.toggled.connect(self.set_label)
+
         self.acts.zoom_rect_mode = QActionGroup(self)
         self.acts.zoom_rect_mode.addAction(self.acts.zoom_region)
         self.acts.zoom_rect_mode.addAction(self.acts.play_region)
         self.acts.zoom_rect_mode.addAction(self.acts.analyze_region)
         self.acts.zoom_rect_mode.addAction(self.acts.save_region)
         self.acts.zoom_rect_mode.addAction(self.acts.ask_region)
+        self.acts.zoom_rect_mode.addAction(self.acts.label_region)
         # Zoom is the default: 'ask' popped a four item menu on every single
         # left drag and needed a second click.  'ask' stays as an opt-in.
         self.acts.zoom_region.setChecked(True)
@@ -2614,16 +2656,6 @@ class Audian(QMainWindow):
         self.acts.cross_hair.setShortcut("Ctrl+c")
         self.acts.cross_hair.toggled.connect(self.set_cross_hair)
 
-        """
-        self.acts.label_editor = QAction('&Label editor', self)
-        self.acts.label_editor.setShortcut('Ctrl+L')
-        self.acts.label_editor.triggered.connect(lambda x: self.browser().label_editor())
-        
-        self.acts.marker_table = QAction('&Marker table', self)
-        self.acts.marker_table.setShortcut('Ctrl+M')
-        self.acts.marker_table.triggered.connect(lambda x: self.browser().marker_table())
-        """
-
         region_menu = menu.addMenu("&Region")
         region_menu.addAction(self.acts.rect_zoom)
         region_menu.addAction(self.acts.pan_zoom)
@@ -2637,6 +2669,7 @@ class Audian(QMainWindow):
         region_menu.addAction(self.acts.analyze_region)
         region_menu.addAction(self.acts.save_region)
         region_menu.addAction(self.acts.ask_region)
+        region_menu.addAction(self.acts.label_region)
         region_menu.addSeparator()
         region_menu.addAction(self.acts.analysis_results)
         region_menu.addAction(self.acts.cross_hair)
@@ -2644,9 +2677,6 @@ class Audian(QMainWindow):
         region_menu.addAction(self.acts.play_window)
         region_menu.addAction(self.acts.audio_source)
         region_menu.addAction(self.acts.use_heterodyne)
-        # region_menu.addSeparator()
-        # region_menu.addAction(self.acts.label_editor)
-        # region_menu.addAction(self.acts.marker_table)
 
         self.data_menus.append(region_menu)
 
@@ -3745,6 +3775,80 @@ class Audian(QMainWindow):
         self.data_menus.append(annotation_menu)
         return annotation_menu
 
+    def setup_label_actions(self, menu):
+        """The menu for the marks the reader makes.
+
+        A menu of its own, next to Annotations and not inside it.  The two
+        overlays look alike and are not alike -- one is read from a bundle
+        and cannot be changed, the other is written by this application --
+        and a reader who has to open Annotations to clear their own work
+        would reasonably wonder which of the two it clears.
+        """
+        self.acts.toggle_labels = QAction("Show &labels", self)
+        self.acts.toggle_labels.setShortcut("F9")
+        self.acts.toggle_labels.setToolTip(
+            "Take the hand-made labels off the lanes, or put them back (F9)"
+        )
+        self.acts.toggle_labels.triggered.connect(self.toggle_labels)
+
+        self.acts.label_editor = QAction("Label &categories…", self)
+        self.acts.label_editor.setShortcut("Ctrl+L")
+        self.acts.label_editor.setToolTip(
+            "Add, rename and remove label categories (Ctrl+L).  "
+            "The first nine get the digit keys."
+        )
+        self.acts.label_editor.triggered.connect(self.edit_label_categories)
+
+        self.acts.label_table = QAction("Label &table…", self)
+        self.acts.label_table.setShortcut("Ctrl+M")
+        self.acts.label_table.setToolTip(
+            "Every label of this recording, and the control that removes one (Ctrl+M)"
+        )
+        self.acts.label_table.triggered.connect(self.show_label_table)
+
+        self.acts.remove_last_label = QAction("&Undo last label", self)
+        self.acts.remove_last_label.setShortcut("Shift+B")
+        self.acts.remove_last_label.setToolTip(
+            "Remove the label just added (Shift+B).  Any other one comes off "
+            "in the label table."
+        )
+        self.acts.remove_last_label.triggered.connect(self.remove_last_label)
+
+        label_menu = menu.addMenu("&Labels")
+        label_menu.addAction(self.acts.label_region)
+        label_menu.addAction(self.acts.toggle_labels)
+        label_menu.addSeparator()
+        label_menu.addAction(self.acts.label_editor)
+        label_menu.addAction(self.acts.label_table)
+        label_menu.addAction(self.acts.remove_last_label)
+
+        self.data_menus.append(label_menu)
+        return label_menu
+
+    # Through `require_browser` and not `self.browser()`, the way every
+    # annotation action does: a shortcut fired with no file open would
+    # otherwise reach the StartupPage, which has none of these methods.
+
+    def toggle_labels(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.toggle_labels()
+
+    def edit_label_categories(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.edit_label_categories()
+
+    def show_label_table(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.show_label_table()
+
+    def remove_last_label(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.remove_last_label()
+
     def setup_panel_actions(self, menu):
         self.acts.link_panels = QAction("Link &panels", self)
         # self.acts.link_panels.setShortcut('Alt+P')
@@ -3928,6 +4032,9 @@ class Audian(QMainWindow):
         self.setup_channel_actions(view_menu)
         self.setup_panel_actions(view_menu)
         self.setup_annotation_actions(view_menu)
+        # after the annotations, because that is the order the two overlays
+        # are read in and the order they sit in on the parameter bar
+        self.setup_label_actions(view_menu)
         self.traces_menu = view_menu.addMenu("&Traces")
         self.data_menus.append(self.traces_menu)
         view_menu.addAction(self.acts.toggle_grid)
@@ -4204,6 +4311,13 @@ class Audian(QMainWindow):
                 index = self.tabs.currentIndex()
             w = self.tabs.widget(index)
             if isinstance(w, DataBrowser):
+                # By hand, and in both exit paths: there is no closeEvent
+                # anywhere in audian, and `quit` below never goes through
+                # QWidget's close machinery at all, so a label saved by a
+                # queued zero-timer would go with the event loop.  Note that
+                # this method SHADOWS QWidget.close -- `self.close()`
+                # elsewhere in this class closes a tab, not the window.
+                w.flush_labels()
                 if w in self.browsers:
                     self.browsers.remove(w)
                 self.tabs.removeTab(index)
@@ -4214,6 +4328,7 @@ class Audian(QMainWindow):
 
     def quit(self):
         for w in self.browsers:
+            w.flush_labels()
             index = self.tabs.indexOf(w)
             self.tabs.removeTab(index)
             w.close()

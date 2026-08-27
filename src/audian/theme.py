@@ -2652,7 +2652,8 @@ def marker_color(index: int) -> str:
 
 
 #: Backdrop and hairline ring for the marker swatch icon drawn by
-#: ``markerdata.ColorIconEngine``, which used to hardcode ``QColor('black')``.
+#: ``labeloverlay._SwatchEngine``.  Tokens rather than the ``QColor('black')``
+#: this was before, so the swatch follows a live theme switch.
 MARKER_ICON_BG = BG_RAISED
 MARKER_ICON_RING = BORDER
 
