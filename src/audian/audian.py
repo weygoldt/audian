@@ -1303,7 +1303,7 @@ class CheatSheet(QDialog):
             ),
         ),
         (
-            "Annotations",
+            "Fixed labels",
             (
                 "toggle_annotations",
                 "show_all_annotation_layers",
@@ -1328,7 +1328,7 @@ class CheatSheet(QDialog):
             ),
         ),
         (
-            "Labels",
+            "Editable labels",
             (
                 "label_region",
                 "toggle_labels",
@@ -4141,14 +4141,16 @@ class Audian(QMainWindow):
             browser.step_annotation(False)
 
     def setup_annotation_actions(self, menu):
-        self.acts.load_annotations = QAction("&Load annotations…", self)
+        self.acts.load_annotations = QAction("&Load fixed labels…", self)
         self.acts.load_annotations.setShortcut("Ctrl+Shift+A")
         self.acts.load_annotations.setToolTip(
-            "Read a session bundle and draw its layers over every lane"
+            "Read a session bundle -- a *_metadata.toml and its CSVs -- and "
+            "draw its layers over every lane  (Ctrl+Shift+A).\n"
+            "These are fixed: audian never writes them."
         )
         self.acts.load_annotations.triggered.connect(self.load_annotations)
 
-        self.acts.toggle_annotations = QAction("&Toggle annotations", self)
+        self.acts.toggle_annotations = QAction("&Show fixed labels", self)
         self.acts.toggle_annotations.setShortcut("F8")
         self.acts.toggle_annotations.triggered.connect(self.toggle_annotations)
 
@@ -4176,21 +4178,21 @@ class Audian(QMainWindow):
             )
             self.acts.annotation_surfaces[surface] = act
 
-        self.acts.clear_annotations = QAction("&Clear annotations", self)
+        self.acts.clear_annotations = QAction("&Clear fixed labels", self)
         self.acts.clear_annotations.triggered.connect(self.clear_annotations)
 
-        self.acts.next_annotation = QAction("&Next annotation", self)
+        self.acts.next_annotation = QAction("&Next fixed label", self)
         self.acts.next_annotation.setShortcut("n")
         self.acts.next_annotation.setToolTip(
-            "Centre the view on the next annotation of a layer that is shown"
+            "Centre the view on the next fixed label of a layer that is shown"
         )
         self.acts.next_annotation.triggered.connect(self.next_annotation)
 
-        self.acts.previous_annotation = QAction("&Previous annotation", self)
+        self.acts.previous_annotation = QAction("&Previous fixed label", self)
         self.acts.previous_annotation.setShortcut("Shift+N")
         self.acts.previous_annotation.triggered.connect(self.previous_annotation)
 
-        annotation_menu = menu.addMenu("&Annotations")
+        annotation_menu = menu.addMenu("&Fixed labels")
         annotation_menu.addAction(self.acts.load_annotations)
         annotation_menu.addAction(self.acts.toggle_annotations)
         annotation_menu.addAction(self.acts.clear_annotations)
@@ -4215,18 +4217,21 @@ class Audian(QMainWindow):
         return annotation_menu
 
     def setup_label_actions(self, menu):
-        """The menu for the marks the reader makes.
+        """The menu for the labels the reader makes.
 
-        A menu of its own, next to Annotations and not inside it.  The two
-        overlays look alike and are not alike -- one is read from a bundle
-        and cannot be changed, the other is written by this application --
-        and a reader who has to open Annotations to clear their own work
-        would reasonably wonder which of the two it clears.
+        A menu of its own, next to the fixed labels and not inside it.  The
+        two overlays look alike and are not alike -- one is read from a
+        bundle the stimulator wrote and cannot be changed, the other is
+        written by this application -- and a reader who had to open the
+        fixed labels' menu to clear their own work would reasonably wonder
+        which of the two it cleared.  Which is why the menus say fixed and
+        editable rather than annotations and labels, two words that mean
+        the same thing to anyone who has not been told otherwise.
         """
-        self.acts.toggle_labels = QAction("Show &labels", self)
+        self.acts.toggle_labels = QAction("Show &editable labels", self)
         self.acts.toggle_labels.setShortcut("F9")
         self.acts.toggle_labels.setToolTip(
-            "Take the hand-made labels off the lanes, or put them back (F9)"
+            "Take the editable labels off the lanes, or put them back  (F9)"
         )
         self.acts.toggle_labels.triggered.connect(self.toggle_labels)
 
@@ -4238,22 +4243,23 @@ class Audian(QMainWindow):
         )
         self.acts.label_editor.triggered.connect(self.edit_label_categories)
 
-        self.acts.label_table = QAction("Label &table…", self)
+        self.acts.label_table = QAction("Label &list…", self)
         self.acts.label_table.setShortcut("Ctrl+M")
         self.acts.label_table.setToolTip(
-            "Every label of this recording, and the control that removes one (Ctrl+M)"
+            "Every editable label of this recording, and the control that "
+            "removes one  (Ctrl+M)"
         )
         self.acts.label_table.triggered.connect(self.show_label_table)
 
         self.acts.remove_last_label = QAction("&Undo last label", self)
         self.acts.remove_last_label.setShortcut("Shift+B")
         self.acts.remove_last_label.setToolTip(
-            "Remove the label just added (Shift+B).  Any other one comes off "
-            "in the label table."
+            "Remove the editable label just added  (Shift+B).  Any other one "
+            "comes off in the label list."
         )
         self.acts.remove_last_label.triggered.connect(self.remove_last_label)
 
-        label_menu = menu.addMenu("&Labels")
+        label_menu = menu.addMenu("&Editable labels")
         label_menu.addAction(self.acts.label_region)
         label_menu.addAction(self.acts.toggle_labels)
         label_menu.addSeparator()

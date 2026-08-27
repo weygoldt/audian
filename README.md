@@ -145,10 +145,13 @@ part in memory (buffer).
 
 - `class Data`: Handles all the raw and derived data traces like filtered data, spectrogram data, etc (`data.py`).
 
-- `labels.py`: Hand-made labels -- the store, and the sidecar CSV beside the
-  recording. Pure data, no Qt.
+- `labels.py`: The **editable labels** -- the store, and the
+  `<stem>-editable-labels.csv` sidecar beside the recording. Pure data, no Qt.
+  These are the ones a reader draws afterwards; the **fixed labels** are the
+  session bundle read by `session.py` and drawn by `eventoverlay.py`, which
+  audian never writes.
 - `labeloverlay.py`: The Qt half of `labels.py`: one overlay per plot, the
-  category editor and the label table.
+  category editor and the label list.
 
 Replaces `markerdata.py`, whose authoring path had been commented out for
 long enough that its store could not delete a row and its per-category

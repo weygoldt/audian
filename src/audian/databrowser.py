@@ -1014,9 +1014,24 @@ class DataBrowser(QWidget):
     #: recording.  Not per recording either -- a reader walking the file
     #: spine of one session is doing one job, and a tab that flipped as they
     #: stepped would be a control moving under them.
+    #: The two tabs that hold marks over the signal, and the whole of the
+    #: distinction between them.
+    #:
+    #: They used to be "Annotations" and "Labels", which are the same word
+    #: twice: both mean "something drawn over the recording", and a reader
+    #: had to already know which was which.  The axis that actually
+    #: separates them is whether audian may change them -- one set is read
+    #: from a bundle the stimulator wrote and describes what *caused* the
+    #: signal, the other is drawn afterwards by whoever is looking -- so
+    #: that is what the names say.
+    FIXED_TAB = "Fixed labels"
+    EDITABLE_TAB = "Editable labels"
+
     PARAM_TAB_SETTING = "parameter-tab"
-    #: Bumped when the shape of that value changes.
-    PARAM_TAB_SETTING_VERSION = 1
+    #: Bumped when the shape of that value changes, or -- as in version 2 --
+    #: when the tab NAMES change, since the value is one of them and a
+    #: saved "Labels" no longer resolves to anything.
+    PARAM_TAB_SETTING_VERSION = 2
 
     #: Key the trace / spectrogram split is saved under.  One key holding one
     #: number per F3 preset, for the same reason as above.
@@ -3606,7 +3621,7 @@ class DataBrowser(QWidget):
     # -- the parameter bar group --
 
     def setup_label_group(self) -> "ParameterGroup":
-        """Build the Labels group of the parameter bar.
+        """Build the Editable labels group of the parameter bar.
 
         Three rows, against the annotation group's five.  The bar is as
         tall as its tallest page whichever page is showing, so this group
@@ -3628,7 +3643,7 @@ class DataBrowser(QWidget):
         annotation group is: a control that appears and disappears is one
         nobody learns to look at.
         """
-        group = ParameterGroup("Labels", self.parambar, caption=False)
+        group = ParameterGroup(DataBrowser.EDITABLE_TAB, self.parambar, caption=False)
 
         # Captionless and spanning: the chips name themselves and carry
         # their own keys, so "CATEGORY 1-9" beside them would be the group
@@ -3650,7 +3665,7 @@ class DataBrowser(QWidget):
         self.label_showw.setChecked(True)
         self.label_showw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.label_showw.setFixedHeight(theme.CHIP_HEIGHT)
-        self.label_showw.setToolTip("Show the labels over the lanes  (F9)")
+        self.label_showw.setToolTip("Show the editable labels over the lanes  (F9)")
         self.label_showw.toggled.connect(self.set_labels_visible)
         where.addWidget(self.label_showw)
         editw = QToolButton(wherebox)
@@ -3665,8 +3680,8 @@ class DataBrowser(QWidget):
         tablew.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         tablew.setFixedHeight(theme.CHIP_HEIGHT)
         tablew.setToolTip(
-            "Every label of this recording, and the control that removes one  "
-            "(Ctrl+M).  Undo the last one with Shift+B."
+            "Every editable label of this recording, and the control that "
+            "removes one  (Ctrl+M).  Undo the last one with Shift+B."
         )
         tablew.clicked.connect(self.show_label_table)
         where.addWidget(tablew)
@@ -4647,7 +4662,7 @@ class DataBrowser(QWidget):
     # -- the parameter bar group --
 
     def setup_annotation_group(self) -> "ParameterGroup":
-        """Build the Annotations group of the parameter bar.
+        """Build the Fixed labels group of the parameter bar.
 
         Always built, even with nothing loaded: the group is the only place
         that states where the annotations came from and whether their
@@ -4655,7 +4670,7 @@ class DataBrowser(QWidget):
         disappears is one nobody learns to look at.  It is hidden while no
         table is loaded and shown the moment one is.
         """
-        group = ParameterGroup("Annotations", self.parambar, caption=False)
+        group = ParameterGroup(DataBrowser.FIXED_TAB, self.parambar, caption=False)
 
         self.annotation_sourcew = QLabel("—", self.parambar)
         self.annotation_sourcew.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
@@ -4667,7 +4682,8 @@ class DataBrowser(QWidget):
         loadw.setText("Load…")
         loadw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         loadw.setToolTip(
-            "Read a session bundle -- a *_metadata.toml and its CSVs  (Ctrl+Shift+A)"
+            "Read a session bundle -- a *_metadata.toml and its CSVs  "
+            "(Ctrl+Shift+A).\nThese labels are fixed: audian never writes them."
         )
         loadw.setFixedHeight(theme.CHIP_HEIGHT)
         loadw.clicked.connect(self.open_annotations)
@@ -4702,8 +4718,8 @@ class DataBrowser(QWidget):
         self.annotation_showw.setChecked(True)
         self.annotation_showw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.annotation_showw.setToolTip(
-            "Show the annotation overlay at all  (F8).\n"
-            "The chips beside it choose which panels it reaches."
+            "Show the fixed labels at all  (F8).\n"
+            "The chips beside it choose which panels they reach."
         )
         self.annotation_showw.toggled.connect(self.annotations.set_visible)
         self.annotation_showw.setFixedHeight(theme.CHIP_HEIGHT)
@@ -4845,7 +4861,7 @@ class DataBrowser(QWidget):
         # badge and the layer chips they asked for are all on this page.
         # Not on `open()`, which runs for every file and would override the
         # tab the reader chose.
-        self.raise_parameter_tab("Annotations")
+        self.raise_parameter_tab(DataBrowser.FIXED_TAB)
         self.update_annotation_alert()
         # The group grew or shrank by a row of chips, and equalize() froze
         # every frame height when the bar was built.  Deferred by one turn
@@ -4965,7 +4981,7 @@ class DataBrowser(QWidget):
             return
         bad = bool(self.labels.blocked or self.label_error)
         self.param_tabs.set_alert(
-            "Labels", bad, self.label_status_text() if bad else ""
+            DataBrowser.EDITABLE_TAB, bad, self.label_status_text() if bad else ""
         )
 
     def update_annotation_alert(self) -> None:
@@ -4984,7 +5000,7 @@ class DataBrowser(QWidget):
             # against it, and `success` when it is simply validated.
             _text, token, tip = self.annotations.badge()
             bad = token in ("danger", "accent")
-        self.param_tabs.set_alert("Annotations", bad, tip if bad else "")
+        self.param_tabs.set_alert(DataBrowser.FIXED_TAB, bad, tip if bad else "")
 
     def equalize_parameter_bar(self) -> None:
         """Re-level the parameter bar's frames after a group changed size."""
@@ -6976,7 +6992,7 @@ class DataBrowser(QWidget):
             # to write labels", and which category the next drag writes is
             # on that page.  Not raised again on the way out: leaving the
             # mode says nothing about what the reader wants to look at.
-            self.raise_parameter_tab("Labels")
+            self.raise_parameter_tab(DataBrowser.EDITABLE_TAB)
 
     def region_menu_at(self, channel, vbox, rect, scene_pos):
         """Act on a selected region, popping up the menu at the drag.

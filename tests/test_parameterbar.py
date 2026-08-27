@@ -212,7 +212,7 @@ def test_a_page_is_usable_the_first_time_its_tab_is_raised(browser):
     view.update_label_status()
     settle()
 
-    view.param_tabs.buttons["Labels"].click()
+    view.param_tabs.buttons["Editable labels"].click()
     settle()
     pump(0.3)
     # the file row says its whole line, not a sliver of it
@@ -286,19 +286,19 @@ def test_a_tab_marks_itself_when_its_page_is_saying_something_bad(browser):
     """
     view = browser
     tabs = view.param_tabs
-    assert tabs.buttons["Labels"].text() == "LABELS"
+    assert tabs.buttons["Editable labels"].text() == "EDITABLE LABELS"
 
     # the tab already carries its group's shortcuts; the alert is added to
     # that rather than replacing it
-    quiet = tabs.buttons["Labels"].toolTip()
+    quiet = tabs.buttons["Editable labels"].toolTip()
     assert "Show  F9" in quiet
 
-    view.labels.blocked = "rec-labels.csv could not be read (boom)"
+    view.labels.blocked = "rec-editable-labels.csv could not be read (boom)"
     view.update_label_status()
     settle()
     try:
-        assert tabs.buttons["Labels"].text() == "LABELS !"
-        loud = tabs.buttons["Labels"].toolTip()
+        assert tabs.buttons["Editable labels"].text() == "EDITABLE LABELS !"
+        loud = tabs.buttons["Editable labels"].toolTip()
         assert "could not be read" in loud
         assert quiet in loud  # the shortcuts are still there
         assert "READ-ONLY" in view.label_status_text()
@@ -306,8 +306,8 @@ def test_a_tab_marks_itself_when_its_page_is_saying_something_bad(browser):
         view.labels.blocked = ""
         view.update_label_status()
         settle()
-    assert tabs.buttons["Labels"].text() == "LABELS"
-    assert tabs.buttons["Labels"].toolTip() == quiet
+    assert tabs.buttons["Editable labels"].text() == "EDITABLE LABELS"
+    assert tabs.buttons["Editable labels"].toolTip() == quiet
 
 
 def test_label_mode_raises_the_labels_tab(browser):
@@ -326,11 +326,11 @@ def test_label_mode_raises_the_labels_tab(browser):
         assert view.param_tabs.current_title() == "Filter"
         view.set_region_mode(DataBrowser.MODE_LABEL)
         settle()
-        assert view.param_tabs.current_title() == "Labels"
+        assert view.param_tabs.current_title() == "Editable labels"
         # and leaving the mode does not move them again
         view.set_region_mode(DataBrowser.MODE_ZOOM)
         settle()
-        assert view.param_tabs.current_title() == "Labels"
+        assert view.param_tabs.current_title() == "Editable labels"
     finally:
         view.set_region_mode(mode)
         settle()
@@ -345,7 +345,7 @@ def test_a_loaded_bundle_raises_the_annotations_tab(browser, tmp_path):
         view.annotations.load(simple(tmp_path / "raise").ref.metadata_path)
         settle()
         pump(0.5)
-        assert view.param_tabs.current_title() == "Annotations"
+        assert view.param_tabs.current_title() == "Fixed labels"
         assert view.annotation_sourcew.text() != "—"
     finally:
         view.annotations.clear()

@@ -1,12 +1,19 @@
-"""Hand-made labels: the mutable half of what audian draws over a recording.
+"""The **editable labels**: the half of what audian draws that it may change.
 
-The immutable half lives in `session.py` and `alignment.py` -- a bundle of
-CSVs fitted to the recording by a separate program, which this viewer reads
-and never writes.  This module is the other one: marks a reader makes with
-the mouse, in a sidecar CSV beside the recording that only audian writes.
+The **fixed labels** live in `session.py` and `alignment.py` -- a bundle of
+CSVs fitted to the recording by the program that ran the experiment, which
+this viewer reads and never writes.  This module is the other one: labels a
+reader draws with the mouse afterwards, in a sidecar CSV beside the recording
+that only audian writes.
 
-The two are deliberately separate types, separate files and separate panels.
-An annotation is a claim the log makes about what happened; a label is a
+The interface calls them exactly that, in two tabs of the bottom bar.  They
+were "Annotations" and "Labels", which is the same word twice -- both mean
+"something drawn over the recording" -- and the axis that actually separates
+them is whether audian may change them: one set describes what *caused* the
+signal and arrives with it, the other is one person's reading of it.
+
+They stay separate types, separate files and separate tabs.  A fixed label is
+a claim the instrument makes about what happened; an editable label is a
 claim the reader makes about what they see.  Merging them would make the
 provenance of a row a matter of reading a flag.
 
@@ -83,16 +90,23 @@ COLUMNS = (
     "note",
 )
 
-#: Suffix appended to the recording's stem.  Deliberately not
-#: ``<stem>-events.csv`` (audian's ``-a/--events`` flag names the *immutable*
-#: bundle) and not ``<id>_<kind>.csv`` or ``*_metadata.toml`` (writing either
-#: beside a recording makes `alignment.find_bundle` ambiguous, and it returns
-#: None rather than guess).
-SIDECAR_SUFFIX = "-labels.csv"
+#: Suffix appended to the recording's stem.
+#:
+#: "editable" and not just "labels", because a recording can have two kinds
+#: of label beside it and only these are audian's to change: the other kind
+#: arrives in a session bundle the stimulator wrote.  On screen the two are
+#: the "Fixed labels" and "Editable labels" tabs; on disk the file says which
+#: it is, because on disk there is no tab to say it.
+#:
+#: Deliberately not ``<stem>-events.csv`` (audian's ``-a/--events`` flag names
+#: the *fixed* bundle) and not ``<id>_<kind>.csv`` or ``*_metadata.toml``
+#: (writing either beside a recording makes `alignment.find_bundle`
+#: ambiguous, and it returns None rather than guess).
+SIDECAR_SUFFIX = "-editable-labels.csv"
 
 
 def sidecar_path(recording: Path | str) -> Path:
-    """Where the labels of `recording` are kept."""
+    """Where the editable labels of `recording` are kept."""
     recording = Path(recording)
     return recording.with_name(recording.stem + SIDECAR_SUFFIX)
 
@@ -487,6 +501,11 @@ class LabelSet:
         then refuses to write over it.  See that attribute for why: the whole
         failure mode is a sidecar that reads as empty for a reason nobody
         sees, and one label added over the top of it.
+
+        The name changed once, from ``<stem>-labels.csv``, and nothing
+        reads the old one: the feature was two commits old at the time and
+        the user said not to bother.  A file under the old name is simply
+        not found, which reads as a recording with no labels yet.
         """
         path = Path(path)
         self.path = path

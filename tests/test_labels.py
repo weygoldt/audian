@@ -92,14 +92,14 @@ def store():
 
 def test_header_is_the_documented_column_order(store, tmp_path):
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, 100.0, 200.0))
-    assert store.write(tmp_path / "rec-labels.csv") == ""
-    assert read_rows(tmp_path / "rec-labels.csv")[0] == list(COLUMNS)
+    assert store.write(tmp_path / "rec-editable-labels.csv") == ""
+    assert read_rows(tmp_path / "rec-editable-labels.csv")[0] == list(COLUMNS)
 
 
 def test_a_point_writes_no_end_time(store, tmp_path):
     store.add(Label("pulse", KIND_POINT, 3, 1.25, None, 700.0, 700.0))
-    store.write(tmp_path / "rec-labels.csv")
-    row = read_rows(tmp_path / "rec-labels.csv")[1]
+    store.write(tmp_path / "rec-editable-labels.csv")
+    row = read_rows(tmp_path / "rec-editable-labels.csv")[1]
     cells = dict(zip(COLUMNS, row))
     assert cells["t_start_s"] == "1.250000"
     # empty, not -1 and not a repeat of t_start: a number here would be
@@ -110,8 +110,8 @@ def test_a_point_writes_no_end_time(store, tmp_path):
 
 def test_a_trace_label_writes_no_frequency(store, tmp_path):
     store.add(Label("event", KIND_SPAN, 1, 0.5, 1.5, None, None))
-    store.write(tmp_path / "rec-labels.csv")
-    cells = dict(zip(COLUMNS, read_rows(tmp_path / "rec-labels.csv")[1]))
+    store.write(tmp_path / "rec-editable-labels.csv")
+    cells = dict(zip(COLUMNS, read_rows(tmp_path / "rec-editable-labels.csv")[1]))
     assert cells["f_low_hz"] == ""
     assert cells["f_high_hz"] == ""
     assert cells["channel"] == "1"
@@ -119,13 +119,13 @@ def test_a_trace_label_writes_no_frequency(store, tmp_path):
 
 def test_a_mean_label_writes_no_channel(store, tmp_path):
     store.add(Label("event", KIND_SPAN, None, 0.5, 1.5, 10.0, 20.0))
-    store.write(tmp_path / "rec-labels.csv")
-    cells = dict(zip(COLUMNS, read_rows(tmp_path / "rec-labels.csv")[1]))
+    store.write(tmp_path / "rec-editable-labels.csv")
+    cells = dict(zip(COLUMNS, read_rows(tmp_path / "rec-editable-labels.csv")[1]))
     assert cells["channel"] == ""
 
 
 def test_round_trip_is_exact(store, tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 0.798766, 2.399383, 983.051, 2610.169))
     store.add(Label("event", KIND_SPAN, None, 1.0, 2.0, None, None))
     store.add(Label("pulse", KIND_POINT, 7, 3.5, None, 400.0, 400.0))
@@ -137,7 +137,7 @@ def test_round_trip_is_exact(store, tmp_path):
 
 
 def test_a_note_with_a_comma_survives(store, tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, None, None, 'two, "three"'))
     store.write(path)
     fresh = LabelSet(DEFAULT_CATEGORIES)
@@ -146,7 +146,7 @@ def test_a_note_with_a_comma_survives(store, tmp_path):
 
 
 def test_rows_that_cannot_be_placed_are_counted_not_drawn(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS)
         + "\n"
@@ -162,7 +162,7 @@ def test_rows_that_cannot_be_placed_are_counted_not_drawn(tmp_path):
 
 
 def test_a_backwards_span_is_put_the_right_way_round(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS) + "\nevent,span,0,2.0,1.0,900.0,100.0,\n", encoding="utf-8"
     )
@@ -174,7 +174,7 @@ def test_a_backwards_span_is_put_the_right_way_round(tmp_path):
 
 
 def test_an_unknown_category_is_added_rather_than_dropped(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS) + "\nvolley,span,0,1.0,2.0,,,\n", encoding="utf-8"
     )
@@ -194,7 +194,7 @@ def test_a_missing_sidecar_reads_as_an_empty_set(tmp_path):
 
 def test_the_sidecar_is_named_after_the_recording(tmp_path):
     assert sidecar_path(tmp_path / "logger09-20250916T164744.wav") == (
-        tmp_path / "logger09-20250916T164744-labels.csv"
+        tmp_path / "logger09-20250916T164744-editable-labels.csv"
     )
 
 
@@ -217,7 +217,7 @@ def test_a_freed_palette_index_is_reused(store):
 
 
 def test_saving_an_empty_set_removes_the_sidecar(store, tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0))
     store.save(path)
     assert path.exists()
@@ -229,8 +229,8 @@ def test_saving_an_empty_set_removes_the_sidecar(store, tmp_path):
 
 def test_the_write_leaves_no_temporary_behind(store, tmp_path):
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0))
-    store.write(tmp_path / "rec-labels.csv")
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["rec-labels.csv"]
+    store.write(tmp_path / "rec-editable-labels.csv")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["rec-editable-labels.csv"]
 
 
 def test_a_failed_write_leaves_the_previous_file_whole(store, tmp_path, monkeypatch):
@@ -241,7 +241,7 @@ def test_a_failed_write_leaves_the_previous_file_whole(store, tmp_path, monkeypa
     produced.  Here the failure happens at the rename, and the old file is
     untouched.
     """
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0))
     store.write(path)
     before = path.read_bytes()
@@ -255,7 +255,7 @@ def test_a_failed_write_leaves_the_previous_file_whole(store, tmp_path, monkeypa
     assert "no space left on device" in message
     assert path.read_bytes() == before
     assert store.dirty  # and the caller still knows it has unsaved work
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["rec-labels.csv"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["rec-editable-labels.csv"]
 
 
 def test_categories_survive_the_settings_round_trip():
@@ -680,9 +680,9 @@ def test_the_labels_group_costs_the_lanes_no_height(browser):
     why this is asserted rather than assumed.
     """
     titles = [g.title for g in browser.param_groups]
-    assert "Labels" in titles
-    labels_group = browser.param_groups[titles.index("Labels")]
-    annotations = browser.param_groups[titles.index("Annotations")]
+    assert "Editable labels" in titles
+    labels_group = browser.param_groups[titles.index("Editable labels")]
+    annotations = browser.param_groups[titles.index("Fixed labels")]
     assert labels_group.rows <= annotations.rows
     heights = {g.body.height() for g in browser.param_groups}
     assert len(heights) == 1
@@ -718,7 +718,7 @@ def test_no_category_is_lost_to_the_fold(browser):
     # Raised first, and through the real click: a QStackedLayout gives
     # geometry to the current page only, so an unraised strip has never had a
     # width to fold against.
-    browser.param_tabs.buttons["Labels"].click()
+    browser.param_tabs.buttons["Editable labels"].click()
     settle()
     strip = browser.label_chipbox
 
@@ -844,7 +844,7 @@ def test_a_sidecar_that_did_not_read_whole_is_never_written_over(tmp_path):
     So a store that did not get its sidecar back whole refuses to write --
     and refuses to delete, which is the worse of the two.
     """
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS) + "\nevent,span,0,1.0,2.0,,,\n,span,0,,,,,\n",
         encoding="utf-8",
@@ -863,7 +863,7 @@ def test_a_sidecar_that_did_not_read_whole_is_never_written_over(tmp_path):
 
 
 def test_an_undecodable_sidecar_blocks_the_store_too(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_bytes(b"category,kind\n\xff\xfe not utf-8 at all\n")
     before = path.read_bytes()
     store = LabelSet(DEFAULT_CATEGORIES)
@@ -876,7 +876,7 @@ def test_an_undecodable_sidecar_blocks_the_store_too(tmp_path):
 
 
 def test_a_clean_read_leaves_the_store_writable(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(",".join(COLUMNS) + "\nevent,span,0,1.0,2.0,,,\n", encoding="utf-8")
     store = LabelSet(DEFAULT_CATEGORIES)
     store.read(path)
