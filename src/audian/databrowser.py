@@ -3354,12 +3354,21 @@ class DataBrowser(QWidget):
     # -- the overlays --
 
     def attach_label_overlays(self) -> None:
-        """Give every trace and spectrogram plot a label overlay.
+        """Give every trace, spectrogram and navigator plot a label overlay.
 
-        Not the navigator.  That strip shows the whole session at once -- a
-        one second label in an hour of recording is a third of a pixel there
-        -- and it is not a surface anything can be drawn on, so a mark on it
-        would be a mark the reader cannot check.
+        The navigator included, the same way `attach_annotation_overlays`
+        includes it.  It was left out when this feature was built, on the
+        argument that the strip shows the whole session and a one second
+        label in an hour of it is a third of a pixel -- but that is an
+        argument about *where* a mark is, not about whether it should be
+        there, and it applies just as hard to the fixed labels, which have
+        always been drawn on it.  Both kinds of mark answer the same question
+        on that strip: where in the session is there anything to look at.
+        Reading it off one kind and not the other made the overview a partial
+        map.
+
+        The navigator rows are read-only (`LabelOverlay.editable`): a label
+        is picked up and dragged on a lane, where there are pixels to aim at.
         """
         self.label_overlays = []
         for panel in self.panels.values():
@@ -3381,6 +3390,11 @@ class DataBrowser(QWidget):
                         on_dropped=self.label_editor_dropped,
                     )
                 )
+        # one row per channel, the whole session in each.  No `on_edit`: a
+        # navigator overlay refuses to build grips anyway, and handing it a
+        # write-back it can never call would say otherwise.
+        for ax in getattr(self.datafig, "axs", []):
+            self.label_overlays.append(LabelOverlay(ax, self.labels, SURFACE_NAVIGATOR))
 
     def redraw_labels(self) -> None:
         """Repaint every lane's labels, whatever the view state is.

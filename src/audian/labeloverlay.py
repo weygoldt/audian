@@ -125,13 +125,41 @@ from PyQt5.QtWidgets import (
 )
 
 from . import theme
-from .eventoverlay import SURFACE_SPECTROGRAM, SURFACE_TRACE
+from .eventoverlay import (
+    NAV_REGION_Z,
+    SURFACE_NAVIGATOR,
+    SURFACE_SPECTROGRAM,
+    SURFACE_TRACE,
+)
 from .labels import KIND_SPAN, KINDS, LabelCategory, LabelSet
 
 #: Above `eventoverlay.MARK_Z` (15) and below the crosshair and the playback
 #: marker (100).  A label is the thing being authored right now; an
 #: annotation that crossed over it would hide the box the reader just drew.
 LABEL_Z = 25
+
+#: What a label costs on the navigator, where `LABEL_Z` is not enough.
+#:
+#: That strip carries the window-selection region, a translucent
+#: `pg.LinearRegionItem` at `NAV_REGION_Z` whose brush is (76, 141, 255, 46),
+#: so anything below it is painted *through* it -- and precisely inside the
+#: stretch of session the reader is working in.  Measured on a four channel
+#: recording, the lanes zoomed to the first second so the region covers a
+#: quarter of the strip, sampling a box's vertical edge at mid row:
+#:
+#: ==================  ==================  ==================
+#: z of the box        inside the region   outside it
+#: ==================  ==================  ==================
+#: `LABEL_Z` (25)      (223, 113, 134)     (255, 107, 107)
+#: `LABEL_NAV_Z` (65)  (255, 107, 107)     (255, 107, 107)
+#: ==================  ==================  ==================
+#:
+#: (255, 107, 107) is the category's own colour.  The row ground itself goes
+#: (13, 18, 25) to (25, 40, 66) under the region, so the wash is real and it
+#: is the box that has to clear it.  `eventoverlay.NAV_MARK_Z` buys a fixed
+#: label the same thing; this stays above it, which is the order the two
+#: kinds of mark have everywhere else.
+LABEL_NAV_Z = NAV_REGION_Z + 15
 
 #: The selected label, above every unselected one and still under the cross
 #: hair.  `pg.ROI` defaults to 10, which puts it *below* the stored boxes at
@@ -405,6 +433,18 @@ class LabelOverlay:
         #: -- and a label that carries a frequency is still drawn full height
         #: on it rather than at some amplitude it never claimed.
         self.has_frequency = surface == SURFACE_SPECTROGRAM
+        #: Whether a label on this plot can be picked up and dragged.
+        #:
+        #: Not on the navigator.  That strip is a map of the whole session
+        #: rather than a surface anything is drawn on: at 3621 s across
+        #: 3840 px a one second label is a pixel wide, so a grip there would
+        #: be a control aimed at something too small to aim at, and the row
+        #: already belongs to the window-selection region.  It shows the
+        #: labels; it does not edit them.
+        self.editable = surface != SURFACE_NAVIGATOR
+        #: z of the marks, which the navigator has to buy separately -- see
+        #: `LABEL_NAV_Z`
+        self.z = LABEL_NAV_Z if surface == SURFACE_NAVIGATOR else LABEL_Z
         #: master switch, driven from the parameter bar
         self.visible = True
         self.boxes: list[QGraphicsRectItem] = []
@@ -412,7 +452,7 @@ class LabelOverlay:
         self.points = pg.ScatterPlotItem(
             symbol="+", size=POINT_SYMBOL_PX, pxMode=True, hoverable=False
         )
-        self.points.setZValue(LABEL_Z)
+        self.points.setZValue(self.z)
         _passive(self.points)
         # ignoreBounds: `RangePlot.add_item` ends in a bare addItem(), and a
         # rect added that way joins childrenBounds -- measured, it moved a
@@ -432,7 +472,7 @@ class LabelOverlay:
 
     def _grow(self) -> QGraphicsRectItem:
         item = QGraphicsRectItem()
-        item.setZValue(LABEL_Z)
+        item.setZValue(self.z)
         item.setVisible(False)
         _passive(item)
         self.plot.addItem(item, ignoreBounds=True)
@@ -537,6 +577,8 @@ class LabelOverlay:
         disagree.
         """
         self.stop_editing()
+        if not self.editable:
+            return False
         bounded = self.has_frequency and label.has_frequency()
         view = self.plot.getViewBox()
         if view is None:
