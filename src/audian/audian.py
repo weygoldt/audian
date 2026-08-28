@@ -1334,7 +1334,8 @@ class CheatSheet(QDialog):
                 "toggle_labels",
                 "label_editor",
                 "label_table",
-                "remove_last_label",
+                "delete_label",
+                "undo_label",
             ),
         ),
     )
@@ -4251,13 +4252,25 @@ class Audian(QMainWindow):
         )
         self.acts.label_table.triggered.connect(self.show_label_table)
 
-        self.acts.remove_last_label = QAction("&Undo last label", self)
-        self.acts.remove_last_label.setShortcut("Shift+B")
-        self.acts.remove_last_label.setToolTip(
-            "Remove the editable label just added  (Shift+B).  Any other one "
-            "comes off in the label list."
+        self.acts.delete_label = QAction("&Delete selected label", self)
+        self.acts.delete_label.setShortcut("Ctrl+Delete")
+        self.acts.delete_label.setToolTip(
+            "Remove the editable label the grips are on  (Ctrl+Delete).  "
+            "Ctrl+click a label in label mode (b) to pick it up; then drag a "
+            "grip to move or resize it.  Plain Delete hides the deselected "
+            "channels and Backspace zooms back, which is why this one takes "
+            "Ctrl."
         )
-        self.acts.remove_last_label.triggered.connect(self.remove_last_label)
+        self.acts.delete_label.triggered.connect(self.delete_selected_label)
+
+        self.acts.undo_label = QAction("&Undo last label change", self)
+        self.acts.undo_label.setShortcut("Shift+B")
+        self.acts.undo_label.setToolTip(
+            "Take back the last change to the editable labels (Shift+B): one "
+            "added, one removed, or one moved or resized.  One level, and "
+            "only what this session did."
+        )
+        self.acts.undo_label.triggered.connect(self.undo_last_label_change)
 
         label_menu = menu.addMenu("&Editable labels")
         label_menu.addAction(self.acts.label_region)
@@ -4265,7 +4278,8 @@ class Audian(QMainWindow):
         label_menu.addSeparator()
         label_menu.addAction(self.acts.label_editor)
         label_menu.addAction(self.acts.label_table)
-        label_menu.addAction(self.acts.remove_last_label)
+        label_menu.addAction(self.acts.delete_label)
+        label_menu.addAction(self.acts.undo_label)
 
         self.data_menus.append(label_menu)
         return label_menu
@@ -4289,10 +4303,15 @@ class Audian(QMainWindow):
         if browser is not None:
             browser.show_label_table()
 
-    def remove_last_label(self):
+    def delete_selected_label(self):
         browser = self.require_browser()
         if browser is not None:
-            browser.remove_last_label()
+            browser.delete_selected_label()
+
+    def undo_last_label_change(self):
+        browser = self.require_browser()
+        if browser is not None:
+            browser.undo_last_label_change()
 
     def setup_panel_actions(self, menu):
         self.acts.link_panels = QAction("Link &panels", self)

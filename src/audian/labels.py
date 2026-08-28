@@ -318,6 +318,8 @@ class LabelSet:
         #: sidecar is not an empty one, so the store refuses to overwrite it
         #: and says why.
         self.blocked = ""
+        #: How to take back the last change, or None.  See `undo`.
+        self._undo: Optional[tuple] = None
         self.set_categories(categories)
         self.revision = 0
 
@@ -413,6 +415,7 @@ class LabelSet:
         for i in reversed(lost):
             del self.labels[i]
         del self._categories[index]
+        self.forget_undo()
         self.revision += 1
         if lost:
             self.dirty = True
@@ -427,6 +430,7 @@ class LabelSet:
     def add(self, label: Label) -> Label:
         """Store one label, and mark the set unsaved."""
         self.labels.append(label)
+        self._undo = ("add", label)
         self.revision += 1
         self.dirty = True
         return label
@@ -435,19 +439,22 @@ class LabelSet:
         """Drop the label at `index`, and return it.  None when out of range."""
         if not (-len(self.labels) <= index < len(self.labels)):
             return None
+        at = index if index >= 0 else len(self.labels) + index
         label = self.labels.pop(index)
+        self._undo = ("remove", at, label)
         self.revision += 1
         self.dirty = True
         return label
 
     def remove_last(self) -> Optional[Label]:
-        """Undo the last `add`.  The whole of this feature's undo."""
+        """Drop the last row, whatever it is.  The primitive under `undo`."""
         return self.remove(-1) if self.labels else None
 
     def clear(self) -> None:
         """Forget every label.  The vocabulary is a preference and survives."""
         if self.labels:
             self.labels = []
+            self.forget_undo()
             self.revision += 1
             self.dirty = True
 
@@ -458,6 +465,133 @@ class LabelSet:
         self.revision += 1
         self.dirty = True
         return True
+
+    def index_of(self, label: Label) -> int:
+        """Where `label` sits now, or -1.
+
+        By identity, never by value.  `Label` is a dataclass, so two points
+        of the same category at the same instant on the same electrode
+        compare equal and ``list.index`` would answer with the first of them.
+        A reader who selects one mark and then removes a different one must
+        still be holding the mark they picked.
+        """
+        for i, la in enumerate(self.labels):
+            if la is label:
+                return i
+        return -1
+
+    def set_geometry(
+        self,
+        index: int,
+        t0: float,
+        t1: Optional[float] = None,
+        f0: Optional[float] = None,
+        f1: Optional[float] = None,
+    ) -> bool:
+        """Move or resize one label.  False when there is no such row.
+
+        The caller states the whole geometry and this normalises it, by the
+        same three rules `Label.from_row` applies to a row off the disk --
+        there is one definition of what a label may look like and it is not
+        "whatever the last writer happened to pass".
+
+        * A **point** keeps no end time.  Its `kind` says it has no extent;
+          a `t1` written onto one would make the CSV disagree with itself.
+        * A backwards span is put the right way round, and so is a
+          backwards band.  A drag can be made in either direction and the
+          reader means the same box either way.
+        * **Frequency is all or nothing.**  One bound without the other is
+          not half a band, it is a band nobody can read; and the surface
+          that has no frequency at all -- a trace, whose y axis is
+          amplitude -- passes None for both and must get None back.
+
+        Returns False for a geometry that is the one already stored, and
+        that is not an optimisation.  `QGraphicsScene` calls a press a drag
+        after five device pixels of travel **or after any travel at all once
+        half a second has passed**, so a slow click on a grip arrives here as
+        a completed edit.  Written through, it would rewrite the sidecar and
+        -- worse -- spend the one `undo` slot on a change nobody made,
+        throwing away the one the reader might actually want back.
+        """
+        if not (0 <= index < len(self.labels)):
+            return False
+        label = self.labels[index]
+        before = (label.t0, label.t1, label.f0, label.f1)
+        t0 = float(t0)
+        if label.is_point():
+            t1 = None
+        elif t1 is not None:
+            t1 = float(t1)
+            if t1 < t0:
+                t0, t1 = t1, t0
+        if f0 is None or f1 is None:
+            f0 = f1 = None
+        else:
+            f0, f1 = float(f0), float(f1)
+            if f1 < f0:
+                f0, f1 = f1, f0
+        if (t0, t1, f0, f1) == before:
+            return False
+        label.t0 = t0
+        label.t1 = t1
+        label.f0 = f0
+        label.f1 = f1
+        self._undo = ("geometry", label, before)
+        self.revision += 1
+        self.dirty = True
+        return True
+
+    # --- one level of undo ------------------------------------------------
+    #
+    # One level and not a stack.  There is no undo stack anywhere in audian
+    # and a real one is a different feature; what this covers is the mistake
+    # a reader actually makes, which is one wrong gesture noticed at once.
+    #
+    # It covers a geometry edit as well as an add, because the autosave is
+    # immediate: a box dragged into the wrong shape is written to the sidecar
+    # before the reader has finished seeing it happen, and without this the
+    # shape they drew would be gone for good.
+
+    def forget_undo(self) -> None:
+        """Drop the one undo, for a change too large to take back one row.
+
+        A bulk removal, a category being dropped with its labels, or a fresh
+        read: restoring one row out of those would be a smaller change than
+        the reader made, presented as the whole of it.
+        """
+        self._undo = None
+
+    def can_undo(self) -> bool:
+        return self._undo is not None
+
+    def undo(self) -> Optional[str]:
+        """Take back the last change, or return None when there is none.
+
+        Returns the word for what was taken back, for the caller to say.
+        """
+        change = self._undo
+        self._undo = None
+        if change is None:
+            return None
+        kind = change[0]
+        if kind == "add":
+            index = self.index_of(change[1])
+            if index < 0:
+                return None
+            self.labels.pop(index)
+        elif kind == "remove":
+            _kind, at, label = change
+            self.labels.insert(min(at, len(self.labels)), label)
+        elif kind == "geometry":
+            _kind, label, (t0, t1, f0, f1) = change
+            if self.index_of(label) < 0:
+                return None
+            label.t0, label.t1, label.f0, label.f1 = t0, t1, f0, f1
+        else:  # pragma: no cover - the tuple is written in this file only
+            return None
+        self.revision += 1
+        self.dirty = True
+        return kind
 
     def window(self, t0: float, t1: float, channels=None) -> list:
         """``(index, label)`` for everything reaching into ``[t0, t1]``.
@@ -510,6 +644,7 @@ class LabelSet:
         path = Path(path)
         self.path = path
         self.labels = []
+        self.forget_undo()
         self.revision += 1
         self.dirty = False
         self.blocked = ""

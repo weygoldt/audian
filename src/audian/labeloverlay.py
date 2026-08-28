@@ -28,12 +28,13 @@ ground has been measured.  Over a spectrogram nothing may be filled at all
 `SpecItem`'s colormap spans the whole luminance range).  A y-bounded box
 reads from its outline; an unmeasured wash over the data does not.
 
-Nothing here is an ROI
-----------------------
+Only the selected label is an ROI, and it is an immovable one
+------------------------------------------------------------
 
 A reader labelling densely draws a box inside a box, so the gesture has to
 survive whatever is already on the lane.  Measured on a four channel stack at
-1200x900, one drag per lane, with the item under the whole drag:
+1200x900, one drag per lane with the item under the whole drag, counting the
+view box's ``sigSelectedRegion``:
 
 ===========================================  ================
 item                                         region signals
@@ -42,21 +43,51 @@ bare lane                                    1
 ``QGraphicsRectItem``, no mouse buttons      1
 ``QGraphicsRectItem``, ``Qt.LeftButton``     1
 ``pg.ScatterPlotItem``, default buttons      1
-**movable** ``pg.RectROI``                   **0**
+``pg.RectROI(movable=True)``                 **0**
+``pg.RectROI(movable=False)``                1
+``pg.RectROI(movable=False)`` + grips        1
 ===========================================  ================
 
-The ROI took the drag and moved itself, from (0.8 s, 1000.0 Hz) to
-(1.2 s, 1406.8 Hz).  So a per-label ROI -- the obvious way to let a stored
-box be dragged into shape -- costs the ability to start a new box inside an
-existing one, which is the commoner gesture.  Stored labels are plain items;
-editing a label's geometry with the mouse is deliberately not part of this
-feature, and labels are removed from the table (`LabelTableModel`) or with
-the undo key.
+The movable ROI took the drag and moved *itself*, from (1.0 s, 1000.0 Hz) to
+(2.397 s, 2220.3 Hz).  That is the whole reason stored labels are not ROIs:
+a lane full of them would cost the ability to start a new box inside an
+existing one.
 
-The items are passive anyway (`_passive`), for the reason `eventoverlay`
+The last two rows are what made editing possible, and they were measured
+three times over to be sure of them.  ``movable=False`` clears
+`pg.ROI.translatable`, and that flag is what `ROI.hoverEvent` tests before
+calling ``ev.acceptDrags(LeftButton)`` and what `MouseDragHandler` tests
+before taking a drag: without it the ROI's *body* pre-claims nothing and
+ignores the drag, which then reaches the view box exactly as over a bare
+lane.  Its **grips still work**, because `Handle.hoverEvent` accepts left
+drags unconditionally and is its own item -- measured, a corner grip resized
+a box from 2.000 s x 2000.0 Hz to 1.741 s x 1322.0 Hz and a centre grip moved
+one from (1.000 s, 1000.0 Hz) to (1.346 s, 1508.5 Hz), each emitting
+``sigRegionChangeFinished`` once.
+
+So: every stored label stays a plain item, and the **one** label the reader
+has selected grows a `LabelEditor` over the top of it.  A drag that starts
+inside the selected box still draws a new box; only the 12 px grips are
+control.
+
+Two more measurements the editor leans on:
+
+* ``invertible=False``, which `pg.ROI` defaults to, is what keeps
+  ``t1 >= t0`` and ``f1 >= f0``: a corner grip dragged well past the
+  opposite corner stopped at 0.599 s x 576.3 Hz, where the same drag with
+  ``invertible=True`` gave -0.802 s x -813.6 Hz.
+* ``setPos`` / ``setSize`` with ``finish=False`` emit ``sigRegionChanged``
+  but **not** ``sigRegionChangeFinished`` -- 0 after two such calls, 1 after
+  one ``finish=True``.  That is what lets the editor be re-synced from the
+  store on every frame without the sync reading back as an edit.
+
+The stored items are passive (`_passive`) for the reason `eventoverlay`
 gives: a mark states where something is and is not a control, so it has no
-business claiming hover or clicks.  What the table above says is that on
-these two item types it is hygiene rather than what keeps the drag alive.
+business claiming hover or clicks.  On these two item types that is hygiene
+rather than what keeps the drag alive -- pyqtgraph dispatches drags, clicks
+and hovers by ``hasattr(item, 'mouseDragEvent')`` and never consults
+``acceptedMouseButtons``, and a `QGraphicsRectItem` has none of those
+methods.
 
 Self-driven
 -----------
@@ -102,6 +133,30 @@ from .labels import KIND_SPAN, KINDS, LabelCategory, LabelSet
 #: annotation that crossed over it would hide the box the reader just drew.
 LABEL_Z = 25
 
+#: The selected label, above every unselected one and still under the cross
+#: hair.  `pg.ROI` defaults to 10, which puts it *below* the stored boxes at
+#: `LABEL_Z` and below the annotation marks at 15-17: the one box the reader
+#: is working on would be the one drawn underneath everything.
+LABEL_EDIT_Z = 30
+
+#: Half-side of a grip, in device pixels, which is also its grab radius.
+#:
+#: Measured by pressing at increasing distances from a grip's centre and
+#: asking whether the ROI moved: ``handleSize`` 5, 8 and 10 grabbed out to
+#: exactly 5, 8 and 10 px.  So the target is ``2 * GRIP_PX`` across, and 6
+#: makes that 12 px -- the same 12 px `POINT_SYMBOL_PX` gives a point label,
+#: and small enough to leave the body of a short box draggable for a new one.
+#: It has to stay findable on a sixteen channel stack, where a trace lane is
+#: 30 px tall, and on a 14 inch panel at 150% scale.
+#:
+#: A box shorter than ``2 * GRIP_PX`` has its corner grips overlapping the
+#: middle one, and there is no attempt to thin them out.  Measured on a
+#: 118 px lane at bands of 30, 16, 8 and 4 device pixels, a press on the
+#: middle grip moved the box every time and resized it none -- so a thin
+#: mark can always be slid, and its edges are reached by zooming the
+#: frequency axis, which is what a reader working at that scale is doing.
+GRIP_PX = theme.S6
+
 #: Half-width of a frequency-less point label, in device pixels.  A point has
 #: no extent, so its bar is sized in pixels and converted through the view
 #: box: at any zoom it stays a hairline rather than growing into a span.
@@ -133,6 +188,186 @@ def _passive(item) -> None:
     item.setAcceptHoverEvents(False)
 
 
+class LabelEditor(pg.ROI):
+    """The grips on the one editable label a reader has selected.
+
+    A `pg.ROI` with ``movable=False``, which is the whole trick: the body
+    passes a drag straight through to the view box, so a new box can still be
+    started inside this one, while the grips -- separate items, which accept
+    left drags whatever the ROI does -- move and resize it.  The measured
+    table is in this module's docstring.
+
+    Which grips it has is decided by what the label *is*, not by what the
+    surface could show:
+
+    * a **span with a band** (a spectrogram label, on a spectrogram) gets
+      four corner grips and a centre grip: time and frequency, and move.
+    * a **span with no band** -- every label on a trace, and a
+      trace-made label seen on a spectrogram -- gets two grips on the
+      vertical edges and a centre grip.  Both are placed at half height, and
+      a `pg.ROI` scale handle whose centre shares its y **cannot move in y**:
+      measured, dragging one 100 px left and 30 px up changed the width from
+      2.000 s to 1.568 s and left the height at 0.2458974853515625, to the
+      last bit.  A trace's y axis is amplitude and a box drawn there claims
+      no frequency; a grip that could write one would be a claim nobody made.
+    * a **point** gets the centre grip alone.  It has no extent to resize,
+      and its ROI is a zero-sized one sitting exactly on it, so the grip is
+      the only thing of it that is drawn -- the point's own ``+`` or hairline
+      is still drawn by the overlay underneath.
+
+    Never `removable`.  `pg.ROI`'s own context menu survives
+    `theme.strip_pg_menus` and would offer a "Remove ROI" entry, in a word
+    this application does not use for a thing it does not call an ROI.
+    Deletion is `DataBrowser.delete_selected_label`.
+
+    ``rotatable`` and ``resizable`` are off for the same reason ``movable``
+    is, and they are not decoration.  `pg.MouseDragHandler` reads all three
+    and is still reached for a drag on the body once the hover claim is
+    gone, so it is the *modifier* that picks a drag mode.  Measured, one
+    drag from (1.3 s, 1400 Hz) to (2.7 s, 2600 Hz) inside a box at
+    (1.0 s, 1000.0 Hz) sized 2.000 s x 2000.0 Hz:
+
+    ==================  ==============  ==============  ==================
+    held down           bare lane       ``movable=      all three off
+                                        False`` only
+    ==================  ==============  ==============  ==================
+    nothing             1               1               1
+    Shift (play)        1               **0**           1
+    Alt (analyse)       1               **0**           1
+    Ctrl                1               1               1
+    ==================  ==============  ==============  ==================
+
+    In the two zeros the box took the gesture: Shift scaled it to
+    2.862 s x 2861.5 Hz and Alt **rotated** it to -161.5 degrees, which is a
+    label geometry that cannot be written down.  Shift+drag and Alt+drag are
+    the two modified drags `Audian.region_mode_for_modifiers` binds, so both
+    would have been lost over the selected box.  With all three flags off
+    the handler reaches its ``else`` and ignores, under every modifier.
+    Grips are unaffected: `pg.ROI.movePoint` reads neither flag.
+    """
+
+    def __init__(self, label, pos, size, color: int):
+        super().__init__(
+            pos,
+            size,
+            movable=False,
+            rotatable=False,
+            resizable=False,
+            removable=False,
+            invertible=False,
+            pen=theme.pen(theme.marker_color(color), theme.LW_SELECTED),
+            handlePen=theme.handle_pen(),
+            handleHoverPen=theme.handle_pen(),
+        )
+        #: the label these grips edit, held by identity
+        self.label = label
+        self.setZValue(LABEL_EDIT_Z)
+        self.handleSize = GRIP_PX
+        #: True while `sync` is writing, so the ROI's own change signals can
+        #: tell a re-sync from the reader's hand.  Without it every frame
+        #: that repositions the grips would read back as an edit and write
+        #: the label to disk again.
+        self.syncing = False
+        #: True between the first move of a drag and its end.  `pg.ROI` has
+        #: no flag for this: `ROI.isMoving` is set only for a drag on the
+        #: *body*, which this ROI never takes, and a grip drag sets
+        #: `Handle.isMoving` on the grip instead.
+        self.dragging = False
+        #: the size `sync` last wrote, which is what `resized` compares to
+        self.synced_size = tuple(self.size())
+
+    def build_grips(self, bounded: bool) -> None:
+        """Add the grips this label's kind and surface allow."""
+        if self.label.is_point():
+            self.addTranslateHandle([0.5, 0.5])
+            return
+        if bounded:
+            for x, y in ((0, 0), (1, 0), (0, 1), (1, 1)):
+                self.addScaleHandle([x, y], [1 - x, 1 - y])
+        else:
+            # centre shares the grip's y, which is what pins the height
+            self.addScaleHandle([1, 0.5], [0, 0.5])
+            self.addScaleHandle([0, 0.5], [1, 0.5])
+        self.addTranslateHandle([0.5, 0.5])
+
+    def sync(self, pos, size) -> None:
+        """Put the grips back where the store says, without that being an edit.
+
+        ``finish=False`` is load-bearing: measured, ``setPos`` and ``setSize``
+        with it emit ``sigRegionChanged`` but not
+        ``sigRegionChangeFinished``, so only the reader's own drag ever
+        reaches the write-back.  The `syncing` flag covers the other signal.
+        """
+        self.syncing = True
+        try:
+            self.setPos(pg.Point(*pos), finish=False)
+            self.setSize(pg.Point(*size), finish=False)
+        finally:
+            self.syncing = False
+        self.synced_size = tuple(self.size())
+
+    def resized(self) -> bool:
+        """Whether the last drag changed the box's extent rather than moving it.
+
+        Exact, and it has to be.  `pg.ROI.translate` writes ``state['pos']``
+        and never touches ``state['size']``, so after a move the size is the
+        one `sync` last set, bit for bit; after a grip resize it is not.
+        Comparing the *extent* to the store's instead would go through
+        ``pos + size - pos`` and land a few ulps out, and this decides which
+        end of a box may be moved when it runs off the lane.
+        """
+        return tuple(self.size()) != self.synced_size
+
+    def repen(self, color: int) -> None:
+        """Take the palette's current colours, if they are not already on.
+
+        Called from `LabelOverlay._sync_editor`, which is to say on every
+        pass that redraws the lane, so it covers a live theme switch *and*
+        the reader giving the category a different palette index in the
+        editor -- two doors onto the same failure, and the second one does
+        not go through `polish` at all.  It compares first because the pens
+        it would otherwise rebuild are rebuilt on every frame.
+
+        The pooled boxes get this for free -- `LabelOverlay._draw` builds a
+        pen for every one of them on every pass -- but the editor is a
+        long-lived item whose pens were made once.  Measured across a dark to
+        light switch: the pooled box went from ``#ff6b6b`` to ``#c0392b``
+        while the editor's outline stayed ``#ff6b6b`` and its grips stayed
+        ``#4c8dff``, so the box the reader is working on was the one drawn in
+        the wrong theme.
+
+        The grips are separate items and each holds its own copy, so
+        ``handlePen`` alone reaches only grips added later.
+        """
+        outline = theme.pen(theme.marker_color(color), theme.LW_SELECTED)
+        grip = theme.handle_pen()
+        if (
+            outline.color() == self.pen.color()
+            and self.handles
+            and grip.color() == self.handles[0]["item"].pen.color()
+        ):
+            return
+        self.setPen(outline)
+        self.handlePen = grip
+        self.handleHoverPen = theme.handle_pen()
+        for handle in self.handles:
+            item = handle["item"]
+            item.pen = self.handlePen
+            item.hoverPen = self.handleHoverPen
+            item.currentPen = self.handlePen
+            item.update()
+
+    def region(self) -> tuple:
+        """``(t0, t1, y0, y1)`` of the grips, in data coordinates."""
+        pos, size = self.pos(), self.size()
+        return (
+            float(pos.x()),
+            float(pos.x()) + float(size.x()),
+            float(pos.y()),
+            float(pos.y()) + float(size.y()),
+        )
+
+
 class LabelOverlay:
     """The hand-made labels of one plot.
 
@@ -140,10 +375,31 @@ class LabelOverlay:
     costing nothing until a label exists.
     """
 
-    def __init__(self, plot, store: LabelSet, surface: str = SURFACE_TRACE):
+    def __init__(
+        self,
+        plot,
+        store: LabelSet,
+        surface: str = SURFACE_TRACE,
+        on_edit=None,
+        on_dropped=None,
+    ):
         self.plot = plot
         self.store = store
         self.surface = surface
+        #: called ``(overlay, label, t0, t1, f0, f1, resized)`` when a grip
+        #: drag ends.
+        #: A callback rather than a reference to the browser, for the reason
+        #: this module exists: nothing here decides what a label means, and
+        #: writing to the store, saving and telling the reader are all
+        #: decisions.  `LabelTable` takes its `on_change` the same way.
+        self.on_edit = on_edit
+        #: called ``(overlay)`` when the grips come off because the label
+        #: they were on has left the store, so the owner of the selection
+        #: cannot be left holding a row that is gone
+        self.on_dropped = on_dropped
+        #: the grips on the selected label, when the selected label is on
+        #: this plot.  There is at most one in the whole window.
+        self.editor: Optional[LabelEditor] = None
         #: whether frequency bounds mean anything on this surface.  A trace's
         #: y axis is amplitude, so a box drawn there is bounded in time only
         #: -- and a label that carries a frequency is still drawn full height
@@ -211,7 +467,14 @@ class LabelOverlay:
         self._drawn = None
 
     def polish(self) -> None:
-        """Re-read the palette after a live theme switch."""
+        """Re-read the palette after a live theme switch.
+
+        The editor is re-penned here rather than in `_draw`, which is where
+        the pooled boxes get theirs: `update_plot` returns early on a lane
+        that is hidden, and nothing repaints that lane when it comes back.
+        """
+        if self.editor is not None:
+            self.editor.repen(self.store.color_of(self.editor.label.category))
         self._drawn = None
         self.update_plot()
 
@@ -222,6 +485,185 @@ class LabelOverlay:
         if not self._points_blank:
             self.points.setData([], [])
             self._points_blank = True
+
+    # --- the selected label -----------------------------------------------
+
+    def editing(self):
+        """The label whose grips are on this plot, or None."""
+        return None if self.editor is None else self.editor.label
+
+    def pick(self, t: float, y: float, view) -> Optional[object]:
+        """The label under ``(t, y)`` on this plot, or None.
+
+        In data coordinates against the store, never against the items: a
+        stored label is a plain `QGraphicsRectItem` with no
+        ``mouseClickEvent``, so pyqtgraph never offers it a click at all, and
+        the query `LabelSet.window` already answers is the same one `_draw`
+        asks.  What can be picked is therefore exactly what is on screen --
+        including, on the mean spectrogram, the labels of every channel it
+        averages.
+
+        **The smallest box wins.**  A reader labelling densely draws a box
+        inside a box, and the inner one is the one they are pointing at; the
+        outer is still reachable by its own edge.  Smallest is measured as a
+        fraction of the *view*, because a box 0.1 s tall in frequency and one
+        2 s long are not comparable in their own units.  A point has no
+        extent at all and so always wins over whatever it sits in.  Ties go
+        to the label added last, which is the one drawn on top.
+        """
+        tol = GRIP_PX * float(view.viewPixelSize()[0])
+        (t0v, t1v), (y0v, y1v) = view.viewRange()
+        span = max(t1v - t0v, 1e-12)
+        height = max(y1v - y0v, 1e-12)
+        ytol = GRIP_PX * float(view.viewPixelSize()[1])
+        best = None
+        best_area = None
+        for _index, label in self.store.window(t - tol, t + tol, self.channels()):
+            bounded = self.has_frequency and label.has_frequency()
+            if bounded and not (label.f0 - ytol <= y <= label.f1 + ytol):
+                continue
+            width = 0.0 if label.is_point() else (label.t_end() - label.t0) / span
+            band = (label.f1 - label.f0) / height if bounded else 1.0
+            area = width * band
+            if best_area is None or area <= best_area:
+                best, best_area = label, area
+        return best
+
+    def start_editing(self, label) -> bool:
+        """Put grips on `label`.  False when this plot cannot carry them.
+
+        The answer is the caller's to act on: it holds the selection, and a
+        selection whose grips were never built is the one way the two can
+        disagree.
+        """
+        self.stop_editing()
+        bounded = self.has_frequency and label.has_frequency()
+        view = self.plot.getViewBox()
+        if view is None:
+            return False
+        (_t0v, _t1v), (y0, y1) = view.viewRange()
+        pos, size = self._editor_box(label, bounded, y0, y1)
+        editor = LabelEditor(label, pos, size, self.store.color_of(label.category))
+        editor.build_grips(bounded)
+        self.plot.addItem(editor, ignoreBounds=True)
+        editor.sigRegionChanged.connect(self._grips_moved)
+        editor.sigRegionChangeFinished.connect(self._grips_released)
+        self.editor = editor
+        return True
+
+    def stop_editing(self) -> None:
+        """Take the grips off, if this plot has them."""
+        editor = self.editor
+        self.editor = None
+        if editor is None:
+            return
+        editor.sigRegionChanged.disconnect(self._grips_moved)
+        editor.sigRegionChangeFinished.disconnect(self._grips_released)
+        self.plot.removeItem(editor)
+
+    def _editor_box(self, label, bounded: bool, y0, y1) -> tuple:
+        """``(pos, size)`` in data coordinates for `label`'s grips.
+
+        **Exactly the label, never a pixel more.**  `_draw` gives a very
+        narrow box a two pixel minimum so it stays visible, and it may,
+        because nothing reads a drawn rect back.  Doing the same here would:
+        the width the grips have is the width `_grips_released` reports, so a
+        box narrower than the minimum would be *widened to it* by a reader
+        who only meant to slide it along.  Zoomed out far enough the grips
+        do pile up on one another -- and zooming in is what a reader working
+        on a mark that small is doing anyway.
+
+        A point gets a zero-sized box sitting exactly on it: there is nothing
+        to resize, the centre grip is drawn in device pixels and is therefore
+        the only visible part of it, and the point's own ``+`` or hairline is
+        still drawn underneath by `_draw`.
+        """
+        if label.is_point():
+            y = 0.5 * (label.f0 + label.f1) if bounded else 0.5 * (y0 + y1)
+            return (label.t0, y), (0.0, 0.0)
+        width = label.t_end() - label.t0
+        if bounded:
+            return (label.t0, label.f0), (width, label.f1 - label.f0)
+        return (label.t0, y0), (width, y1 - y0)
+
+    def _grips_moved(self, _editor=None) -> None:
+        if self.editor is not None and not self.editor.syncing:
+            self.editor.dragging = True
+
+    def _grips_released(self, _editor=None) -> None:
+        """One grip drag has ended: hand the new geometry to the browser.
+
+        **A lane may only change what it can show.**  Three cases, and the
+        third is the one that costs data if it is got wrong:
+
+        * a spectrogram lane, and a label with a band: time and frequency
+          both come off the grips.
+        * a spectrogram lane, and a label with no band -- one drawn on a
+          trace, which is drawn full height here: time comes off the grips
+          and the frequency stays absent.  The grips' y is the lane's own
+          height; writing it would hand a box drawn over a waveform a band
+          nobody claimed, and ``0..Nyquist`` at that.
+        * **a trace lane, and a label with a band.**  The box is drawn full
+          height there too, so the grips' y is again the lane's -- but this
+          label *has* a frequency and it is not the trace's to change.  The
+          label's own band is passed straight back through.  Reading the
+          lane instead would erase the band of any label a reader happened
+          to nudge from the waveform, which is the half of the label that
+          says which signal it is.
+        """
+        editor = self.editor
+        if editor is None or editor.syncing:
+            return
+        editor.dragging = False
+        if self.on_edit is None:
+            return
+        t0, t1, y0, y1 = editor.region()
+        label = editor.label
+        if self.has_frequency and label.has_frequency():
+            if label.is_point():
+                # a point's grip sits where `_draw` puts its mark, at the
+                # middle of whatever band it carries -- normally none at all,
+                # since `store_label` writes f0 == f1, but the sidecar is
+                # hand-editable and a band read out of one is not this
+                # gesture's to close up
+                half = 0.5 * (label.f1 - label.f0)
+                f0, f1 = y0 - half, y0 + half
+            else:
+                f0, f1 = y0, y1
+        else:
+            f0, f1 = label.f0, label.f1
+        self.on_edit(
+            self,
+            label,
+            t0,
+            None if label.is_point() else t1,
+            f0,
+            f1,
+            editor.resized(),
+        )
+
+    def _sync_editor(self, y0, y1, view) -> None:
+        """Put the grips back on the label, after anything moved either.
+
+        Skipped while the reader is dragging one, which is the only time the
+        grips are ahead of the store rather than behind it.
+        """
+        editor = self.editor
+        if editor is None or editor.dragging:
+            return
+        if self.store.index_of(editor.label) < 0:
+            # the label went while it was selected, so the item must not
+            # outlive its row.  The owner is told rather than left to notice:
+            # every caller happens to revalidate its own selection first, and
+            # nothing makes them.
+            self.stop_editing()
+            if self.on_dropped is not None:
+                self.on_dropped(self)
+            return
+        editor.repen(self.store.color_of(editor.label.category))
+        bounded = self.has_frequency and editor.label.has_frequency()
+        pos, size = self._editor_box(editor.label, bounded, y0, y1)
+        editor.sync(pos, size)
 
     # --- drawing ----------------------------------------------------------
 
@@ -263,6 +705,9 @@ class LabelOverlay:
             self.clear()
             return
         self._draw(t0, t1, y0, y1, view)
+        # after the boxes, so the grips are put on a label the store has
+        # already been read for, and on the y range the lane really has
+        self._sync_editor(y0, y1, view)
 
     def _draw(self, t0, t1, y0, y1, view) -> None:
         channels = self.channels()
@@ -671,6 +1116,12 @@ class LabelTableModel(QAbstractTableModel):
             self.beginRemoveRows(QModelIndex(), r, r)
             self.store.remove(r)
             self.endRemoveRows()
+        if len(rows) > 1:
+            # `LabelSet.remove` records an undo for each row it drops, so the
+            # slot would hold the last of them: Shift+B would put one row of
+            # several back and read as the whole change having been taken
+            # back.  A removal of five is not one change to undo.
+            self.store.forget_undo()
         return len(rows)
 
     def refresh(self) -> None:

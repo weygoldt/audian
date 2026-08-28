@@ -7,7 +7,7 @@ import pyqtgraph as pg
 from contextlib import contextmanager
 from pathlib import Path
 from copy import deepcopy
-from math import fabs, floor, log10
+from math import fabs, floor, isfinite, log10
 from typing import NamedTuple, Optional
 from scipy.signal import butter, sosfiltfilt
 
@@ -1301,6 +1301,15 @@ class DataBrowser(QWidget):
             self.labels.categories[0].name if self.labels.categories else ""
         )
         self.label_overlays = []
+        #: The one label the reader has picked out to edit, held by identity
+        #: rather than by row: a row number goes stale the moment any earlier
+        #: label is removed, and the selection has to survive that.
+        self.selected_label = None
+        #: The overlay carrying that label's grips.  One overlay, not one per
+        #: lane, even for a label that is drawn on every lane -- the reader
+        #: pointed at one of them, and grips on the other fifteen would be
+        #: fifteen places to drag the same box from.
+        self.selected_overlay = None
         #: QActions bound to the digit keys, one per category, rebuilt
         #: whenever the vocabulary changes
         self.category_acts = []
@@ -1896,6 +1905,19 @@ class DataBrowser(QWidget):
         rail_act.setShortcut("F7")
         rail_act.triggered.connect(self.toggle_rail)
         self.addAction(rail_act)
+
+        # Escape drops the label selection.  Bound here rather than in
+        # `audian.setup_label_actions` because it belongs in no menu: it is
+        # the way out of a state, not a command, and a menu entry reading
+        # "Deselect" would be a line in the Editable labels menu that is
+        # greyed out almost all of the time.  Nothing else in the
+        # application binds Escape -- the cheat sheet handles its own, in a
+        # dialog, which keeps it.
+        deselect_act = QAction("Deselect the editable label", self)
+        deselect_act.setShortcut("Escape")
+        deselect_act.setShortcutContext(Qt.WindowShortcut)
+        deselect_act.triggered.connect(self.deselect_label)
+        self.addAction(deselect_act)
 
     def setup_time_axis(self) -> None:
         """Build the stack's one time axis, in a row of its own.
@@ -2679,6 +2701,11 @@ class DataBrowser(QWidget):
         for c in range(len(self.figs)):
             self.figs[c].setVisible(c in visible)
             self.rail_rows[c].setVisible(self.rail_shown() and c in visible)
+        # This is the one call every lane-level visibility change goes
+        # through, so it is where a selection whose lane has just gone is
+        # noticed -- hiding a channel, or the mean spectrogram collapsing
+        # sixteen of them onto one.
+        self.revalidate_selection()
         return visible
 
     def update_rail(self) -> None:
@@ -3121,6 +3148,27 @@ class DataBrowser(QWidget):
             self.set_readout("p", p_text)
 
     def mouse_clicked(self, evt, channel):
+        # Ctrl+click picks the editable label under the pointer, and picks
+        # nothing else: it is the one modifier free over a lane -- Shift+drag
+        # plays, Alt+drag analyses and Alt is the menu mnemonic besides, and
+        # Meta belongs to the tiling compositor this fork's user runs.
+        # Ctrl+wheel already zooms time, which is a different gesture.
+        #
+        # Only in label mode.  That mode already decides who owns the pixels
+        # of a lane -- it disarms the spectrogram's filter handles for
+        # exactly this reason -- and a grip appearing under a reader who is
+        # filtering or zooming would be a control they did not ask for.
+        if (
+            self.region_mode == DataBrowser.MODE_LABEL
+            and (evt[0].button() & Qt.LeftButton) > 0
+            and (evt[0].modifiers() & Qt.ControlModifier)
+        ):
+            # `mouse_moved` runs through a 60 Hz SignalProxy, so the pointer
+            # may not have reached this lane in `hover_panel` yet
+            self.mouse_moved((evt[0].scenePos(),), channel)
+            self.select_label_at(channel, evt[0].scenePos())
+            return
+
         # Clicking a lane focuses it, wherever in the lane you click.  The
         # rail card was the only way to do this, which meant reaching for a
         # 48 px column to select the plot you were already looking at.  Every
@@ -3230,6 +3278,9 @@ class DataBrowser(QWidget):
         no category or no start time were dropped rather than drawn at t=0.
         """
         path = self.labels_path()
+        # every label object in the store is replaced, so a selection held by
+        # identity now points at a row this recording does not have
+        self.deselect_label()
         report = self.labels.read(path)
         self.sync_category_state()
         if report.error:
@@ -3321,7 +3372,15 @@ class DataBrowser(QWidget):
             else:
                 continue
             for ax in panel.axs:
-                self.label_overlays.append(LabelOverlay(ax, self.labels, surface))
+                self.label_overlays.append(
+                    LabelOverlay(
+                        ax,
+                        self.labels,
+                        surface,
+                        on_edit=self.label_edited,
+                        on_dropped=self.label_editor_dropped,
+                    )
+                )
 
     def redraw_labels(self) -> None:
         """Repaint every lane's labels, whatever the view state is.
@@ -3336,6 +3395,10 @@ class DataBrowser(QWidget):
 
     def set_labels_visible(self, on: bool) -> None:
         """Take the labels off the lanes for a moment, or put them back."""
+        if not on:
+            # a selection nobody can see is a selection the next Ctrl+Delete
+            # would act on by surprise
+            self.deselect_label()
         for overlay in self.label_overlays:
             overlay.set_visible(on)
         if self.label_showw is not None and self.label_showw.isChecked() != bool(on):
@@ -3446,6 +3509,8 @@ class DataBrowser(QWidget):
             self.label_dialog = None
             if result != QDialog.Accepted:
                 return
+            # a dropped category takes its labels with it, the grips included
+            self.revalidate_selection()
             self.sync_category_state()
             self.save_label_settings()
             if dialog.dropped:
@@ -3465,6 +3530,8 @@ class DataBrowser(QWidget):
             return
 
         def changed():
+            # the list can remove the very label the grips are on
+            self.revalidate_selection()
             self.redraw_labels()
             self.schedule_label_save()
             self.update_label_status()
@@ -3473,6 +3540,264 @@ class DataBrowser(QWidget):
         self.label_table_dialog = dialog
         dialog.finished.connect(lambda _r=0: setattr(self, "label_table_dialog", None))
         dialog.show()
+
+    # -- editing one label --
+    #
+    # Creating a label is a drag; editing one is a *selection* followed by a
+    # drag of its grips.  The two gestures share the lane and must not share
+    # a press, because the box a reader draws next is very often inside the
+    # box they drew last -- which is why nothing stored is an ROI and why the
+    # one that is has its body disarmed.  See `labeloverlay.LabelEditor`.
+
+    def overlay_for_axis(self, ax):
+        """The label overlay of one plot, or None."""
+        for overlay in self.label_overlays:
+            if overlay.plot is ax:
+                return overlay
+        return None
+
+    def select_label_at(self, channel, scene_pos) -> bool:
+        """Pick the editable label under `scene_pos`.  False when there is none.
+
+        The hit test runs on the overlay the pointer is over, in data
+        coordinates, so what can be picked is exactly what that lane draws --
+        on the mean spectrogram, the labels of every channel it averages, and
+        on any lane a label that names no channel at all.
+        """
+        panel = self.hover_panel
+        if panel is None or not panel.is_time():
+            return False
+        if channel >= len(panel.axs):
+            return False
+        ax = panel.axs[channel]
+        view = ax.getViewBox()
+        if view is None:
+            return False
+        pos = view.mapSceneToView(scene_pos)
+        return self.select_label_in(ax, float(pos.x()), float(pos.y()))
+
+    def select_label_in(self, ax, t: float, y: float) -> bool:
+        """Pick the label at data ``(t, y)`` on one plot, or drop the selection."""
+        overlay = self.overlay_for_axis(ax)
+        view = ax.getViewBox()
+        if overlay is None or view is None:
+            return False
+        label = overlay.pick(t, y, view)
+        if label is None:
+            self.deselect_label()
+            return False
+        self.select_label(overlay, label)
+        return True
+
+    def select_label_from_region(self, channel, vbox, rect) -> bool:
+        """A Ctrl+drag reaches for a label; it never writes one.
+
+        Ctrl+click is the pick gesture, and whether a press becomes a click
+        or a drag is not something a reader decides: `QGraphicsScene` calls
+        it a drag after five device pixels of travel, or after any travel at
+        all once half a second has passed.  So a Ctrl+click that wobbles, or
+        that is simply held while the reader looks, arrives here as a region
+        -- and in label mode a region writes a label.  The reader would get a
+        hairline mark in their sidecar for having a slow hand.
+
+        Reaching for a label is what they meant either way, so that is what
+        this does, at the middle of whatever was dragged over.
+        """
+        panel = self.panels.get_panel(vbox)
+        if panel is None or not panel.is_time() or channel >= len(panel.axs):
+            return False
+        centre = rect.center()
+        return self.select_label_in(
+            panel.axs[channel], float(centre.x()), float(centre.y())
+        )
+
+    def select_label(self, overlay, label) -> None:
+        """Put the grips on one label, taking them off whatever had them."""
+        if self.selected_overlay is not None and self.selected_overlay is not overlay:
+            self.selected_overlay.stop_editing()
+        # after the grips are up, never before: a lane with no view box
+        # cannot carry them, and a selection whose grips were never built is
+        # the one way the two can disagree
+        if not overlay.start_editing(label):
+            self.selected_overlay = None
+            self.selected_label = None
+            return
+        self.selected_overlay = overlay
+        self.selected_label = label
+        self.update_label_status()
+        self.notify(
+            "info",
+            f"{self.describe_label(label)} -- drag a grip to move or resize it, "
+            "Ctrl+Delete removes it",
+        )
+
+    def label_editor_dropped(self, overlay) -> None:
+        """An overlay took its grips off by itself.  Follow it."""
+        if self.selected_overlay is overlay:
+            self.selected_overlay = None
+            self.selected_label = None
+            self.update_label_status()
+
+    def revalidate_selection(self) -> None:
+        """Drop the selection when nobody can act on it any more.
+
+        Two ways that happens.  The label may have **left the store** --
+        removing a category removes every label under it, and the label list
+        removes whatever rows were picked, and neither of them knows what
+        the grips are on; the selection is held by identity, so a scan is
+        the only way to find out.
+
+        Or the **lane may have gone**: hiding a channel, turning the
+        spectrograms off, or the mean spectrogram taking over all leave the
+        grips on a plot nobody can see.  That is the same argument F9 and
+        leaving label mode already make -- a selection nobody can see is the
+        one the next Ctrl+Delete acts on, and the File row would go on
+        naming it.
+        """
+        if self.selected_label is None:
+            return
+        if self.labels.index_of(self.selected_label) < 0:
+            self.deselect_label()
+            return
+        overlay = self.selected_overlay
+        plot = getattr(overlay, "plot", None)
+        if plot is None or not plot.isVisible():
+            # a whole panel switched off: `Panel.set_visible` reaches the
+            # plot items themselves, so this one does answer
+            self.deselect_label()
+            return
+        if overlay.channel() not in self.visible_channels():
+            # A hidden *channel* does not.  `apply_lane_visibility` hides the
+            # channel's `GraphicsLayoutWidget`, and a `QGraphicsItem` inside
+            # a hidden widget still reports ``isVisible()`` True -- that flag
+            # is about the item in its scene, not about whether anything is
+            # showing the scene.  Ask the browser which lanes are on screen
+            # instead, which is the same question `apply_lane_visibility`
+            # just answered.
+            self.deselect_label()
+
+    def deselect_label(self) -> None:
+        """Take the grips off, if any are on."""
+        if self.selected_overlay is not None:
+            self.selected_overlay.stop_editing()
+        had = self.selected_label is not None
+        self.selected_overlay = None
+        self.selected_label = None
+        if had:
+            self.update_label_status()
+
+    def axis_bounds(self, ax, which: str):
+        """``(min, max)`` of one of a plot's axes, or None when it has none.
+
+        The recording's own extent, not the view's: `PlotRange.rmin` and
+        `rmax` are what `set_limits` hands the view boxes.
+        """
+        spec = ax.x() if which == "x" else ax.y()
+        r = self.plot_ranges.get(spec)
+        if r is None or r.rmin is None or r.rmax is None:
+            return None
+        if not (isfinite(r.rmin) and isfinite(r.rmax)):
+            return None
+        return float(r.rmin), float(r.rmax)
+
+    @staticmethod
+    def fit_into(low_bound, high_bound, v0, v1, resized: bool):
+        """Put ``[v0, v1]`` back inside the bounds.  How depends on the drag.
+
+        **A move slides; a resize clamps.**  The two need opposite answers
+        and the difference is not cosmetic.
+
+        A move that runs off the lane is put back by shifting the whole box,
+        because its extent is the thing the reader already had right;
+        clamping its leading edge alone would squash it against the
+        boundary.
+
+        A resize may only move the edge that was dragged.  Sliding one
+        shifts the edge nobody touched: measured, a band of 983-3017 Hz on a
+        0-4000 Hz lane, pulled 100 px past Nyquist by its top corner, came
+        back as ``0.000,4000.000`` -- the low edge dragged down to zero and
+        the row claiming the signal fills the band, which is exactly the
+        claim `labels.py` says the format exists to refuse.  Squashing
+        against the edge is what a resize against the edge means.
+        """
+        if v1 is None:
+            return min(max(v0, low_bound), high_bound), None
+        if not resized:
+            if v0 < low_bound:
+                v1 += low_bound - v0
+                v0 = low_bound
+            if v1 > high_bound:
+                v0 -= v1 - high_bound
+                v1 = high_bound
+        return max(v0, low_bound), min(v1, high_bound)
+
+    def label_edited(self, overlay, label, t0, t1, f0, f1, resized) -> None:
+        """One grip drag has ended: write the new geometry and save it.
+
+        The same sequence `store_label` runs after an add, for the same
+        reason -- miss the revision bump inside `LabelSet.set_geometry` and
+        the lanes keep drawing the old box, miss the save and the reader's
+        correction is not on disk, miss the table refresh and an open label
+        list disagrees with the lane it came from.
+
+        The geometry is put back inside the recording first.  A grip is
+        dragged by the pointer and the pointer does not stop at the edge of
+        the lane: measured, one drag 600 px to the left of a 925 px lane
+        wrote ``t_start_s`` of **-1.595676** into the sidecar -- a label
+        before the first frame of a file whose every time is "seconds from
+        the first frame".  The rubber band that *makes* a label cannot go
+        there, because a drag is a rectangle between two points in the lane;
+        a grip can.
+        """
+        index = self.labels.index_of(label)
+        if index < 0:
+            self.deselect_label()
+            return
+        bounds = self.axis_bounds(overlay.plot, "x")
+        if bounds is not None:
+            t0, t1 = DataBrowser.fit_into(bounds[0], bounds[1], t0, t1, resized)
+        if f0 is not None and f1 is not None and overlay.has_frequency:
+            bounds = self.axis_bounds(overlay.plot, "y")
+            if bounds is not None:
+                f0, f1 = DataBrowser.fit_into(bounds[0], bounds[1], f0, f1, resized)
+        if not self.labels.set_geometry(index, t0, t1, f0, f1):
+            # The drag normalised to the geometry already stored, so nothing
+            # repaints -- and the grips are still where the pointer left
+            # them.  On a trace that is every vertical nudge, because the y
+            # of a full-height box is never read back.  Put them on the
+            # label again, or they sit a lane's height away from it until
+            # something else happens to redraw.
+            overlay.invalidate()
+            overlay.update_plot()
+            return
+        self.redraw_labels()
+        self.refresh_label_table()
+        self.schedule_label_save()
+        self.update_label_status()
+        what = "resized" if resized else "moved"
+        self.notify("info", f"{what} {self.describe_label(label)}")
+
+    def delete_selected_label(self) -> None:
+        """Remove the selected label (Ctrl+Delete).
+
+        `Delete` on its own hides the deselected channels and `Backspace`
+        zooms back, so neither was available; `Ctrl+Delete` is bound to
+        nothing else anywhere in the application.
+        """
+        label = self.selected_label
+        if label is None:
+            self.notify("warning", "no label selected -- Ctrl+click one first")
+            return
+        index = self.labels.index_of(label)
+        self.deselect_label()
+        if index < 0:
+            return
+        self.labels.remove(index)
+        self.redraw_labels()
+        self.refresh_label_table()
+        self.schedule_label_save()
+        self.update_label_status()
+        self.notify("info", f"removed {self.describe_label(label)}")
 
     # -- making a label --
 
@@ -3582,23 +3907,39 @@ class DataBrowser(QWidget):
         self.store_label(category, ax, channel, float(t), None, f, f)
         return True
 
-    def remove_last_label(self) -> None:
-        """Undo the last label.  The whole of this feature's undo.
+    def undo_last_label_change(self) -> None:
+        """Take back the last change to the labels (Shift+B).
 
-        There is no undo stack anywhere in audian, and a real one is a
-        different feature.  This plus the label table -- where any row can be
-        selected and removed -- covers the mistake a reader actually makes,
-        which is drawing one box in the wrong place and noticing at once.
+        One level, and it now covers a **geometry edit** as well as an add
+        and a delete.  It had to: the sidecar is written a turn of the event
+        loop after the gesture, so a box dragged into the wrong shape is on
+        disk before the reader has finished watching it happen, and without
+        this the shape they drew would be gone for good.  There is still no
+        undo stack anywhere in audian and a real one is a different feature.
+
+        It used to pop the last row whatever had happened, which meant that
+        on a recording just opened, this key deleted a label the reader had
+        never touched.  A change nobody made is not a change to take back.
         """
-        label = self.labels.remove_last()
-        if label is None:
-            self.notify("warning", "no labels to remove")
+        before = self.selected_label
+        kind = self.labels.undo()
+        if kind is None:
+            self.notify("warning", "nothing to undo")
             return
+        if before is not None and self.labels.index_of(before) < 0:
+            self.deselect_label()
         self.redraw_labels()
         self.refresh_label_table()
         self.schedule_label_save()
         self.update_label_status()
-        self.notify("info", f"removed {self.describe_label(label)}")
+        self.notify(
+            "info",
+            {
+                "add": "removed the label just added",
+                "remove": "put the removed label back",
+                "geometry": "put the label back where it was",
+            }[kind],
+        )
 
     def describe_label(self, label) -> str:
         """One line naming a label, for the status bar."""
@@ -3665,7 +4006,12 @@ class DataBrowser(QWidget):
         self.label_showw.setChecked(True)
         self.label_showw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.label_showw.setFixedHeight(theme.CHIP_HEIGHT)
-        self.label_showw.setToolTip("Show the editable labels over the lanes  (F9)")
+        self.label_showw.setToolTip(
+            "Show the editable labels over the lanes  (F9).\n"
+            "In label mode (b), Ctrl+click one to pick it up: it grows grips "
+            "to drag it into shape,\nand Ctrl+Delete removes it.  Escape puts "
+            "it down again, and Shift+B takes back the last change."
+        )
         self.label_showw.toggled.connect(self.set_labels_visible)
         where.addWidget(self.label_showw)
         editw = QToolButton(wherebox)
@@ -3767,7 +4113,14 @@ class DataBrowser(QWidget):
             return "no labels yet -- press b, then drag over a lane"
         name = self.labels.path.name if self.labels.path is not None else "?"
         state = "unsaved" if (self.labels.dirty or self.label_save_pending) else "saved"
-        return f"{count} label{'' if count == 1 else 's'} · {name} · {state}"
+        text = f"{count} label{'' if count == 1 else 's'} · {name} · {state}"
+        # The selection has to be readable somewhere that stays put.  The
+        # status bar says it once, at the moment of picking, and is then
+        # taken by the next pointer readout; this row is the only place that
+        # still answers "which one am I about to Ctrl+Delete?" a minute later.
+        if self.selected_label is not None:
+            text += f" · editing {self.describe_label(self.selected_label)}"
+        return text
 
     def update_label_status(self) -> None:
         """Redraw the File row, elided to the width the row already has."""
@@ -3779,7 +4132,7 @@ class DataBrowser(QWidget):
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
         label.setText(metrics.elidedText(text, Qt.ElideRight, max(label.width(), 1)))
         if self.label_undow is not None:
-            self.label_undow.setEnabled(bool(self.labels.labels))
+            self.label_undow.setEnabled(self.labels.can_undo())
         self.update_label_alert()
 
     # --- annotations -----------------------------------------------------
@@ -6849,6 +7202,9 @@ class DataBrowser(QWidget):
                 panel.set_cbar_visible(self.show_specs > 0 and self.show_cbars)
             elif panel.is_power():
                 panel.set_visible(self.show_specs > 0 and self.show_powers)
+        # whole panels go here rather than whole lanes, which is the other
+        # way the plot carrying the grips can stop being on screen
+        self.revalidate_selection()
         if self.datafig is not None:
             self.datafig.setVisible(self.show_fulldata)
         self.adjust_layout(self.width(), self.height())
@@ -6984,6 +7340,12 @@ class DataBrowser(QWidget):
         """
         self.region_mode = mode
         movable = mode != DataBrowser.MODE_LABEL
+        if movable:
+            # Leaving label mode gives the lane back, grips included: they
+            # are 12 px targets sitting where a filter cutoff is about to be
+            # draggable again, and a reader who has stopped labelling has
+            # stopped meaning them.
+            self.deselect_label()
         for ax in self.spectrogram_plots():
             ax.set_handles_movable(movable)
         if mode == DataBrowser.MODE_LABEL:
@@ -7022,7 +7384,13 @@ class DataBrowser(QWidget):
         elif mode == DataBrowser.MODE_SAVE:
             self.save_region(rect.left(), rect.right())
         elif mode == DataBrowser.MODE_LABEL:
-            self.label_from_region(channel, vbox, rect)
+            # `drag_modifiers` is latched when the drag starts and cleared
+            # only after both region signals have gone out, so it still says
+            # what was held down when the press happened
+            if vbox.drag_modifiers & Qt.ControlModifier:
+                self.select_label_from_region(channel, vbox, rect)
+            else:
+                self.label_from_region(channel, vbox, rect)
         elif mode == DataBrowser.MODE_ASK:
             menu = QMenu(self)
             zoom_act = menu.addAction("&Zoom")
