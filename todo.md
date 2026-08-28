@@ -18,9 +18,41 @@
 
 # Spec stuff 
 
-- [ ] Toggling spec should not toggle through different spec vs trace panel scalings. That scaling can now be done continuously by dragging, so it should just enable or diable spec, nothing more
-- [ ] double clicking the y axis (on spec and trace) should reset it. Generally, double-clicking on sliders or any movable thing should reset it in my opition. The y axis limit could live next to the nfft in the bottom spec panel
-- [ ] Move the mean spec to a sum spec. Mean spec is nice for noise supression but only if the recorded signal happens on many channels. If a sgnal of interest, such as that of a weakly electric fish, only moves over single channels over time, it gets averaged out. So instead, lets do a sum spec and divide by the channel count to land in a similar power scale to a single spec. And when we have that, we can also visualize the trace for all channels superimposed on a single timeline panel below. So sum spec becomes top panel the sum spec, bottom panel the trace, i..e all traces superimposed in one panel
+- [x] Toggling spec should not toggle through different spec vs trace panel scalings. That scaling can now be done continuously by dragging, so it should just enable or diable spec, nothing more. (F3 is on/off. `show_specs` was doing two jobs -- whether there is a spectrogram and how tall it is -- so every reader had to know which one it meant and the dragged split was stored four times over under a key nobody could see. One split now, and it survives the spectrogram being toggled off and back on, which it did not before. `PANEL_SPLIT_SETTING_VERSION` goes to 3: a version 2 file holds up to four splits and nothing says which one the reader wanted, so it is dropped with a logged warning.)
+- [x] double clicking the y axis (on spec and trace) should reset it. (Both axes of every lane, and it is not the same call on the two: a frequency axis opens at its full range, an amplitude axis opens *fitted to the data*. `reset` on an amplitude is what Shift+V does and goes to the format's full scale -- measured, a trace sitting in -0.117..0.129 goes to -1.000..1.000 -- which on recordings that peak at a few percent of full scale is a flat line, not a reset. So amplitude refits and frequency resets: both mean "the way the lane opened", which is what the same gesture already means on the panel splitter.)
+- [ ] The rest of "double-clicking any movable thing should reset it": the highpass and lowpass cutoff handles on the spectrogram and their two sliders, the envelope cutoff slider, the overlap slider, the navigator's window region, and the colour bar. Left out of the pass that did the axes because those have no existing reset to point the gesture at -- an axis had `PlotRange.reset` and `auto_fit_y` already, and "reset a highpass" has to be decided (0 Hz, i.e. the filter off, is the obvious answer and is still a decision).
+- [ ] A y axis limit field next to the nfft in the spec group of the bottom bar. This is the same want as "constrain default frequency axis" above and should be done once, as one control. Read `21169f6` before adding a widget to that bar: its width is the binding constraint on the 14 inch laptop, so measure the group's `minimumSizeHint` before and after.
+- [ ] **The array panel should take the MAX over channels, not the mean.** The
+  complaint is right and the fix first proposed is not: a signal that only ever
+  sits on one or two electrodes -- a weakly electric fish moving over the grid --
+  is averaged away by a panel that stands for sixteen. But *sum divided by the
+  channel count is the mean*, exactly, so that swap is a no-op;
+  `6e1d38c` records the same fact from the other side, that the sum and the mean
+  are "the same picture 12.04 dB apart", and 10*log10(16) = 12.04.
+
+  Neither reduction helps the single-electrode case. With signal power `P` on one
+  electrode and noise `n` on the other fifteen: the mean gives `(P + 15n)/16`, so
+  the signal drops 12 dB and the floor stays put; the undivided sum gives
+  `P + 15n`, so the signal stays and the floor climbs 15x. One lowers the signal
+  and the other raises the floor.
+
+  **Max over channels per time-frequency bin** is the one that does what is
+  wanted: a single-electrode signal keeps its full amplitude and the floor only
+  rises by the max of N noise draws. It is close to a one-line change in
+  `bufferedspectrogram.channel_power`, but four things downstream were tuned to
+  the mean and each needs re-measuring: `BufferedSpectrogram.estimate_noiselevels`,
+  `SpecItem.noise_levels` (whose docstring records "the mean's floor lands 2.3 dB
+  from a single channel's and its top 37.5 dB from it"), `NOISE_FLOOR_MARGIN_DB`,
+  and `SpecItem.get_power`, which has to keep agreeing with the pixel under the
+  cursor. The panel caption says `MEAN 00-15` and would have to say something else.
+  Worth considering whether the reduction should be a choice rather than a rule.
+  Good test case: `logger09-20250916T164744.wav`, where electrodes 08-11 are
+  recorded as exactly zero.
+
+- [ ] Superimpose every channel's trace in one panel, under the array
+  spectrogram. Separate from the reduction above and probably its own commit: it
+  is a new panel *kind* rather than a change to an existing one, and `panels.py`,
+  `LabelOverlay` and `EventOverlay` all key off what a panel is.
 
 # Future larger dev sessions
 

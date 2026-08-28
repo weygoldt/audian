@@ -3946,7 +3946,7 @@ class Audian(QMainWindow):
         self.sync_toolbar()
 
     def reset_panel_split(self):
-        """Shift+F3: the current spectrogram size back to its own default.
+        """Shift+F3: the trace / spectrogram boundary back to its default.
 
         Not propagated by `link_panels`, and neither is the drag.  That
         switch links which panels the tabs *show*, which the toolbar mirrors
@@ -4339,7 +4339,7 @@ class Audian(QMainWindow):
         self.acts.reset_panel_split.setShortcut("Shift+F3")
         self.acts.reset_panel_split.setToolTip(
             "Put the boundary between the trace and the spectrogram back "
-            "where this spectrogram size started"
+            "where the lane opened it"
         )
         self.acts.reset_panel_split.triggered.connect(self.reset_panel_split)
 

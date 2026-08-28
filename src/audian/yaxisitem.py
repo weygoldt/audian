@@ -4,6 +4,7 @@ from math import ceil, floor, log10
 
 import numpy as np
 import pyqtgraph as pg
+from PyQt5.QtCore import Qt
 
 from . import theme
 
@@ -28,12 +29,48 @@ class YAxisItem(pg.AxisItem):
         self._si_unit = ""
         self.si_prefix = ""
         self.max_major_ticks = max(2, int(max_major_ticks))
+        #: called with no arguments when the axis is double clicked; see
+        #: `set_reset`
+        self._on_reset = None
         super().__init__(*args, **kwargs)
         theme.style_axis(self)
 
     def apply_theme(self) -> None:
         """Re-apply the theme to this axis (idempotent)."""
         theme.style_axis(self)
+
+    def set_reset(self, callback) -> None:
+        """What a double click on this axis does, or None for nothing.
+
+        The axis is handed a callback rather than a browser: it is the piece
+        that knows a double click happened and nothing else, and which range
+        that is and how to put it back are the plot's business.
+        """
+        self._on_reset = callback
+        self.setCursor(Qt.PointingHandCursor if callback else Qt.ArrowCursor)
+
+    def mouseClickEvent(self, ev):
+        """A double click puts this axis back to the whole of the data.
+
+        The gesture `PanelSplitter` already has, on the other thing a reader
+        drags: *back to the default, the way a `QSplitter` handle behaves.*
+        Dragging an axis pans it and there was no way back except a key --
+        `Shift+V` for amplitude, and for frequency nothing at all, only home
+        and end.
+
+        pyqtgraph turns a double click into an ordinary `MouseClickEvent`
+        with `double()` set (`GraphicsScene.mouseDoubleClickEvent`), so this
+        is the same entry point a single click arrives at and not
+        `QGraphicsItem.mouseDoubleClickEvent`, which never runs here.
+
+        Unhandled events go to `AxisItem.mouseClickEvent`, which forwards to
+        the linked view box -- so a plain click still does whatever it did.
+        """
+        if self._on_reset is not None and ev.double() and ev.button() == Qt.LeftButton:
+            self._on_reset()
+            ev.accept()
+            return
+        super().mouseClickEvent(ev)
 
     def setLogMode(self, *args, **kwargs):
         # no log mode!

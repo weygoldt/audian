@@ -1033,10 +1033,10 @@ class DataBrowser(QWidget):
     #: saved "Labels" no longer resolves to anything.
     PARAM_TAB_SETTING_VERSION = 2
 
-    #: Key the trace / spectrogram split is saved under.  One key holding one
-    #: number per F3 preset, for the same reason as above.
+    #: Key the trace / spectrogram split is saved under.  One key holding
+    #: one number, for the same reason as above.
     #:
-    #: The number is `spec_scales`: the spectrogram row over
+    #: The number is `spec_scale`: the spectrogram row over
     #: `theme.SPECTROGRAM_MIN_HEIGHT`, the allowance every lane grows by to
     #: make room for one.  It is the only height in this layout that does
     #: not move, and measuring the split against it is what makes a saved
@@ -1055,17 +1055,11 @@ class DataBrowser(QWidget):
     PANEL_SPLIT_SETTING = "panel-split"
     #: Bumped when the shape of that value changes.  2: the number is the
     #: spectrogram over its default, not the trace over the spectrogram.
-    PANEL_SPLIT_SETTING_VERSION = 2
-
-    #: How much of the *lane* the traces keep at each F3 spectrogram size,
-    #: before anything is dragged.  The lane is what `lane_geometry` solved
-    #: the stack for; the `theme.SPECTROGRAM_MIN_HEIGHT` on top of it is the
-    #: spectrogram's allowance and is never shared out here, which is what
-    #: makes the size F3 opens on (share 1) the layout this application had
-    #: before the boundary could be dragged at all.  The sizes above it hand
-    #: the spectrogram more of the lane, and on a lane with none to spare
-    #: they all collapse onto the same split -- see `default_spec_height`.
-    LANE_TRACE_SHARES = {0: 1.0, 1: 1.0, 2: 0.5, 3: 0.25, 4: 0.15}
+    #: 3: one number, not a number per F3 size -- F3 has one size now, so a
+    #: version 2 file holds up to four splits with no way to say which of
+    #: them the reader would have wanted kept.  It is dropped with a logged
+    #: warning rather than guessed at, the rule this setting already had.
+    PANEL_SPLIT_SETTING_VERSION = 3
 
     # y-range policies of the trace panels:
     y_shared = 0
@@ -1167,21 +1161,17 @@ class DataBrowser(QWidget):
         self.setting = False
 
         # How a lane showing both is split: the spectrogram's height as a
-        # multiple of the height its F3 size opens it at, keyed by
-        # `show_specs` so each size keeps its own.  `None` is not "no split"
-        # but "the split this size opens on", which is a function of the
-        # lane height rather than a constant -- see `default_spec_height`.
-        # One dict on the browser, not one per channel, which is why
-        # dragging the boundary in any lane moves all of them.
+        # multiple of the height it opens at.  `None` is not "no split" but
+        # "the split it opens on", which is a function of the lane height
+        # rather than a constant -- see `default_spec_height`.  One number
+        # on the browser, not one per channel, which is why dragging the
+        # boundary in any lane moves all of them.
         #
-        # Keyed over the sizes that have a boundary to drag, and no others:
-        # at size 0 there is no spectrogram, so no gesture can set a scale
-        # for it and nothing reads one.  Keying it off `LANE_TRACE_SHARES`
-        # instead put an entry for size 0 in the settings file that no code
-        # path could write and none could read, and every drag wrote it
-        # back out again.
-        self.spec_scales = {preset: None for preset in range(1, 5)}
-        self.default_spec_scales = dict(self.spec_scales)
+        # One number and not four.  It was keyed by `show_specs` back when
+        # F3 stepped through four sizes and each kept its own split; F3 is a
+        # toggle now, so three of those four keys were unreachable and the
+        # fourth was the split.
+        self.spec_scale = None
         self.restore_panel_split()
         # the y gutter every lane reserves, a stack-wide decision made by
         # `adjust_layout` and re-used by the drag:
@@ -5960,28 +5950,26 @@ class DataBrowser(QWidget):
         be drawn there, so that is what the spectrogram row opens with and
         the traces keep the lane the stack was solved for::
 
-            lane   = content - SPECTROGRAM_MIN_HEIGHT
-            traces = share * lane          # `LANE_TRACE_SHARES`, F3 size
-            spec   = content - traces
+            lane = content - SPECTROGRAM_MIN_HEIGHT
+            spec = content - lane
 
-        At the size F3 opens on the share is 1: the traces keep the whole
-        lane, the spectrogram gets its 120 px, and a four channel stack in a
-        1200x900 window opens 120 / 34 - what it looked like before the
-        boundary could be dragged at all.  Larger spectrogram sizes take a
-        share of the lane and never of the allowance, so the panel this
-        number sizes is never opened shorter than the height
-        `spectrogramplot.can_render` demands before it will be drawn at all.
+        So a four channel stack in a 1200x900 window opens 120 / 34 - what
+        it looked like before the boundary could be dragged at all.  The
+        spectrogram opens on its allowance and never on a share of the lane,
+        so the panel this number sizes is never opened shorter than the
+        height `spectrogramplot.can_render` demands before it will draw.
+
+        This used to take a share of the lane as well, one per F3 size, so
+        that F3 could be pressed again for a taller spectrogram.  F3 is a
+        toggle now and the boundary is dragged, so there is one default and
+        it is the one the stack was solved for.
 
         The floor is applied to what the *traces* keep rather than to the
-        spectrogram, and only as far as the lane allows: at F3 size 4 on a
-        dense lane, 0.15 of 34 px is a 5 px stripe, so the lane's own dense
-        height wins and every size collapses onto the same split - which is
-        what a dense stack did before, having no room to express them.
+        spectrogram, and only as far as the lane allows.
         """
         lane = max(1.0, float(content - theme.SPECTROGRAM_MIN_HEIGHT))
-        share = float(DataBrowser.LANE_TRACE_SHARES.get(self.show_specs, 1.0))
         floor = min(traces * float(theme.PANEL_SPLIT_MIN_HEIGHT), lane)
-        return content - min(max(share * lane, floor), lane)
+        return content - min(max(lane, floor), lane)
 
     def panel_split_limits(self, content: int, traces: int) -> tuple[float, float]:
         """How far the boundary may be dragged, as spectrogram heights.
@@ -6009,23 +5997,25 @@ class DataBrowser(QWidget):
         in a row of its own that is always 0 px tall and reaches across the
         boundary instead - see `panelsplitter`.
 
-        The algebra of a *dragged* split.  `spec_scales` says the
+        The algebra of a *dragged* split.  `spec_scale` says the
         spectrogram is `scale` allowances tall, and the trace rows share
         whatever the lane has left::
 
             spec = scale * theme.SPECTROGRAM_MIN_HEIGHT
             trace = (content - spec) / n
 
-        `None` is a size nobody has dragged, and it opens on
-        `default_spec_height` instead - the allowance plus a share of the
-        lane, which is what gives F3 four sizes to cycle through.
+        `None` is a split nobody has dragged, and it opens on
+        `default_spec_height` instead - the allowance the lane grew by.
 
-        The denominator is the bare allowance and not that default, even
-        though the default is what the size opens on, because the default is
-        not a constant: at F3 size 2 it is 120 px of lane content on a
-        sixteen channel stack and 185 on a two channel one, so a split
-        dragged on the roomy stack replayed at 81 px on the dense one, which
-        `spectrogramplot.can_render` will not draw.  Weaker than version 1's
+        The denominator is that bare allowance, which is now the same
+        number the lane opens on but was not when F3 had four sizes: the
+        default then took a share of the lane too, so at size 2 it was
+        120 px of lane content on a sixteen channel stack and 185 on a two
+        channel one, and a split dragged on the roomy stack replayed at
+        81 px on the dense one, which `spectrogramplot.can_render` will not
+        draw.  Keeping the allowance as the denominator keeps that answer
+        right if a lane-dependent default ever comes back.  Weaker than
+        version 1's
         1.6 against 9.7, and the same mechanism.  The allowance is the one
         height here that no recording moves.
 
@@ -6055,7 +6045,7 @@ class DataBrowser(QWidget):
             return 0, max(1, content // max(1, traces)) if traces > 0 else 0
         if traces <= 0:
             return max(1, content), 0
-        scale = self.spec_scales.get(self.show_specs)
+        scale = self.spec_scale
         if scale is None:
             spec = self.default_spec_height(content, traces)
         else:
@@ -6093,7 +6083,7 @@ class DataBrowser(QWidget):
         """Where the boundary is now: (spectrogram height, px it shares).
 
         Measured off the rows as they stand on screen rather than recomputed
-        from `spec_scales`, so a drag starts from the boundary the reader is
+        from `spec_scale`, so a drag starts from the boundary the reader is
         pointing at instead of jumping to wherever the arithmetic would have
         put it.  `None` when this lane has no boundary to move.
         """
@@ -6148,7 +6138,7 @@ class DataBrowser(QWidget):
         content = int(round(room))
         lo, hi = self.panel_split_limits(content, traces)
         spec_h = min(max(spec_h, lo), hi)
-        self.spec_scales[self.show_specs] = spec_h / theme.SPECTROGRAM_MIN_HEIGHT
+        self.spec_scale = spec_h / theme.SPECTROGRAM_MIN_HEIGHT
         self.apply_panel_split()
 
     def apply_panel_split(self) -> None:
@@ -6240,7 +6230,7 @@ class DataBrowser(QWidget):
         self.save_panel_split()
 
     def reset_panel_split(self) -> None:
-        """Back to the default split for the current F3 size (Shift+F3).
+        """Back to the split the lane opens on (Shift+F3).
 
         Back to `None`, not back to a number: the default follows the lane
         height, so a reset window and a reset stack of sixteen open on
@@ -6249,7 +6239,7 @@ class DataBrowser(QWidget):
         if self.show_specs <= 0 or not self.show_traces:
             self.notify("info", "no trace/spectrogram split to reset")
             return
-        self.spec_scales[self.show_specs] = self.default_spec_scales[self.show_specs]
+        self.spec_scale = None
         self.adjust_layout(self.width(), self.height())
         self.save_panel_split()
 
@@ -6257,7 +6247,7 @@ class DataBrowser(QWidget):
         """Put back the split this reader last dragged.
 
         Read once, in `__init__`, before any figure exists: the value is the
-        spectrogram over the height its F3 size opens it at, and knows
+        spectrogram over the height a lane opens it at, and knows
         nothing about the recording, so a bundle with two channels and one
         with sixteen read the same entry and both open on the split the
         reader chose.  A version 1 file is *not* read: it holds the other
@@ -6283,22 +6273,17 @@ class DataBrowser(QWidget):
                 DataBrowser.PANEL_SPLIT_SETTING_VERSION,
             )
             return
-        scales = saved.get("scales")
-        if not isinstance(scales, dict):
+        try:
+            scale = float(saved.get("scale"))
+        except (TypeError, ValueError):
             return
-        for key, value in scales.items():
-            try:
-                preset = int(key)
-                scale = float(value)
-            except (TypeError, ValueError):
-                continue
-            if preset not in self.spec_scales or not np.isfinite(scale):
-                continue
-            # Which scales are reachable depends on the lane height, and the
-            # pixel floors settle that at layout time.  All a stored value
-            # has to be is positive and finite, so that a file edited by
-            # hand cannot put a zero or a negative height into a row.
-            self.spec_scales[preset] = min(max(scale, 0.01), 100.0)
+        if not np.isfinite(scale):
+            return
+        # Which scales are reachable depends on the lane height, and the
+        # pixel floors settle that at layout time.  All a stored value has to
+        # be is positive and finite, so that a file edited by hand cannot put
+        # a zero or a negative height into a row.
+        self.spec_scale = min(max(scale, 0.01), 100.0)
 
     def save_panel_split(self) -> None:
         """Write the split.  Once per gesture, never per mouse move.
@@ -6306,14 +6291,14 @@ class DataBrowser(QWidget):
         `save_setting` reads, updates and rewrites the whole settings file,
         and one drag is a hundred mouse moves.
 
-        Only the sizes that were actually dragged are written.  A size still
-        on its default is *absent*, not written out as the number that
-        default happened to come to in this window: the default follows the
-        lane height, and freezing this window's answer into the settings
-        file would open the next stack on a split nobody chose.  That is not
-        hypothetical - a version 1 file was found holding an entry for F3
-        size 0, which has no boundary at all, so no gesture could have
-        written it and nothing ever read it, and every drag rewrote it.
+        A split still on its default is written as **null**, not as the
+        number that default happened to come to in this window: the default
+        follows the lane height, and freezing this window's answer into the
+        settings file would open the next stack on a split nobody chose.
+        That is not hypothetical - a version 1 file was found holding an
+        entry for F3 size 0, which had no boundary at all, so no gesture
+        could have written it and nothing ever read it, and every drag
+        rewrote it.
         """
         from .audian import save_setting
 
@@ -6321,11 +6306,7 @@ class DataBrowser(QWidget):
             DataBrowser.PANEL_SPLIT_SETTING,
             {
                 "version": DataBrowser.PANEL_SPLIT_SETTING_VERSION,
-                "scales": {
-                    str(preset): float(scale)
-                    for preset, scale in self.spec_scales.items()
-                    if scale is not None
-                },
+                "scale": None if self.spec_scale is None else float(self.spec_scale),
             },
         )
 
@@ -7186,7 +7167,12 @@ class DataBrowser(QWidget):
         if traces is not None:
             self.show_traces = traces
         if specs is not None:
-            self.show_specs = specs
+            # 0 or 1, whatever was passed.  `show_specs` used to be an F3
+            # size as well as an on/off, and the four sizes are gone -- so a
+            # 2 arriving from a caller written against the old meaning, or
+            # from a settings file, is "on" and is stored as "on" rather than
+            # left in the field for the next reader to wonder about.
+            self.show_specs = 1 if specs else 0
         if powers is not None:
             self.show_powers = powers
         if cbars is not None:
@@ -7236,12 +7222,30 @@ class DataBrowser(QWidget):
         self.set_panels()
 
     def toggle_spectrograms(self):
-        self.show_specs += 1
-        if self.show_specs > 4:
-            self.show_specs = 0
-        if self.show_specs == 0:
-            self.show_traces = True
-        self.set_panels()
+        """F3 shows the spectrograms or hides them.  That is all it does now.
+
+        It used to step through five states -- off, then four sizes that
+        handed the spectrogram a bigger share of every lane -- because when
+        it was written that was the only way to make the spectrogram taller.
+        The boundary between a trace and its spectrogram has been draggable
+        since, continuously and in any lane, and Shift+F3 puts it back; four
+        preset sizes reachable only by pressing F3 up to five times are a
+        second, coarser answer to a question that already has a better one.
+
+        The cost was not only the extra presses.  `show_specs` was doing two
+        jobs at once -- whether there is a spectrogram, and how tall it is --
+        so every reader had to know which one it meant, the dragged split was
+        stored four times over under a key nobody could see, and turning the
+        spectrogram off and on again could open it at a different height
+        than it had a moment before.
+
+        Turning it off still puts the traces back, which is not politeness:
+        `set_panels` will happily hide both, and a stack with neither is a
+        window of empty lanes with no key that obviously fills them again.
+        `toggle_traces` holds the same line from its own side.
+        """
+        off = self.show_specs > 0
+        self.set_panels(traces=True if off else None, specs=0 if off else 1)
 
     def apply_mean_spectrogram(self) -> bool:
         """Push the current mean state onto the spectrogram panels.

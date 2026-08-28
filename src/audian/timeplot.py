@@ -9,6 +9,7 @@ except ImportError:
     from PyQt5.QtCore import pyqtSignal as Signal
 
 from . import theme
+from .panels import Panel
 from .rangeplot import RangePlot
 from .timeaxisitem import TimeAxisItem
 from .yaxisitem import YAxisItem
@@ -87,6 +88,13 @@ class TimePlot(RangePlot):
                 "right": right_axis,
             },
         )
+
+        # Double clicking a y axis puts it back to the way the lane opened;
+        # `reset_y_range` says what that is on each of the two.  The gesture
+        # `PanelSplitter` already has on the other thing a reader drags
+        # inside a lane.
+        for axis in (left_axis, right_axis):
+            axis.set_reset(self.reset_y_range)
 
         # channel identity: a horizontal caption inside the view box.  A
         # rotated left axis label overprints the tick values as soon as rows
@@ -219,6 +227,37 @@ class TimePlot(RangePlot):
             if unit:
                 return str(unit)
         return ""
+
+    def reset_y_range(self) -> None:
+        """Put this plot's y axis back to the way the lane opened.
+
+        The meaning `PanelSplitter.mouseDoubleClickEvent` already gives this
+        gesture on the other thing a reader drags -- *back to the default,
+        the way a QSplitter handle behaves* -- and it is not the same call on
+        both axes, because the two do not open the same way.
+
+        A **frequency** axis opens at its full range, so this is
+        `PlotRange.reset`: 0 Hz to Nyquist.
+
+        An **amplitude** axis opens *fitted to the data*, which is what
+        `auto_fit_y` does on load and what `v` does on demand.  `reset` there
+        is `Shift+V`, and it goes to the format's full scale -- measured on a
+        four channel synthetic recording, a trace sitting in -0.117..0.129
+        goes to -1.000..1.000.  That is a defensible thing for a key to do
+        and the wrong thing for this gesture: `PlotRanges.auto_fit` records
+        that the recordings this application opens can peak at 7% of the file
+        format's full scale, so a double click that "reset" the amplitude
+        would answer with a flat line.
+
+        Every lane of the range goes with it, not this one alone.  These axes
+        are linked -- an amplitude is comparable across electrodes or it is
+        not a measurement -- and resetting one lane of sixteen would leave a
+        stack that cannot be read across, which is the whole point of it.
+        """
+        if self.y() in Panel.amplitudes:
+            self.browser.auto_ampl()
+        else:
+            self.browser.apply_ranges("reset", self.y())
 
     def update_axis_label(self) -> None:
         """Put the amplitude unit on the left axis.

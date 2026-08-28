@@ -7,7 +7,7 @@ Runs offscreen::
 The split is a layout, and there is only one question about a layout worth
 asking: what height did the rows actually end up with.  So every claim here
 is measured off `QGraphicsWidget.geometry()` once the layout has settled,
-never off `spec_scales` -- the ratio agreeing with itself would prove
+never off `spec_scale` -- the ratio agreeing with itself would prove
 nothing.  `settle` is where the layout is activated, which is also why it is
 called by hand after every gesture: a drag invalidates and Qt re-activates
 before the next paint, so a test that reads geometry without letting the
@@ -249,7 +249,7 @@ def send(app, browser, channel, kind, y, button, buttons):
 
 
 def reset_split(browser):
-    browser.spec_scales.update(browser.default_spec_scales)
+    browser.spec_scale = None
     browser.set_panels(specs=1, traces=True)
     browser.adjust_layout(browser.width(), browser.height())
     settle()
@@ -809,39 +809,66 @@ def test_the_reset_is_bound_to_a_key_nothing_else_claims(browser):
     assert claimed == [reset]
 
 
-def test_each_spectrogram_size_keeps_its_own_split(roomy_browser, roomy_reset):
-    """F3 cycles four spectrogram sizes; a drag adjusts the one on screen."""
+def test_f3_turns_the_spectrogram_on_and_off_and_nothing_else(
+    roomy_browser, roomy_reset
+):
+    """It used to step through off and four sizes, so it took five presses
+    to get back to where it started and the fifth was the only way.
+
+    The boundary is dragged now, which is a better answer to the question
+    those four sizes were answering, so F3 answers only the other one.
+    """
+    window = roomy_browser.window()
+    assert roomy_browser.show_specs > 0
+    window.toggle_spectrograms()
+    settle()
+    assert roomy_browser.show_specs == 0
+    window.toggle_spectrograms()
+    settle()
+    assert roomy_browser.show_specs == 1
+    # two presses, not five
+    window.toggle_spectrograms()
+    window.toggle_spectrograms()
+    settle()
+    assert roomy_browser.show_specs == 1
+
+
+def test_f3_never_leaves_a_lane_with_neither_panel(roomy_browser, roomy_reset):
+    """`set_panels` will hide both, and a stack with neither is a window of
+    empty lanes with no key that obviously fills them again."""
+    window = roomy_browser.window()
+    roomy_browser.set_panels(traces=False, specs=1)
+    settle()
+    assert not roomy_browser.show_traces
+    window.toggle_spectrograms()
+    settle()
+    assert roomy_browser.show_specs == 0
+    assert roomy_browser.show_traces
+    roomy_browser.set_panels(traces=True, specs=1)
+    settle()
+
+
+def test_the_split_survives_the_spectrogram_being_toggled_off_and_on(
+    roomy_browser, roomy_reset
+):
+    """The dragged split was stored per F3 size, so a round trip through the
+    sizes could bring the spectrogram back at a height nobody chose.  There
+    is one split now and it is the one the reader dragged."""
+    window = roomy_browser.window()
     c = spec_channel(roomy_browser)
     spec_h, room = roomy_browser.panel_split_heights(c)
     drag(roomy_browser, spec_h + 20, room)
     roomy_browser.finish_panel_split()
     settle()
     dragged = row_height(roomy_browser, "spectrogram", c)
-    roomy_browser.set_panels(specs=2)
+    assert dragged != pytest.approx(spec_h, abs=0.01)
+    window.toggle_spectrograms()
     settle()
-    assert row_height(roomy_browser, "spectrogram", c) != dragged
-    roomy_browser.set_panels(specs=1)
+    window.toggle_spectrograms()
     settle()
-    assert row_height(roomy_browser, "spectrogram", c) == dragged
-
-
-def test_a_dense_lane_has_nothing_left_for_a_bigger_spectrogram(browser, split_reset):
-    """Which is why every spectrogram size opens the same way there.
-
-    The sizes above the one F3 starts on take their share of the *lane*, and
-    a dense lane is 34 px of which the floor is 34.  A stack this tight
-    showed the same layout at every size before the boundary could be
-    dragged at all -- 121.0, 121.6, 121.8, 121.9 px of spectrogram measured
-    at the four sizes -- so collapsing them onto one is what it already did,
-    stated instead of stumbled into.
-    """
-    c = spec_channel(browser)
-    heights = []
-    for specs in (1, 2, 3, 4):
-        browser.set_panels(specs=specs)
-        settle()
-        heights.append(row_height(browser, "spectrogram", c))
-    assert heights == [theme.SPECTROGRAM_MIN_HEIGHT] * 4
+    assert row_height(roomy_browser, "spectrogram", c) == pytest.approx(
+        dragged, abs=0.01
+    )
 
 
 # ------------------------------------------------------------- the settings
@@ -857,23 +884,19 @@ def test_the_split_is_written_once_the_gesture_ends(roomy_browser, roomy_reset):
     roomy_browser.finish_panel_split()
     saved = audian_app.settings().get(DataBrowser.PANEL_SPLIT_SETTING)
     assert saved["version"] == DataBrowser.PANEL_SPLIT_SETTING_VERSION
-    assert saved["scales"][str(roomy_browser.show_specs)] == pytest.approx(
-        roomy_browser.spec_scales[roomy_browser.show_specs]
-    )
+    assert saved["scale"] == pytest.approx(roomy_browser.spec_scale)
 
 
-def test_a_size_that_was_never_dragged_is_not_written_out(roomy_browser, roomy_reset):
+def test_a_split_nobody_dragged_is_written_as_null(roomy_browser, roomy_reset):
     """Its default follows the lane height, so this window's answer to it is
     not a preference and must not be frozen into the settings file."""
     import audian.audian as audian_app
     from audian.databrowser import DataBrowser
 
-    c = spec_channel(roomy_browser)
-    spec_h, room = roomy_browser.panel_split_heights(c)
-    drag(roomy_browser, spec_h + 9, room)
-    roomy_browser.finish_panel_split()
+    roomy_browser.spec_scale = None
+    roomy_browser.save_panel_split()
     saved = audian_app.settings().get(DataBrowser.PANEL_SPLIT_SETTING)
-    assert set(saved["scales"]) == {str(roomy_browser.show_specs)}
+    assert saved["scale"] is None
 
 
 def test_a_saved_split_is_read_back_whatever_the_channel_count(browser, monkeypatch):
@@ -887,66 +910,75 @@ def test_a_saved_split_is_read_back_whatever_the_channel_count(browser, monkeypa
         lambda: {
             DataBrowser.PANEL_SPLIT_SETTING: {
                 "version": DataBrowser.PANEL_SPLIT_SETTING_VERSION,
-                "scales": {"1": 0.375, "2": "not a number", "9": 2.0, "0": 1.0},
+                "scale": 0.375,
             }
         },
     )
-    scales = dict(browser.spec_scales)
+    scale = browser.spec_scale
     try:
-        browser.spec_scales = dict(browser.default_spec_scales)
+        browser.spec_scale = None
         browser.restore_panel_split()
-        assert browser.spec_scales[1] == pytest.approx(0.375)
-        # unreadable entries, and presets this build does not have, are left
-        # at their defaults rather than half-applied
-        assert browser.spec_scales[2] == browser.default_spec_scales[2]
-        assert 9 not in browser.spec_scales
-        # F3 size 0 hides the spectrogram, so it has no boundary to drag and
-        # no scale to read: a file holding one is an older build's, and it is
-        # dropped rather than carried along by every later write
-        assert 0 not in browser.spec_scales
+        assert browser.spec_scale == pytest.approx(0.375)
     finally:
-        browser.spec_scales = scales
+        browser.spec_scale = scale
 
 
-@pytest.mark.parametrize("preset", [1, 2, 3, 4])
-def test_the_split_a_reader_dragged_means_the_same_on_any_stack(
-    browser, roomy_browser, preset
+@pytest.mark.parametrize("stored", ["not a number", None, float("inf")])
+def test_a_split_that_is_not_a_number_leaves_the_default_alone(
+    browser, monkeypatch, stored
 ):
+    """Half-applying an unreadable value is worse than ignoring it."""
+    import audian.audian as audian_app
+    from audian.databrowser import DataBrowser
+
+    monkeypatch.setattr(
+        audian_app,
+        "settings",
+        lambda: {
+            DataBrowser.PANEL_SPLIT_SETTING: {
+                "version": DataBrowser.PANEL_SPLIT_SETTING_VERSION,
+                "scale": stored,
+            }
+        },
+    )
+    scale = browser.spec_scale
+    try:
+        browser.spec_scale = None
+        browser.restore_panel_split()
+        assert browser.spec_scale is None
+    finally:
+        browser.spec_scale = scale
+
+
+def test_the_split_a_reader_dragged_means_the_same_on_any_stack(browser, roomy_browser):
     """The measurement the version 2 format exists for.
 
-    `spec_scales` is measured against `theme.SPECTROGRAM_MIN_HEIGHT`, which
-    no recording moves, so a reader who halves the spectrogram on one stack
-    must find it halved on the other -- at every F3 size, which is why this
-    is parametrised.  Version 1 could not do it at any size: it held the
-    trace over the spectrogram, and the trace is the lane, 34 px on the
-    dense stack against 130 on the roomy one, so the same stored number came
-    out 60 px one side and 144 the other, a shrink replayed as a stretch.
+    `spec_scale` is measured against `theme.SPECTROGRAM_MIN_HEIGHT`, which no
+    recording moves, so a reader who halves the spectrogram on one stack must
+    find it halved on the other.  Version 1 could not: it held the trace over
+    the spectrogram, and the trace is the lane, 34 px on the dense stack
+    against 130 on the roomy one, so the same stored number came out 60 px
+    one side and 144 the other, a shrink replayed as a stretch.
 
-    Measuring against `default_spec_height` instead -- the height the size
-    opens on, which is the tempting denominator -- fixes only size 1, where
-    that default *is* the allowance.  At sizes 2 to 4 it takes a share of
-    the lane as well, so it is 185 px on two channels against 120 on
-    sixteen, and a boundary dragged to a readable 125 px on the roomy stack
-    came back at 81 px on the dense one: the same unreadable stripe this
-    format was written to stop, arriving 1.6x instead of 9.7x.
+    Measuring against `default_spec_height` instead -- the height a lane
+    opens on, which is the tempting denominator -- is the same thing now that
+    the default *is* the allowance, and was not when F3 had four sizes: at
+    sizes 2 to 4 the default took a share of the lane as well, so it was
+    185 px on two channels against 120 on sixteen.
     """
-    dense = dict(browser.spec_scales)
-    roomy = dict(roomy_browser.spec_scales)
-    sizes = (browser.show_specs, roomy_browser.show_specs)
+    dense = browser.spec_scale
+    roomy = roomy_browser.spec_scale
     try:
         for view in (browser, roomy_browser):
-            view.set_panels(specs=preset)
-            view.spec_scales[preset] = 0.5
+            view.spec_scale = 0.5
             view.adjust_layout(view.width(), view.height())
         settle()
         for view in (browser, roomy_browser):
             c = spec_channel(view)
             assert row_height(view, "spectrogram", c) == pytest.approx(60, abs=1)
     finally:
-        browser.spec_scales = dense
-        roomy_browser.spec_scales = roomy
-        for view, size in zip((browser, roomy_browser), sizes):
-            view.set_panels(specs=size)
+        browser.spec_scale = dense
+        roomy_browser.spec_scale = roomy
         settle()
 
 
@@ -979,6 +1011,10 @@ def test_a_split_saved_by_another_version_is_ignored(browser, monkeypatch, saved
     distinguishes a value they dragged from one an earlier build wrote for
     them - the entry for size 0 is the tell, since size 0 hides the
     spectrogram and has no boundary to drag.  So the whole entry goes.
+
+    Version 2 is now in the same position: it holds up to four splits, one
+    per F3 size, and F3 has one size.  Nothing in the file says which of them
+    the reader would have wanted kept, so it goes the same way.
     """
     import audian.audian as audian_app
     from audian.databrowser import DataBrowser
@@ -988,13 +1024,13 @@ def test_a_split_saved_by_another_version_is_ignored(browser, monkeypatch, saved
         "settings",
         lambda: {DataBrowser.PANEL_SPLIT_SETTING: saved},
     )
-    scales = dict(browser.spec_scales)
+    scale = browser.spec_scale
     try:
-        browser.spec_scales = dict(browser.default_spec_scales)
+        browser.spec_scale = None
         browser.restore_panel_split()
-        assert browser.spec_scales == browser.default_spec_scales
+        assert browser.spec_scale is None
     finally:
-        browser.spec_scales = scales
+        browser.spec_scale = scale
 
 
 # ------------------------------------------------------- the empty lane
@@ -1464,6 +1500,167 @@ def test_a_drag_never_runs_the_full_layout_and_the_release_runs_it_once(
     wide_browser.finish_panel_split()
     assert len(calls) == 1
     settle()
-    wide_browser.spec_scales.update(wide_browser.default_spec_scales)
+    wide_browser.spec_scale = None
     original(wide_browser.width(), wide_browser.height())
     settle()
+
+
+# ------------------------------------------------- double click to reset
+#
+# The gesture `PanelSplitter` already has on the other thing a reader drags
+# inside a lane: back to the way the lane opened.
+
+
+def axis_centre(ax, side="left"):
+    """A point inside one axis of `ax`, in scene coordinates."""
+    axis = ax.getAxis(side)
+    return axis.mapRectToScene(axis.boundingRect()).center()
+
+
+def send_at(browser, channel, kind, x, y, button, buttons):
+    """One real mouse event at a scene point.
+
+    `send` above pins x at 200, which is right for the grab band -- it
+    reaches across the lane -- and wrong for an axis, which is a column
+    56 px wide at the left edge.
+    """
+    viewport = browser.figs[channel].viewport()
+    pos = QPoint(int(round(x)), int(round(y)))
+    QApplication.instance().sendEvent(
+        viewport,
+        QMouseEvent(
+            kind,
+            QPointF(pos),
+            QPointF(viewport.mapToGlobal(pos)),
+            button,
+            buttons,
+            Qt.NoModifier,
+        ),
+    )
+    settle()
+
+
+def click_axis(browser, channel, ax, double, side="left"):
+    """Click, or double click, the axis of one lane."""
+    at = axis_centre(ax, side)
+    x, y = at.x(), at.y()
+    send_at(browser, channel, QEvent.MouseMove, x, y, Qt.NoButton, Qt.NoButton)
+    send_at(
+        browser, channel, QEvent.MouseButtonPress, x, y, Qt.LeftButton, Qt.LeftButton
+    )
+    send_at(
+        browser, channel, QEvent.MouseButtonRelease, x, y, Qt.LeftButton, Qt.NoButton
+    )
+    if double:
+        # pyqtgraph turns this into an ordinary MouseClickEvent with
+        # `double()` set -- `QGraphicsItem.mouseDoubleClickEvent` is never
+        # reached, so sending the Qt double-click event is what exercises it
+        send_at(
+            browser,
+            channel,
+            QEvent.MouseButtonDblClick,
+            x,
+            y,
+            Qt.LeftButton,
+            Qt.LeftButton,
+        )
+        send_at(
+            browser,
+            channel,
+            QEvent.MouseButtonRelease,
+            x,
+            y,
+            Qt.LeftButton,
+            Qt.NoButton,
+        )
+    pump(0.2)
+
+
+@pytest.mark.parametrize("kind", ["trace", "spectrogram"])
+def test_double_clicking_a_y_axis_puts_it_back_where_the_lane_opened(browser, kind):
+    """One gesture, and it is not the same call on the two axes.
+
+    A frequency axis opens at its full range; an amplitude axis opens
+    *fitted to the data*.  `reset` on the amplitude is what Shift+V does and
+    goes to the format's full scale -- measured, a trace sitting in
+    -0.117..0.129 goes to -1.000..1.000 -- which for recordings that peak at
+    a few percent of full scale is a flat line, not a reset.
+    """
+    c = spec_channel(browser) if kind == "spectrogram" else 0
+    ax = panel(browser, kind).axs[c]
+    view = ax.getViewBox()
+    _t, (y0, y1) = view.viewRange()
+    view.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
+    settle()
+    _t, (z0, z1) = view.viewRange()
+    assert (z0, z1) != pytest.approx((y0, y1))
+    click_axis(browser, c, ax, double=True)
+    _t, (w0, w1) = view.viewRange()
+    assert (w0, w1) == pytest.approx((y0, y1), abs=1e-6)
+
+
+def test_a_single_click_on_a_y_axis_changes_nothing(browser):
+    """The axis still forwards an ordinary click to its view box, which is
+    what it did before this gesture existed."""
+    ax = panel(browser, "trace").axs[1]
+    view = ax.getViewBox()
+    _t, (y0, y1) = view.viewRange()
+    try:
+        view.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
+        settle()
+        _t, (z0, z1) = view.viewRange()
+        click_axis(browser, 1, ax, double=False)
+        _t, (w0, w1) = view.viewRange()
+        assert (w0, w1) == pytest.approx((z0, z1))
+    finally:
+        view.setYRange(y0, y1, padding=0)
+        settle()
+
+
+def test_the_reset_reaches_every_lane_of_the_range(wide_browser):
+    """These axes are linked: an amplitude is comparable across electrodes
+    or it is not a measurement, so resetting one lane of sixteen would leave
+    a stack that cannot be read across."""
+    shown = wide_browser.visible_channels()
+    assert len(shown) > 1
+    axs = [panel(wide_browser, "trace").axs[c] for c in shown]
+    before = [ax.getViewBox().viewRange()[1] for ax in axs]
+    for ax in axs:
+        vb = ax.getViewBox()
+        _t, (y0, y1) = vb.viewRange()
+        vb.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
+    settle()
+    click_axis(wide_browser, shown[0], axs[0], double=True)
+    after = [ax.getViewBox().viewRange()[1] for ax in axs]
+    for (b0, b1), (a0, a1) in zip(before, after):
+        assert (a0, a1) == pytest.approx((b0, b1), abs=1e-6)
+
+
+def test_both_y_axes_of_a_lane_carry_the_gesture(browser):
+    """The right axis draws no tick values but is still an axis to click."""
+    for kind in ("trace", "spectrogram"):
+        c = spec_channel(browser) if kind == "spectrogram" else 0
+        ax = panel(browser, kind).axs[c]
+        for side in ("left", "right"):
+            assert ax.getAxis(side)._on_reset is not None, (kind, side)
+    # and the time axis is not a y axis: nothing was wired to it
+    ax = panel(browser, "trace").axs[0]
+    for side in ("bottom", "top"):
+        assert not hasattr(ax.getAxis(side), "_on_reset"), side
+
+
+def test_an_old_spectrogram_size_arrives_as_simply_on(browser, split_reset):
+    """`show_specs` was an F3 size as well as an on/off, and the sizes are
+    gone.  A 2 from a caller written against the old meaning, or from a
+    settings file, is "on" -- and is stored as "on", rather than left in the
+    field for the next reader to wonder about."""
+    browser.set_panels(specs=3)
+    settle()
+    assert browser.show_specs == 1
+    c = spec_channel(browser)
+    assert row_height(browser, "spectrogram", c) == pytest.approx(
+        theme.SPECTROGRAM_MIN_HEIGHT, abs=1
+    )
+    browser.set_panels(specs=0)
+    settle()
+    assert browser.show_specs == 0

@@ -520,8 +520,17 @@ def test_the_shortcut_opens_the_mode_it_lives_in(stack, mean_off):
 
 def test_the_shortcut_is_a_round_trip_from_wherever_it_started(stack, mean_off):
     """Twice puts the reader back, and does not invent a mode they never
-    asked for on the way out."""
-    for traces, specs in ((True, 1), (False, 1), (True, 3)):
+    asked for on the way out.
+
+    ``(True, 3)`` used to be a third state here, back when `show_specs` was
+    an F3 size as well as an on/off.  F3 is a toggle now and `set_panels`
+    normalises anything truthy to 1, so a 3 is not a state the stack can be
+    in.  ``specs=0`` is not a replacement for it: this mode *is* a
+    spectrogram mode, and `set_mean_spectrogram` turns the spectrogram on to
+    enter it, so a round trip that started with it off does not end with it
+    off and should not.  What is left is the two states the traces toggle
+    gives, which is what the mode actually reads."""
+    for traces, specs in ((True, 1), (False, 1)):
         stack.set_panels(traces=traces, specs=specs)
         settle()
         pump(0.3)
