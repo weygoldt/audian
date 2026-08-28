@@ -65,7 +65,9 @@ from audian.labels import (  # noqa: E402
     categories_to_settings,
     sidecar_path,
 )
-from audian.labeloverlay import CategoryStrip  # noqa: E402
+from audian.eventoverlay import NAV_REGION_Z, SURFACE_NAVIGATOR  # noqa: E402
+from audian.fulltraceplot import MODE_ALL  # noqa: E402
+from audian.labeloverlay import LABEL_Z, CategoryStrip  # noqa: E402
 from test_panelsplitter import app as app  # noqa: E402,F401  -- a fixture
 from test_panelsplitter import open_stack, panel, pump, settle  # noqa: E402
 
@@ -1956,3 +1958,159 @@ def test_recolouring_a_category_repens_the_selected_label(labelling):
     assert after == theme.qcolor(theme.marker_color(5)).name()
     boxes = [b.pen().color().name() for b in overlay.boxes if b.isVisible()]
     assert boxes == [after], "the selected box is drawn in the category's colour"
+
+
+# ============================================== the labels on the overview
+#
+# The navigator is the third surface, and it was left out when this feature
+# was built.  It is read-only: a label is picked up and dragged on a lane,
+# where there are pixels to aim at.
+
+
+def nav_overlays(browser):
+    return [o for o in browser.label_overlays if o.surface == SURFACE_NAVIGATOR]
+
+
+def nav_row(browser, channel):
+    """The navigator overlay for `channel`, with that row actually shown.
+
+    The strip defaults to one row -- whichever channel is current -- and
+    clicking a lane makes it current, so which row is on screen depends on
+    what the test before this one touched.  Say it out loud rather than
+    assume row 0.
+    """
+    # the same call a click on the lane makes.  `set_channels(current_channel=)`
+    # is not enough on its own: the current channel is forced back into the
+    # *selected* set, so a channel nothing has selected does not become
+    # current at all.
+    browser.rail_clicked(channel, False)
+    settle()
+    assert browser.datafig.current_channel() == channel
+    return next(o for o in nav_overlays(browser) if o.channel() == channel)
+
+
+def test_every_navigator_row_gets_an_overlay_for_its_own_channel(browser):
+    """A navigator row is a bare `pg.PlotItem` and carries no channel of its
+    own, so `fulltraceplot` writes one on: without it every row would fall
+    back to `channel 0` and draw the first electrode's labels."""
+    navs = nav_overlays(browser)
+    assert [o.channel() for o in navs] == list(range(len(browser.figs)))
+    # amplitude on that y axis, exactly as on a trace, so a box is full
+    # height there and can never gain a frequency
+    assert not any(o.has_frequency for o in navs)
+
+
+def test_a_label_reaches_the_overview(labelling):
+    """The whole ask: what is drawn on the lanes is drawn on the strip."""
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    nav = nav_row(browser, 0)
+    rects = live_rects(nav)
+    assert len(rects) == 1
+    # in data coordinates, and full height because the strip has no frequency
+    view = nav.plot.getViewBox()
+    (_t0, _t1), (y0, y1) = view.viewRange()
+    assert rects[0].left() == pytest.approx(label.t0)
+    assert rects[0].right() == pytest.approx(label.t_end())
+    assert rects[0].top() == pytest.approx(y0)
+    assert rects[0].height() == pytest.approx(y1 - y0)
+
+
+def test_the_overview_draws_a_label_only_on_the_row_that_owns_it(labelling):
+    browser = labelling
+    browser.labels.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, None, None))
+    browser.labels.add(Label("event", KIND_SPAN, None, 2.5, 3.0, None, None))
+    # every row at once, which is the only state in which there is more than
+    # one row to tell apart
+    mode = browser.datafig.mode
+    browser.set_navigator_mode(MODE_ALL)
+    browser.redraw_labels()
+    settle()
+    try:
+        # by POSITION, not by `nav.channel()`: the overlays come back in the
+        # order `datafig.axs` holds them, which is channel order, and reading
+        # the expectation off the value under test would pass just as
+        # happily with every row claiming to be channel 0
+        for row, nav in enumerate(nav_overlays(browser)):
+            drawn = len(live_rects(nav))
+            # the channel-less one belongs on every row; ch 0's on one
+            assert drawn == (2 if row == 0 else 1), row
+    finally:
+        browser.set_navigator_mode(mode)
+        settle()
+
+
+def test_the_overview_clears_the_window_region(browser):
+    """The region marking the visible window is translucent and sits above
+    the marks, so on the navigator a label has to buy its own opacity with z.
+
+    Measured on this recording, a box's vertical edge at mid row: under the
+    region at `LABEL_Z` it sampled (223, 113, 134) inside against
+    (255, 107, 107) outside, and at `LABEL_NAV_Z` both read (255, 107, 107),
+    which is the category's own colour.
+    """
+    navs = nav_overlays(browser)
+    assert navs
+    for nav in navs:
+        assert nav.z > NAV_REGION_Z
+        assert all(b.zValue() > NAV_REGION_Z for b in nav.boxes)
+        assert nav.points.zValue() > NAV_REGION_Z
+    # and the lanes are unchanged: they have no region to clear
+    for lane in browser.label_overlays:
+        if lane.surface != SURFACE_NAVIGATOR:
+            assert lane.z == LABEL_Z
+
+
+def test_the_overview_is_read_only(labelling):
+    """A one second label in an hour of session is a pixel wide there.
+
+    Grips on that would be a control aimed at something too small to aim at,
+    and the row already belongs to the window-selection region.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    nav = nav_row(browser, 0)
+    assert not nav.editable
+    assert nav.start_editing(label) is False
+    assert nav.editor is None
+    # and picking one on a lane still puts grips on the lane, not the strip
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    assert browser.selected_label is label
+    assert browser.selected_overlay.surface == "spectrogram"
+    assert all(o.editor is None for o in nav_overlays(browser))
+
+
+def test_f9_takes_the_labels_off_the_overview_too(labelling):
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    nav = nav_row(browser, 0)
+    assert len(live_rects(nav)) == 1
+    browser.set_labels_visible(False)
+    settle()
+    assert live_rects(nav) == []
+    browser.set_labels_visible(True)
+    settle()
+    assert len(live_rects(nav)) == 1
+
+
+def test_the_overview_follows_a_geometry_edit(labelling):
+    """The strip is a map of where there is something to look at, so it has
+    to be redrawn by the same call that repaints the lanes."""
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    nav = nav_row(browser, 0)
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    before = live_rects(nav)[0].left()
+    drag_grip(browser, 0, overlay_for(browser, "spectrogram", 0), "t", 60, 0)
+    assert label.t0 > before
+    assert live_rects(nav)[0].left() == pytest.approx(label.t0)
+    browser.delete_selected_label()
+    settle()
+    assert live_rects(nav) == []

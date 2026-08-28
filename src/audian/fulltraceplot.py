@@ -461,6 +461,13 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
     def _make_channel_plot(self, channel: int) -> pg.PlotItem:
         """Build one navigator row: plot panel, region, trace and zero line."""
         axt = pg.PlotItem(axisItems={"bottom": self._make_time_axis()})
+        # Which electrode this row is, spelled the way `TimePlot` spells it.
+        # `axs[c]` is always channel c -- the modes change which rows are
+        # *shown*, never what a row is -- and an overlay hung on one of these
+        # has no other way to ask: a `pg.PlotItem` carries no channel, so
+        # `LabelOverlay.channel` would fall back to 0 and every navigator row
+        # would draw the first electrode's labels.
+        axt.channel = channel
         axt.showAxes(True, False)
         axt.getAxis("left").setWidth(self.left_margin)
         axt.getViewBox().setDefaultPadding(padding=0)
