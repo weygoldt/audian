@@ -182,11 +182,14 @@ class _Click:
         return None
 
 
-def _clickable(current=0):
+def _clickable(current=0, mode=DataBrowser.MODE_ZOOM):
     calls = []
     stub = SimpleNamespace(
         current_channel=current,
         cross_hair=False,
+        # read before anything else: a Ctrl+click in label mode reaches for
+        # an editable label instead of focusing the lane
+        region_mode=mode,
         rail_clicked=lambda ch, extend: calls.append((ch, extend)),
     )
     return stub, calls
@@ -225,6 +228,27 @@ def test_right_clicking_a_lane_does_not_change_the_channel():
     stub, calls = _clickable(current=0)
     DataBrowser.mouse_clicked(stub, (_Click(Qt.RightButton),), 5)
     assert calls == []
+
+
+def test_ctrl_clicking_a_lane_in_label_mode_does_not_relayout_the_stack():
+    """That press is reaching for an editable label, not for a channel.
+
+    `rail_clicked` relays out the whole stack, and the reader is about to
+    put a pointer on a 12 px grip: moving the lanes under them between the
+    click and the drag would take the grip out from under the hand.  Outside
+    label mode Ctrl+click still focuses, because nothing else claims it.
+    """
+    from PyQt5.QtCore import Qt
+
+    stub, calls = _clickable(current=0, mode=DataBrowser.MODE_LABEL)
+    stub.mouse_moved = lambda evt, channel: None
+    stub.select_label_at = lambda channel, pos: True
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton, Qt.ControlModifier),), 5)
+    assert calls == []
+
+    stub, calls = _clickable(current=0, mode=DataBrowser.MODE_ZOOM)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton, Qt.ControlModifier),), 5)
+    assert calls == [(5, False)]
 
 
 def _ranged(y_mode, selected, channels=16):

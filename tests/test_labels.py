@@ -48,6 +48,7 @@ sys.path.insert(0, str(REPO / "tests"))
 
 import pyqtgraph as pg  # noqa: E402
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt5.QtGui import QKeySequence  # noqa: E402
 from PyQt5.QtGui import QMouseEvent  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
@@ -92,14 +93,14 @@ def store():
 
 def test_header_is_the_documented_column_order(store, tmp_path):
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, 100.0, 200.0))
-    assert store.write(tmp_path / "rec-labels.csv") == ""
-    assert read_rows(tmp_path / "rec-labels.csv")[0] == list(COLUMNS)
+    assert store.write(tmp_path / "rec-editable-labels.csv") == ""
+    assert read_rows(tmp_path / "rec-editable-labels.csv")[0] == list(COLUMNS)
 
 
 def test_a_point_writes_no_end_time(store, tmp_path):
     store.add(Label("pulse", KIND_POINT, 3, 1.25, None, 700.0, 700.0))
-    store.write(tmp_path / "rec-labels.csv")
-    row = read_rows(tmp_path / "rec-labels.csv")[1]
+    store.write(tmp_path / "rec-editable-labels.csv")
+    row = read_rows(tmp_path / "rec-editable-labels.csv")[1]
     cells = dict(zip(COLUMNS, row))
     assert cells["t_start_s"] == "1.250000"
     # empty, not -1 and not a repeat of t_start: a number here would be
@@ -110,8 +111,8 @@ def test_a_point_writes_no_end_time(store, tmp_path):
 
 def test_a_trace_label_writes_no_frequency(store, tmp_path):
     store.add(Label("event", KIND_SPAN, 1, 0.5, 1.5, None, None))
-    store.write(tmp_path / "rec-labels.csv")
-    cells = dict(zip(COLUMNS, read_rows(tmp_path / "rec-labels.csv")[1]))
+    store.write(tmp_path / "rec-editable-labels.csv")
+    cells = dict(zip(COLUMNS, read_rows(tmp_path / "rec-editable-labels.csv")[1]))
     assert cells["f_low_hz"] == ""
     assert cells["f_high_hz"] == ""
     assert cells["channel"] == "1"
@@ -119,13 +120,13 @@ def test_a_trace_label_writes_no_frequency(store, tmp_path):
 
 def test_a_mean_label_writes_no_channel(store, tmp_path):
     store.add(Label("event", KIND_SPAN, None, 0.5, 1.5, 10.0, 20.0))
-    store.write(tmp_path / "rec-labels.csv")
-    cells = dict(zip(COLUMNS, read_rows(tmp_path / "rec-labels.csv")[1]))
+    store.write(tmp_path / "rec-editable-labels.csv")
+    cells = dict(zip(COLUMNS, read_rows(tmp_path / "rec-editable-labels.csv")[1]))
     assert cells["channel"] == ""
 
 
 def test_round_trip_is_exact(store, tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 0.798766, 2.399383, 983.051, 2610.169))
     store.add(Label("event", KIND_SPAN, None, 1.0, 2.0, None, None))
     store.add(Label("pulse", KIND_POINT, 7, 3.5, None, 400.0, 400.0))
@@ -137,7 +138,7 @@ def test_round_trip_is_exact(store, tmp_path):
 
 
 def test_a_note_with_a_comma_survives(store, tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, None, None, 'two, "three"'))
     store.write(path)
     fresh = LabelSet(DEFAULT_CATEGORIES)
@@ -146,7 +147,7 @@ def test_a_note_with_a_comma_survives(store, tmp_path):
 
 
 def test_rows_that_cannot_be_placed_are_counted_not_drawn(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS)
         + "\n"
@@ -162,7 +163,7 @@ def test_rows_that_cannot_be_placed_are_counted_not_drawn(tmp_path):
 
 
 def test_a_backwards_span_is_put_the_right_way_round(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS) + "\nevent,span,0,2.0,1.0,900.0,100.0,\n", encoding="utf-8"
     )
@@ -174,7 +175,7 @@ def test_a_backwards_span_is_put_the_right_way_round(tmp_path):
 
 
 def test_an_unknown_category_is_added_rather_than_dropped(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS) + "\nvolley,span,0,1.0,2.0,,,\n", encoding="utf-8"
     )
@@ -194,7 +195,7 @@ def test_a_missing_sidecar_reads_as_an_empty_set(tmp_path):
 
 def test_the_sidecar_is_named_after_the_recording(tmp_path):
     assert sidecar_path(tmp_path / "logger09-20250916T164744.wav") == (
-        tmp_path / "logger09-20250916T164744-labels.csv"
+        tmp_path / "logger09-20250916T164744-editable-labels.csv"
     )
 
 
@@ -217,7 +218,7 @@ def test_a_freed_palette_index_is_reused(store):
 
 
 def test_saving_an_empty_set_removes_the_sidecar(store, tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0))
     store.save(path)
     assert path.exists()
@@ -229,8 +230,8 @@ def test_saving_an_empty_set_removes_the_sidecar(store, tmp_path):
 
 def test_the_write_leaves_no_temporary_behind(store, tmp_path):
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0))
-    store.write(tmp_path / "rec-labels.csv")
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["rec-labels.csv"]
+    store.write(tmp_path / "rec-editable-labels.csv")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["rec-editable-labels.csv"]
 
 
 def test_a_failed_write_leaves_the_previous_file_whole(store, tmp_path, monkeypatch):
@@ -241,7 +242,7 @@ def test_a_failed_write_leaves_the_previous_file_whole(store, tmp_path, monkeypa
     produced.  Here the failure happens at the rename, and the old file is
     untouched.
     """
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0))
     store.write(path)
     before = path.read_bytes()
@@ -255,7 +256,7 @@ def test_a_failed_write_leaves_the_previous_file_whole(store, tmp_path, monkeypa
     assert "no space left on device" in message
     assert path.read_bytes() == before
     assert store.dirty  # and the caller still knows it has unsaved work
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["rec-labels.csv"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["rec-editable-labels.csv"]
 
 
 def test_categories_survive_the_settings_round_trip():
@@ -297,6 +298,8 @@ def test_every_mutation_bumps_the_revision(store):
     for act in (
         lambda: store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0)),
         lambda: store.set_note(0, "x"),
+        lambda: store.set_geometry(0, 1.5, 2.5, 100.0, 900.0),
+        lambda: store.undo(),
         lambda: store.add_category("volley"),
         lambda: store.remove_category("volley"),
         lambda: store.remove_last(),
@@ -334,7 +337,7 @@ def labelling(browser):
     settle()
 
 
-def send(browser, channel, kind, x, y, button, buttons):
+def send(browser, channel, kind, x, y, button, buttons, mods=Qt.NoModifier):
     """One real mouse event, routed the way a pointer is.
 
     The *global* position is not decoration: `QGraphicsScene` finds the item
@@ -353,13 +356,13 @@ def send(browser, channel, kind, x, y, button, buttons):
             QPointF(viewport.mapToGlobal(pos)),
             button,
             buttons,
-            Qt.NoModifier,
+            mods,
         ),
     )
     settle()
 
 
-def drag(browser, channel, ax, x0, y0, x1, y1):
+def drag(browser, channel, ax, x0, y0, x1, y1, mods=Qt.NoModifier):
     """Rubber-band from data ``(x0, y0)`` to ``(x1, y1)`` in one lane.
 
     Two things this cannot do and be right.
@@ -388,6 +391,7 @@ def drag(browser, channel, ax, x0, y0, x1, y1):
         a.y(),
         Qt.LeftButton,
         Qt.LeftButton,
+        mods,
     )
     send(
         browser,
@@ -397,8 +401,18 @@ def drag(browser, channel, ax, x0, y0, x1, y1):
         (a.y() + b.y()) / 2,
         Qt.NoButton,
         Qt.LeftButton,
+        mods,
     )
-    send(browser, channel, QEvent.MouseMove, b.x(), b.y(), Qt.NoButton, Qt.LeftButton)
+    send(
+        browser,
+        channel,
+        QEvent.MouseMove,
+        b.x(),
+        b.y(),
+        Qt.NoButton,
+        Qt.LeftButton,
+        mods,
+    )
     send(
         browser,
         channel,
@@ -407,6 +421,7 @@ def drag(browser, channel, ax, x0, y0, x1, y1):
         b.y(),
         Qt.LeftButton,
         Qt.NoButton,
+        mods,
     )
 
 
@@ -620,7 +635,7 @@ def test_undo_removes_the_last_label_and_rewrites_the_file(labelling):
     browser.save_labels()
     path = browser.labels_path()
     assert len(read_rows(path)) == 3  # header plus two
-    browser.remove_last_label()
+    browser.undo_last_label_change()
     browser.save_labels()
     rows = read_rows(path)
     assert len(rows) == 2
@@ -680,9 +695,9 @@ def test_the_labels_group_costs_the_lanes_no_height(browser):
     why this is asserted rather than assumed.
     """
     titles = [g.title for g in browser.param_groups]
-    assert "Labels" in titles
-    labels_group = browser.param_groups[titles.index("Labels")]
-    annotations = browser.param_groups[titles.index("Annotations")]
+    assert "Editable labels" in titles
+    labels_group = browser.param_groups[titles.index("Editable labels")]
+    annotations = browser.param_groups[titles.index("Fixed labels")]
     assert labels_group.rows <= annotations.rows
     heights = {g.body.height() for g in browser.param_groups}
     assert len(heights) == 1
@@ -718,7 +733,7 @@ def test_no_category_is_lost_to_the_fold(browser):
     # Raised first, and through the real click: a QStackedLayout gives
     # geometry to the current page only, so an unraised strip has never had a
     # width to fold against.
-    browser.param_tabs.buttons["Labels"].click()
+    browser.param_tabs.buttons["Editable labels"].click()
     settle()
     strip = browser.label_chipbox
 
@@ -844,7 +859,7 @@ def test_a_sidecar_that_did_not_read_whole_is_never_written_over(tmp_path):
     So a store that did not get its sidecar back whole refuses to write --
     and refuses to delete, which is the worse of the two.
     """
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS) + "\nevent,span,0,1.0,2.0,,,\n,span,0,,,,,\n",
         encoding="utf-8",
@@ -863,7 +878,7 @@ def test_a_sidecar_that_did_not_read_whole_is_never_written_over(tmp_path):
 
 
 def test_an_undecodable_sidecar_blocks_the_store_too(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_bytes(b"category,kind\n\xff\xfe not utf-8 at all\n")
     before = path.read_bytes()
     store = LabelSet(DEFAULT_CATEGORIES)
@@ -876,7 +891,7 @@ def test_an_undecodable_sidecar_blocks_the_store_too(tmp_path):
 
 
 def test_a_clean_read_leaves_the_store_writable(tmp_path):
-    path = tmp_path / "rec-labels.csv"
+    path = tmp_path / "rec-editable-labels.csv"
     path.write_text(",".join(COLUMNS) + "\nevent,span,0,1.0,2.0,,,\n", encoding="utf-8")
     store = LabelSet(DEFAULT_CATEGORIES)
     store.read(path)
@@ -934,3 +949,1010 @@ def test_a_new_category_takes_a_colour_nothing_else_has(store):
     # does anyway (`theme.marker_color` is modulo eight)
     model.add_row()
     assert model.rows[-1].color in range(8)
+
+
+# ========================================================== editing one label
+#
+# A stored label is a plain `QGraphicsRectItem` and stays one.  The label the
+# reader has picked out grows a `labeloverlay.LabelEditor` -- a `pg.ROI` with
+# its body disarmed -- and that is the only interactive thing on a lane.
+# Everything below is about the two halves of that: what a press means, and
+# what a grip is allowed to write.
+
+
+def ctrl_click(browser, channel, ax, t, y):
+    """Pick the label at data ``(t, y)`` the way a reader does."""
+    p = ax.getViewBox().mapViewToScene(pg.Point(t, y))
+    for kind, button, buttons in (
+        (QEvent.MouseButtonPress, Qt.LeftButton, Qt.LeftButton),
+        (QEvent.MouseButtonRelease, Qt.LeftButton, Qt.NoButton),
+    ):
+        application = QApplication.instance()
+        viewport = browser.figs[channel].viewport()
+        pos = QPoint(int(round(p.x())), int(round(p.y())))
+        application.sendEvent(
+            viewport,
+            QMouseEvent(
+                kind,
+                QPointF(pos),
+                QPointF(viewport.mapToGlobal(pos)),
+                button,
+                buttons,
+                Qt.ControlModifier,
+            ),
+        )
+        settle()
+    pump(0.1)
+
+
+def grip(overlay, kind: str):
+    """One grip of the overlay's editor: ``'s'`` to resize, ``'t'`` to move."""
+    editor = overlay.editor
+    assert editor is not None, "nothing is selected on this overlay"
+    for handle in editor.handles:
+        if handle["type"] == kind:
+            return handle["item"]
+    raise AssertionError(f"no {kind!r} grip: {[h['type'] for h in editor.handles]}")
+
+
+def drag_scene(browser, channel, x0, y0, x1, y1, mods=Qt.NoModifier):
+    """A drag in SCENE coordinates, for grips, whose position is a pixel.
+
+    It opens with a **buttonless move**, which `drag` does not, and that is
+    the whole point of it.  A real pointer hovers before it presses, and
+    pyqtgraph routes the two cases through different code:
+    `GraphicsScene.sendDragEvent` first asks
+    ``lastHoverEvent.dragItems().get(button)`` and, if some item claimed the
+    drag while being hovered, hands it the whole gesture with **no
+    fall-through** -- an ignore from that item kills the drag rather than
+    passing it on.  Only when nobody claimed does it walk `itemsNearEvent`.
+    A grip claims on hover (`Handle.hoverEvent` accepts left drags
+    unconditionally), and `LabelEditor` does not, so both paths matter and
+    this exercises the one a reader actually takes.
+    """
+    for kind, x, y, button, buttons in (
+        (QEvent.MouseMove, x0, y0, Qt.NoButton, Qt.NoButton),
+        (QEvent.MouseButtonPress, x0, y0, Qt.LeftButton, Qt.LeftButton),
+        (QEvent.MouseMove, (x0 + x1) / 2, (y0 + y1) / 2, Qt.NoButton, Qt.LeftButton),
+        (QEvent.MouseMove, x1, y1, Qt.NoButton, Qt.LeftButton),
+        (QEvent.MouseButtonRelease, x1, y1, Qt.LeftButton, Qt.NoButton),
+    ):
+        application = QApplication.instance()
+        viewport = browser.figs[channel].viewport()
+        pos = QPoint(int(round(x)), int(round(y)))
+        application.sendEvent(
+            viewport,
+            QMouseEvent(
+                kind,
+                QPointF(pos),
+                QPointF(viewport.mapToGlobal(pos)),
+                button,
+                buttons,
+                mods,
+            ),
+        )
+        settle()
+    pump(0.1)
+
+
+def grip_at(overlay, x, y):
+    """The grip at ROI-relative ``(x, y)``: (1, 1) is high time, high band.
+
+    ROI coordinates, not screen ones.  The view box y-flips, so the (1, 1)
+    corner -- the label's late edge and its top frequency -- is drawn at the
+    *top* right of the lane and at the numerically larger data y.
+    """
+    editor = overlay.editor
+    assert editor is not None, "nothing is selected on this overlay"
+    for handle in editor.handles:
+        if tuple(handle["pos"]) == (x, y):
+            return handle["item"]
+    raise AssertionError(
+        f"no grip at {(x, y)}: {[tuple(h['pos']) for h in editor.handles]}"
+    )
+
+
+def drag_grip(browser, channel, overlay, kind, dx, dy, mods=Qt.NoModifier):
+    """Drag one grip `dx`, `dy` device pixels."""
+    at = grip(overlay, kind).scenePos()
+    drag_scene(browser, channel, at.x(), at.y(), at.x() + dx, at.y() + dy, mods)
+
+
+def drag_grip_at(browser, channel, overlay, x, y, dx, dy):
+    """Drag the grip at ROI-relative ``(x, y)`` by `dx`, `dy` device pixels."""
+    at = grip_at(overlay, x, y).scenePos()
+    drag_scene(browser, channel, at.x(), at.y(), at.x() + dx, at.y() + dy)
+
+
+def test_ctrl_click_puts_grips_on_the_label_under_the_pointer(labelling):
+    """The whole gesture in one: pick a label, and get something to drag."""
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[2]
+    drag(browser, 2, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 2, ax, 2.0, 2000.0)
+    assert browser.selected_label is label
+    overlay = overlay_for(browser, "spectrogram", 2)
+    assert overlay.editing() is label
+    # exactly the label, in data coordinates -- not a rounded or padded copy
+    pos, size = overlay.editor.pos(), overlay.editor.size()
+    assert (float(pos.x()), float(pos.y())) == (label.t0, label.f0)
+    assert float(pos.x()) + float(size.x()) == pytest.approx(label.t1)
+    assert float(pos.y()) + float(size.y()) == pytest.approx(label.f1)
+    # four corners to resize by and one middle to move by
+    assert sorted(h["type"] for h in overlay.editor.handles) == [
+        "s",
+        "s",
+        "s",
+        "s",
+        "t",
+    ]
+
+
+def test_a_new_box_still_starts_inside_the_selected_one(labelling):
+    """The guarantee the whole design is built around, now with grips on.
+
+    `test_the_drag_reaches_the_view_box_through_the_boxes_already_there`
+    pins it for passive boxes.  This is the harder half: the box the drag
+    starts inside is the one carrying an ROI, and a `pg.ROI` left movable
+    takes that drag and slides itself instead -- measured, from
+    (1.0 s, 1000.0 Hz) to (2.397 s, 2220.3 Hz), with zero region signals.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[1]
+    drag(browser, 1, ax, 0.5, 500.0, 3.5, 3500.0)
+    outer = browser.labels.labels[0]
+    ctrl_click(browser, 1, ax, 2.0, 2000.0)
+    assert browser.selected_label is outer
+    was = (outer.t0, outer.t1, outer.f0, outer.f1)
+    # entirely inside the selected box, and clear of its grips
+    drag(browser, 1, ax, 1.2, 1200.0, 2.4, 2400.0)
+    assert len(browser.labels) == 2
+    inner = browser.labels.labels[1]
+    assert inner.t0 == pytest.approx(1.2, abs=0.02)
+    assert inner.t1 == pytest.approx(2.4, abs=0.02)
+    # and the selected box was not dragged along the way
+    assert (outer.t0, outer.t1, outer.f0, outer.f1) == was
+
+
+def test_a_modified_drag_over_the_selected_label_still_reaches_the_lane(labelling):
+    """Shift+drag plays and Alt+drag analyses, over the grips as anywhere.
+
+    `pg.MouseDragHandler` picks its drag mode from the modifier and reads
+    `resizable` for Shift and `rotatable` for Alt, both of which it honours
+    even once the hover claim is gone.  Left on, the measured cost was 0
+    region signals: Shift scaled the box to 2.862 s x 2861.5 Hz and Alt
+    rotated it to -161.5 degrees.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[1]
+    drag(browser, 1, ax, 0.5, 500.0, 3.5, 3500.0)
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 1, ax, 2.0, 2000.0)
+    editor = overlay_for(browser, "spectrogram", 1).editor
+    assert editor is not None
+    view = ax.getViewBox()
+    for mods in (Qt.ShiftModifier, Qt.AltModifier):
+        was = (label.t0, label.t1, label.f0, label.f1)
+        seen = []
+        view.sigSelectedRegion.connect(lambda *a: seen.append(a))
+        a = view.mapViewToScene(pg.Point(1.2, 1200.0))
+        b = view.mapViewToScene(pg.Point(2.4, 2400.0))
+        drag_scene(browser, 1, a.x(), a.y(), b.x(), b.y(), mods)
+        view.sigSelectedRegion.disconnect()
+        assert len(seen) == 1, f"{mods} lost the drag to the grips"
+        assert (label.t0, label.t1, label.f0, label.f1) == was
+        assert editor.angle() == 0.0
+
+
+def test_a_corner_grip_resizes_the_label_and_writes_the_file(labelling):
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    overlay = overlay_for(browser, "spectrogram", 0)
+    before = (label.t0, label.t1, label.f0, label.f1)
+    drag_grip(browser, 0, overlay, "s", -60, 20)
+    after = (label.t0, label.t1, label.f0, label.f1)
+    assert after != before
+    # the lane draws the new geometry, not the old
+    rects = live_rects(overlay)
+    assert len(rects) == 1
+    assert rects[0].left() == pytest.approx(label.t0)
+    assert rects[0].width() == pytest.approx(label.t_end() - label.t0)
+    # and it reached the sidecar without being asked
+    browser.save_labels()
+    rows = read_rows(browser.labels_path())
+    assert rows[1][3] == f"{label.t0:.6f}"
+    assert rows[1][4] == f"{label.t1:.6f}"
+    assert rows[1][5] == f"{label.f0:.3f}"
+
+
+def test_a_centre_grip_moves_the_label_without_resizing_it(labelling):
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    overlay = overlay_for(browser, "spectrogram", 0)
+    width = label.t1 - label.t0
+    band = label.f1 - label.f0
+    t0, f0 = label.t0, label.f0
+    drag_grip(browser, 0, overlay, "t", 50, -10)
+    assert label.t1 - label.t0 == pytest.approx(width)
+    assert label.f1 - label.f0 == pytest.approx(band)
+    assert label.t0 > t0
+    assert label.f0 > f0
+
+
+def test_a_trace_label_edited_on_a_spectrogram_gains_no_frequency(labelling):
+    """A box drawn over a waveform is drawn full height on the spectrogram.
+
+    Its grips there span the whole 0..Nyquist lane, and reading that back
+    would write the one claim `labels.py` refuses to make -- that the signal
+    fills the band.
+    """
+    browser = labelling
+    trace = panel(browser, "trace").axs[3]
+    drag(browser, 3, trace, 0.8, 0.0, 2.4, 0.02)
+    label = browser.labels.labels[0]
+    assert (label.f0, label.f1) == (None, None)
+    spec = panel(browser, "spectrogram").axs[3]
+    ctrl_click(browser, 3, spec, 1.6, 2000.0)
+    overlay = overlay_for(browser, "spectrogram", 3)
+    assert overlay.editing() is label
+    # no corner grips here either: there is no band to take hold of
+    assert sorted(h["type"] for h in overlay.editor.handles) == ["s", "s", "t"]
+    t0 = label.t0
+    drag_grip(browser, 3, overlay, "t", 40, -12)
+    assert label.t0 > t0
+    assert (label.f0, label.f1) == (None, None)
+
+
+def test_a_banded_label_edited_on_the_trace_keeps_its_band(labelling):
+    """The other way round, and the one that costs data.
+
+    A spectrogram label is drawn full height on the trace too.  Reading the
+    trace's y back would replace a measured band with the lane's amplitude
+    range; writing None would erase it outright.  Neither is the trace's to
+    do -- it can only change time.
+    """
+    browser = labelling
+    spec = panel(browser, "spectrogram").axs[3]
+    drag(browser, 3, spec, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    band = (label.f0, label.f1)
+    assert band[0] is not None
+    trace = panel(browser, "trace").axs[3]
+    ctrl_click(browser, 3, trace, 2.0, 0.0)
+    overlay = overlay_for(browser, "trace", 3)
+    assert overlay.editing() is label
+    t0 = label.t0
+    drag_grip(browser, 3, overlay, "t", 40, -8)
+    assert label.t0 > t0
+    assert (label.f0, label.f1) == band
+
+
+def test_a_point_moves_and_never_grows_an_end_time(labelling):
+    browser = labelling
+    browser.labels.add(Label("pulse", KIND_POINT, 1, 2.0, None, 1500.0, 1500.0))
+    browser.redraw_labels()
+    settle()
+    label = browser.labels.labels[0]
+    ax = panel(browser, "spectrogram").axs[1]
+    ctrl_click(browser, 1, ax, 2.0, 1500.0)
+    overlay = overlay_for(browser, "spectrogram", 1)
+    assert overlay.editing() is label
+    # nothing to resize, so nothing that resizes
+    assert [h["type"] for h in overlay.editor.handles] == ["t"]
+    drag_grip(browser, 1, overlay, "t", 70, 12)
+    assert label.t0 > 2.0
+    assert label.t1 is None
+    assert label.kind == KIND_POINT
+    assert label.f0 == label.f1
+    browser.save_labels()
+    assert read_rows(browser.labels_path())[1][4] == ""
+
+
+def test_a_channelless_label_gets_exactly_one_editor(labelling):
+    """It is drawn on every lane; it is edited from the one that was clicked.
+
+    Grips on all sixteen would be sixteen places to drag one box from, and
+    the fifteen the reader is not looking at would each write over the last.
+    """
+    browser = labelling
+    browser.labels.add(Label("event", KIND_SPAN, None, 1.0, 2.0, 800.0, 1800.0))
+    browser.redraw_labels()
+    settle()
+    ax = panel(browser, "spectrogram").axs[3]
+    ctrl_click(browser, 3, ax, 1.5, 1300.0)
+    drawn = sum(
+        len(live_rects(o)) for o in browser.label_overlays if o.surface == "spectrogram"
+    )
+    assert drawn == 4, "the label belongs on every lane"
+    editors = [o for o in browser.label_overlays if o.editor is not None]
+    assert len(editors) == 1
+    assert (editors[0].surface, editors[0].channel()) == ("spectrogram", 3)
+
+
+def test_ctrl_click_picks_the_smallest_label_under_the_pointer(labelling):
+    """Dense labelling means a box inside a box, and the inner one is meant.
+
+    The outer one is still reachable: its own edges are not under the inner.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[2]
+    drag(browser, 2, ax, 0.5, 500.0, 3.5, 3500.0)
+    drag(browser, 2, ax, 1.5, 1500.0, 2.5, 2500.0)
+    outer, inner = browser.labels.labels
+    ctrl_click(browser, 2, ax, 2.0, 2000.0)
+    assert browser.selected_label is inner
+    ctrl_click(browser, 2, ax, 0.8, 800.0)
+    assert browser.selected_label is outer
+
+
+def test_ctrl_click_on_empty_lane_drops_the_selection(labelling):
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[2]
+    drag(browser, 2, ax, 1.0, 1000.0, 2.0, 2000.0)
+    ctrl_click(browser, 2, ax, 1.5, 1500.0)
+    assert browser.selected_label is not None
+    ctrl_click(browser, 2, ax, 3.5, 3500.0)
+    assert browser.selected_label is None
+    assert all(o.editor is None for o in browser.label_overlays)
+
+
+def test_ctrl_click_picks_nothing_outside_label_mode(labelling):
+    """Label mode already decides who owns a lane's pixels.
+
+    It disarms the spectrogram's filter cutoffs for exactly that reason, and
+    a 12 px grip appearing under a reader who is filtering or zooming would
+    be a control they did not ask for -- in the band where the cutoffs are.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[2]
+    drag(browser, 2, ax, 1.0, 1000.0, 3.0, 3000.0)
+    browser.set_region_mode(DataBrowser.MODE_ZOOM)
+    ctrl_click(browser, 2, ax, 2.0, 2000.0)
+    assert browser.selected_label is None
+    browser.set_region_mode(DataBrowser.MODE_LABEL)
+    ctrl_click(browser, 2, ax, 2.0, 2000.0)
+    assert browser.selected_label is browser.labels.labels[0]
+    # and leaving the mode puts the grips down again
+    browser.set_region_mode(DataBrowser.MODE_ZOOM)
+    assert browser.selected_label is None
+    assert all(o.editor is None for o in browser.label_overlays)
+    browser.set_region_mode(DataBrowser.MODE_LABEL)
+
+
+def test_the_grips_follow_the_label_when_the_view_moves(labelling):
+    """The editor is re-synced from the store on every frame.
+
+    On a trace the box is the height of the lane, so the sync is not
+    cosmetic: the y it reports back is the lane's, and grips left at the old
+    height would report a stale one.
+    """
+    browser = labelling
+    ax = panel(browser, "trace").axs[0]
+    drag(browser, 0, ax, 0.8, 0.0, 2.4, 0.02)
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 0, ax, 1.6, 0.0)
+    overlay = overlay_for(browser, "trace", 0)
+    view = ax.getViewBox()
+    (_t0, _t1), (y0, y1) = view.viewRange()
+    assert float(overlay.editor.pos().y()) == pytest.approx(y0)
+    assert float(overlay.editor.size().y()) == pytest.approx(y1 - y0)
+    was = (label.t0, label.t1, label.f0, label.f1)
+    view.setYRange(2 * y0, 2 * y1, padding=0)
+    settle()
+    (_t0, _t1), (ny0, ny1) = view.viewRange()
+    assert ny0 != y0
+    assert float(overlay.editor.pos().y()) == pytest.approx(ny0)
+    assert float(overlay.editor.size().y()) == pytest.approx(ny1 - ny0)
+    # and none of it touched the label
+    assert (label.t0, label.t1, label.f0, label.f1) == was
+    view.setYRange(y0, y1, padding=0)
+    settle()
+
+
+def test_a_resync_never_reaches_the_write_back(labelling):
+    """Putting the grips back on the label must not look like a grip drag.
+
+    Two things keep them apart and this asserts the *mechanism*, because the
+    outcome is protected three deep and an outcome test would pass with any
+    two of them gone.  `LabelEditor.sync` uses ``finish=False``, which emits
+    ``sigRegionChanged`` and not ``sigRegionChangeFinished`` -- measured, 0
+    after two such calls against 1 after one ``finish=True`` -- and it raises
+    `LabelEditor.syncing` for the other signal.  A trace label is the case
+    that really moves under a sync: its box is the height of the lane.
+    """
+    browser = labelling
+    ax = panel(browser, "trace").axs[0]
+    drag(browser, 0, ax, 0.8, 0.0, 2.4, 0.02)
+    ctrl_click(browser, 0, ax, 1.6, 0.0)
+    overlay = overlay_for(browser, "trace", 0)
+    editor = overlay.editor
+    assert editor is not None
+    written = []
+    finished = []
+    guarded = []
+    original = overlay.on_edit
+    overlay.on_edit = lambda *a: written.append(a)
+
+    def note_finished(_roi):
+        finished.append(1)
+
+    def note_changed(_roi):
+        guarded.append(editor.syncing)
+
+    # named, so the disconnects below take these two and not the overlay's
+    # own `_grips_moved` and `_grips_released` -- a bare disconnect() drops
+    # every slot and would leave the editor inert for the rest of the module
+    editor.sigRegionChangeFinished.connect(note_finished)
+    editor.sigRegionChanged.connect(note_changed)
+    try:
+        browser.save_labels()
+        revision = browser.labels.revision
+        view = ax.getViewBox()
+        (t0, t1), (y0, y1) = view.viewRange()
+        view.setXRange(t0 + 0.5, t1 + 0.5, padding=0)
+        settle()
+        view.setYRange(2 * y0, 2 * y1, padding=0)
+        settle()
+        view.setYRange(y0, y1, padding=0)
+        settle()
+        view.setXRange(t0, t1, padding=0)
+        settle()
+        # each guard on its own, because either alone would keep the store
+        # clean and an outcome assertion cannot tell them apart
+        assert guarded, "the sync never moved the grips, so this proves nothing"
+        assert all(guarded), "a sync ran without raising `syncing`"
+        assert finished == [], "a sync announced itself as a finished edit"
+        assert written == [], f"a re-sync was written back {len(written)} time(s)"
+        assert browser.labels.revision == revision
+        assert not browser.labels.dirty
+    finally:
+        overlay.on_edit = original
+        editor.sigRegionChangeFinished.disconnect(note_finished)
+        editor.sigRegionChanged.disconnect(note_changed)
+
+
+def test_moving_a_narrow_label_does_not_widen_it(labelling):
+    """`_draw` pads a sub-pixel box so it stays visible; the grips must not.
+
+    Whatever width the grips have is the width the write-back reports, so a
+    padded editor would widen a short mark every time the reader slid it.
+    """
+    browser = labelling
+    browser.labels.add(Label("event", KIND_SPAN, 0, 1.0, 1.0005, 1000.0, 2000.0))
+    browser.redraw_labels()
+    settle()
+    label = browser.labels.labels[0]
+    width = label.t1 - label.t0
+    ax = panel(browser, "spectrogram").axs[0]
+    ctrl_click(browser, 0, ax, 1.0, 1500.0)
+    assert browser.selected_label is label
+    overlay = overlay_for(browser, "spectrogram", 0)
+    assert float(overlay.editor.size().x()) == pytest.approx(width)
+    drag_grip(browser, 0, overlay, "t", 40, 0)
+    assert label.t1 - label.t0 == pytest.approx(width)
+
+
+def test_ctrl_delete_removes_the_selected_label(labelling):
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 2.0, 2000.0)
+    drag(browser, 0, ax, 2.5, 1000.0, 3.5, 2000.0)
+    ctrl_click(browser, 0, ax, 1.5, 1500.0)
+    first = browser.labels.labels[0]
+    assert browser.selected_label is first
+    browser.delete_selected_label()
+    assert len(browser.labels) == 1
+    assert browser.labels.labels[0] is not first
+    assert browser.selected_label is None
+    assert all(o.editor is None for o in browser.label_overlays)
+    browser.save_labels()
+    assert len(read_rows(browser.labels_path())) == 2
+
+
+def test_removing_the_selected_label_elsewhere_takes_the_grips_off(labelling):
+    """The label list can delete the row the grips are on."""
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 2.0, 2000.0)
+    ctrl_click(browser, 0, ax, 1.5, 1500.0)
+    assert browser.selected_label is not None
+    browser.labels.remove(0)
+    browser.revalidate_selection()
+    browser.redraw_labels()
+    settle()
+    assert browser.selected_label is None
+    assert all(o.editor is None for o in browser.label_overlays)
+
+
+def test_hiding_the_labels_drops_the_selection(labelling):
+    """F9 takes the labels off the lanes, grips included.
+
+    A selection nobody can see is the one the next Ctrl+Delete acts on.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 2.0, 2000.0)
+    ctrl_click(browser, 0, ax, 1.5, 1500.0)
+    assert browser.selected_label is not None
+    browser.set_labels_visible(False)
+    assert browser.selected_label is None
+    assert all(o.editor is None for o in browser.label_overlays)
+    browser.set_labels_visible(True)
+
+
+def test_a_move_can_be_undone(labelling):
+    """The sidecar is written a turn of the loop after the gesture.
+
+    So a box dragged into the wrong shape is on disk before the reader has
+    finished watching it happen, and one level of undo is the difference
+    between a slip and lost work.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    before = (label.t0, label.t1, label.f0, label.f1)
+    drag_grip(browser, 0, overlay_for(browser, "spectrogram", 0), "t", 50, -10)
+    assert (label.t0, label.t1, label.f0, label.f1) != before
+    browser.undo_last_label_change()
+    assert (label.t0, label.t1, label.f0, label.f1) == before
+    browser.save_labels()
+    rows = read_rows(browser.labels_path())
+    assert rows[1][3] == f"{before[0]:.6f}"
+
+
+def test_a_delete_can_be_undone(labelling):
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 2.0, 2000.0)
+    drag(browser, 0, ax, 2.5, 1000.0, 3.5, 2000.0)
+    ctrl_click(browser, 0, ax, 1.5, 1500.0)
+    gone = browser.selected_label
+    browser.delete_selected_label()
+    assert len(browser.labels) == 1
+    browser.undo_last_label_change()
+    assert len(browser.labels) == 2
+    assert browser.labels.labels[0] is gone
+
+
+def test_undo_takes_back_nothing_on_a_recording_just_opened(labelling):
+    """It used to pop the last row whatever had happened.
+
+    Which meant that on a file the reader had only just opened, this key
+    deleted a label they had never touched.  A change nobody made is not a
+    change to take back.
+    """
+    browser = labelling
+    browser.labels.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, 500.0, 900.0))
+    browser.save_labels()
+    browser.load_labels()
+    settle()
+    assert len(browser.labels) == 1
+    browser.undo_last_label_change()
+    assert len(browser.labels) == 1
+
+
+def test_a_ctrl_drag_reaches_for_a_label_and_never_writes_one(labelling):
+    """A Ctrl+click the reader held too long arrives as a region.
+
+    `QGraphicsScene` calls a press a drag after five device pixels of travel
+    or after any travel at all once half a second has passed
+    (``_moveDistance``, ``minDragTime``), and neither is the reader's to
+    control.  In label mode a region writes a label, so without this a slow
+    or unsteady hand puts a hairline mark in the sidecar every time it
+    reaches for an existing one.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[1]
+    drag(browser, 1, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    assert len(browser.labels) == 1
+    # a Ctrl+drag well inside the label: a wobble, not a new box
+    drag(browser, 1, ax, 1.9, 1900.0, 2.1, 2100.0, mods=Qt.ControlModifier)
+    assert len(browser.labels) == 1, "a Ctrl+drag wrote a label"
+    assert browser.selected_label is label
+    # and one over empty lane picks nothing, and still writes nothing
+    drag(browser, 1, ax, 3.4, 3400.0, 3.6, 3600.0, mods=Qt.ControlModifier)
+    assert len(browser.labels) == 1
+    assert browser.selected_label is None
+
+
+def test_a_grip_click_that_moves_nothing_is_not_an_edit(labelling):
+    """Half a second of stillness on a grip is a completed drag.
+
+    It must not rewrite the sidecar, and above all it must not spend the one
+    undo slot -- which would throw away the change the reader does want back.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    overlay = overlay_for(browser, "spectrogram", 0)
+    before = (label.t0, label.t1, label.f0, label.f1)
+    drag_grip(browser, 0, overlay, "t", 40, -8)
+    moved = (label.t0, label.t1, label.f0, label.f1)
+    assert moved != before
+    browser.save_labels()
+    revision = browser.labels.revision
+    # Now a real drag that ends where it started.  Not a zero-length one:
+    # `QGraphicsScene` needs some travel before it calls a press a drag at
+    # all, so a press and release in one place never reaches the write-back
+    # and would prove nothing.  Out and back is the wobble.
+    at = grip(overlay, "t").scenePos()
+    send(browser, 0, QEvent.MouseMove, at.x(), at.y(), Qt.NoButton, Qt.NoButton)
+    send(
+        browser,
+        0,
+        QEvent.MouseButtonPress,
+        at.x(),
+        at.y(),
+        Qt.LeftButton,
+        Qt.LeftButton,
+    )
+    send(browser, 0, QEvent.MouseMove, at.x() + 9, at.y(), Qt.NoButton, Qt.LeftButton)
+    send(browser, 0, QEvent.MouseMove, at.x(), at.y(), Qt.NoButton, Qt.LeftButton)
+    send(
+        browser,
+        0,
+        QEvent.MouseButtonRelease,
+        at.x(),
+        at.y(),
+        Qt.LeftButton,
+        Qt.NoButton,
+    )
+    pump(0.1)
+    assert (label.t0, label.t1, label.f0, label.f1) == moved
+    assert browser.labels.revision == revision
+    assert not browser.labels.dirty
+    # the undo the reader wanted is still there
+    browser.undo_last_label_change()
+    assert (label.t0, label.t1, label.f0, label.f1) == before
+
+
+def test_a_short_band_can_still_be_moved(labelling):
+    """A band four device pixels tall is inside the crowd of its own grips.
+
+    Each grip is ``2 * GRIP_PX`` across, so on a box that short the two
+    corners and the middle one all overlap.  Measured at 30, 16, 8 and 4
+    device pixels of band on a 118 px lane: a press on the middle grip moved
+    the box every time and resized it none.  The reader can always slide a
+    thin mark, and reaches its edges by zooming the frequency axis.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    view = ax.getViewBox()
+    (_t0, _t1), (f0, f1) = view.viewRange()
+    hz_per_px = (f1 - f0) / view.height()
+    low = 2000.0
+    high = low + 4 * hz_per_px
+    browser.labels.add(Label("event", KIND_SPAN, 0, 1.0, 3.0, low, high))
+    browser.redraw_labels()
+    settle()
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 0, ax, 2.0, 0.5 * (low + high))
+    overlay = overlay_for(browser, "spectrogram", 0)
+    assert overlay.editing() is label
+    width, band = label.t1 - label.t0, label.f1 - label.f0
+    t0 = label.t0
+    at = grip(overlay, "t").scenePos()
+    drag_scene(browser, 0, at.x(), at.y(), at.x() + 40, at.y() - 6)
+    assert label.t0 > t0
+    # a move, not a resize: neither extent changed
+    assert label.t1 - label.t0 == pytest.approx(width)
+    assert label.f1 - label.f0 == pytest.approx(band)
+
+
+def test_a_grip_dragged_off_the_lane_slides_back_and_keeps_its_width(labelling):
+    """A grip follows the pointer, and the pointer does not stop at the lane.
+
+    Measured before this was guarded: one drag 600 device pixels to the left
+    of a 925 px lane wrote ``t_start_s`` of -1.595676 into the sidecar -- a
+    label before the first frame of a file whose every time is "seconds from
+    the first frame".  The rubber band that *makes* a label cannot reach
+    there, because a drag is a rectangle between two points inside the lane.
+
+    Sliding rather than clamping each end on its own is what keeps a move a
+    move: clamping would answer by squashing the box against the edge and
+    losing the extent the reader had already got right.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    view = ax.getViewBox()
+    (t0v, _t1v), _y = view.viewRange()
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    width = label.t1 - label.t0
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    overlay = overlay_for(browser, "spectrogram", 0)
+    at = grip(overlay, "t").scenePos()
+    drag_scene(browser, 0, at.x(), at.y(), at.x() - 600, at.y())
+    assert label.t0 >= t0v
+    assert label.t1 - label.t0 == pytest.approx(width)
+    browser.save_labels()
+    row = read_rows(browser.labels_path())[1]
+    assert not row[3].startswith("-")
+    assert float(row[3]) >= t0v
+
+
+def test_the_grips_follow_a_live_theme_switch(labelling):
+    """The pooled boxes get a fresh pen on every pass; the editor does not.
+
+    Measured across a dark to light switch before this was fixed: the pooled
+    box went from #ff6b6b to #c0392b while the editor's outline stayed
+    #ff6b6b and its grips stayed #4c8dff, so the one box the reader was
+    working on was the one left in the wrong theme.
+    """
+    from audian import theme
+
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    overlay = overlay_for(browser, "spectrogram", 0)
+    editor = overlay.editor
+    assert editor is not None
+    was = theme.current_theme()
+    other = next(t for t in ("dark", "light") if t != was)
+    before = (editor.pen.color().name(), editor.handles[0]["item"].pen.color().name())
+    try:
+        theme.apply(QApplication.instance(), other)
+        for one in browser.label_overlays:
+            one.polish()
+        settle()
+        after = (
+            editor.pen.color().name(),
+            editor.handles[0]["item"].pen.color().name(),
+        )
+        assert after != before
+        # the same colour the unselected boxes on this lane are drawn in
+        assert (
+            after[0]
+            == theme.qcolor(
+                theme.marker_color(browser.labels.color_of(editor.label.category))
+            ).name()
+        )
+        assert after[1] == theme.handle_pen().color().name()
+    finally:
+        theme.apply(QApplication.instance(), was)
+        for one in browser.label_overlays:
+            one.polish()
+        settle()
+
+
+def test_removing_several_rows_at_once_is_not_one_undo(labelling):
+    """`LabelSet.remove` records an undo per row it drops.
+
+    Left alone, the slot would hold the last of a multi-row removal and
+    Shift+B would put one row of five back while reading as "the change was
+    taken back".  A removal of five is not one change to undo.
+    """
+    from audian.labeloverlay import LabelTable
+
+    browser = labelling
+    for i in range(3):
+        browser.labels.add(Label("event", KIND_SPAN, 0, 1.0 + i, 1.5 + i, 500.0, 900.0))
+    browser.redraw_labels()
+    settle()
+    dialog = LabelTable(browser.labels, browser)
+    try:
+        dialog.view.selectAll()
+        assert dialog.model.remove_rows(dialog.view) == 3
+        assert len(browser.labels) == 0
+        assert not browser.labels.can_undo()
+        browser.undo_last_label_change()
+        assert len(browser.labels) == 0
+    finally:
+        dialog.close()
+        dialog.setParent(None)
+        dialog.deleteLater()
+        settle()
+
+
+def test_removing_one_row_from_the_list_can_still_be_undone(labelling):
+    from audian.labeloverlay import LabelTable
+
+    browser = labelling
+    browser.labels.add(Label("event", KIND_SPAN, 0, 1.0, 1.5, 500.0, 900.0))
+    browser.labels.add(Label("event", KIND_SPAN, 0, 2.0, 2.5, 500.0, 900.0))
+    browser.redraw_labels()
+    settle()
+    gone = browser.labels.labels[0]
+    dialog = LabelTable(browser.labels, browser)
+    try:
+        dialog.view.selectRow(0)
+        assert dialog.model.remove_rows(dialog.view) == 1
+        assert len(browser.labels) == 1
+        browser.undo_last_label_change()
+        assert len(browser.labels) == 2
+        assert browser.labels.labels[0] is gone
+    finally:
+        dialog.close()
+        dialog.setParent(None)
+        dialog.deleteLater()
+        settle()
+
+
+def test_escape_puts_the_label_down(labelling):
+    """The way out of the state, pressed rather than triggered.
+
+    Nothing else in the application binds Escape: the cheat sheet handles its
+    own inside a dialog, which is a separate window and keeps it.
+
+    ``window.activateWindow()`` is not decoration and is why every other test
+    in this repository asserts a *binding* rather than pressing the key.
+    Under the offscreen platform the window is never activated --
+    ``QApplication.activeWindow()`` is None and ``isActiveWindow()`` is False
+    -- and a `Qt.WindowShortcut` needs an active window, so **no** shortcut
+    fires at all: measured, `QTest.keyClick` of ``2`` left the current
+    category on "event" and of ``F9`` left the labels visible, both of them
+    bindings that work. Activated, the same key press deselects.
+    """
+    from PyQt5.QtTest import QTest
+
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 2.0, 2000.0)
+    ctrl_click(browser, 0, ax, 1.5, 1500.0)
+    assert browser.selected_label is not None
+    bound = [
+        a for a in browser.actions() if a.shortcut() == QKeySequence(Qt.Key_Escape)
+    ]
+    assert len(bound) == 1, "Escape is bound once on the browser"
+    window = browser.window()
+    window.activateWindow()
+    browser.setFocus()
+    pump(0.3)
+    assert window.isActiveWindow()
+    QTest.keyClick(window, Qt.Key_Escape)
+    pump(0.2)
+    assert browser.selected_label is None
+    assert all(o.editor is None for o in browser.label_overlays)
+
+
+def test_a_resize_past_a_bound_moves_only_the_edge_that_was_dragged(labelling):
+    """The half of the clamp that a move-only test cannot see.
+
+    A grip follows the pointer past the edge of the lane, and the answer to
+    that depends on which gesture it was.  Sliding a *resize* back shifts the
+    edge nobody touched: measured before this was told apart, a band of
+    983-3017 Hz on a 0-4000 Hz lane pulled 100 px past Nyquist by its top
+    corner came back as ``0.000,4000.000`` -- the low edge dragged down to
+    zero and the row claiming the signal fills the band, which is the one
+    claim `labels.py` says the format exists to refuse.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    view = ax.getViewBox()
+    _t, (fmin, fmax) = view.viewRange()
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    label = browser.labels.labels[0]
+    low, t0, t1 = label.f0, label.t0, label.t1
+    assert low > fmin
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    overlay = overlay_for(browser, "spectrogram", 0)
+    # the (1, 1) corner -- late edge, top of the band -- 100 px up the
+    # screen, which is well past the top of a 118 px lane
+    drag_grip_at(browser, 0, overlay, 1, 1, 0, -100)
+    assert label.f1 == pytest.approx(fmax)
+    assert label.f0 == pytest.approx(low), "the low edge moved and nobody dragged it"
+    assert (label.t0, label.t1) == (t0, t1)
+    browser.save_labels()
+    row = read_rows(browser.labels_path())[1]
+    assert row[5] != f"{fmin:.3f}", "the band was written as 0..Nyquist"
+
+
+def test_a_purely_vertical_nudge_on_a_trace_leaves_the_grips_on_the_label(labelling):
+    """A trace never reads its y back, so that drag normalises to no change.
+
+    `LabelSet.set_geometry` then refuses it -- rightly, so the one undo is
+    not spent on a change nobody made -- and nothing repaints, which used to
+    leave the grips wherever the pointer had dropped them.  Measured: a
+    30 px nudge on a lane spanning -0.1170..0.1289 left the editor at
+    y=+0.1136 against a box at y=-0.1170, nearly a full lane height out.
+    """
+    browser = labelling
+    ax = panel(browser, "trace").axs[0]
+    drag(browser, 0, ax, 0.8, 0.0, 2.4, 0.02)
+    label = browser.labels.labels[0]
+    ctrl_click(browser, 0, ax, 1.6, 0.0)
+    overlay = overlay_for(browser, "trace", 0)
+    view = ax.getViewBox()
+    _t, (y0, y1) = view.viewRange()
+    was = (label.t0, label.t1, label.f0, label.f1)
+    drag_grip(browser, 0, overlay, "t", 0, -30)
+    assert (label.t0, label.t1, label.f0, label.f1) == was
+    assert float(overlay.editor.pos().y()) == pytest.approx(y0)
+    assert float(overlay.editor.size().y()) == pytest.approx(y1 - y0)
+    assert float(overlay.editor.pos().x()) == pytest.approx(label.t0)
+
+
+def test_hiding_the_lane_the_grips_are_on_drops_the_selection(labelling):
+    """The same argument F9 and leaving label mode already make.
+
+    A selection nobody can see is the one the next Ctrl+Delete acts on, and
+    the File row would go on naming it.
+    """
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[2]
+    drag(browser, 2, ax, 1.0, 1000.0, 2.0, 2000.0)
+    ctrl_click(browser, 2, ax, 1.5, 1500.0)
+    assert browser.selected_label is not None
+    shown = list(browser.show_channels)
+    picked = list(browser.selected_channels)
+    current = browser.current_channel
+    try:
+        # `set_channels` raises IndexError on `show_selected_channels[-1]`
+        # when the shown set ends up holding none of the selected ones.  That
+        # is a pre-existing crash and not this test's subject, so leave 0
+        # selected and current before taking lane 2 away.
+        browser.set_channels(selected_channels=[0], current_channel=0)
+        settle()
+        browser.set_channels(show_channels=[c for c in shown if c != 2])
+        settle()
+        assert browser.selected_label is None
+        assert all(o.editor is None for o in browser.label_overlays)
+        assert "editing" not in browser.label_status_text()
+    finally:
+        browser.set_channels(show_channels=shown)
+        browser.set_channels(selected_channels=picked, current_channel=current)
+        settle()
+
+
+def test_turning_the_spectrograms_off_drops_a_selection_made_on_one(labelling):
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 2.0, 2000.0)
+    ctrl_click(browser, 0, ax, 1.5, 1500.0)
+    assert browser.selected_label is not None
+    specs = browser.show_specs
+    try:
+        browser.set_panels(specs=0)
+        settle()
+        assert browser.selected_label is None
+        assert all(o.editor is None for o in browser.label_overlays)
+    finally:
+        browser.set_panels(specs=specs)
+        settle()
+
+
+def test_recolouring_a_category_repens_the_selected_label(labelling):
+    """The theme is not the only door onto a stale pen.
+
+    A category's palette index is the reader's to change, and that goes
+    through `sync_category_state` rather than `polish`.  Measured before the
+    re-pen moved into the redraw: the pooled box went ``#ff6b6b`` ->
+    ``#ff8acc`` while the editor's outline stayed ``#ff6b6b``.
+    """
+    from audian import theme
+
+    browser = labelling
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 1.0, 1000.0, 3.0, 3000.0)
+    ctrl_click(browser, 0, ax, 2.0, 2000.0)
+    overlay = overlay_for(browser, "spectrogram", 0)
+    editor = overlay.editor
+    assert editor is not None
+    before = editor.pen.color().name()
+    current = browser.labels.category(editor.label.category)
+    browser.labels.set_categories(
+        [
+            LabelCategory(c.name, c.kind, 5 if c.name == current.name else c.color)
+            for c in browser.labels.categories
+        ]
+    )
+    browser.sync_category_state()
+    settle()
+    after = editor.pen.color().name()
+    assert after != before
+    assert after == theme.qcolor(theme.marker_color(5)).name()
+    boxes = [b.pen().color().name() for b in overlay.boxes if b.isVisible()]
+    assert boxes == [after], "the selected box is drawn in the category's colour"
