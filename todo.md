@@ -17,6 +17,8 @@
 
 - [ ] Toggling spec should not toggle through different spec vs trace panel scalings. That scaling can now be done continuously by dragging, so it should just enable or diable spec, nothing more
 
+- [ ] double clicking the y axis (on spec and trace) should reset it. Generally, double-clicking on sliders or any movable thing should reset it in my opition
+
 # Future larger dev sessions
 
 - [ ] check spec backend. torch could be faster. 
