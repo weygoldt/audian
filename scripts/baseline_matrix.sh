@@ -39,5 +39,11 @@ run "audio pair" "$WAV" --audio-pair -o "$PREFIX-audiopair.png"
 run "goto + window" "$WAV" --goto 5.0 --window 1.0 -o "$PREFIX-zoom.png"
 run "empty" --empty -o "$PREFIX-empty.png"
 
+# Qt5 only scales when told to; Qt6 always scales, from the screen's own DPI.
+# This machine reports DPR 1.0, so the difference is invisible here and
+# invisible to the offscreen suite -- which is exactly why it needs its own
+# run.  Every measured pixel constant in the lane layout is downstream of it.
+QT_SCALE_FACTOR=2 run "dpr 2" "$WAV" --interact -o "$PREFIX-dpr2.png"
+
 echo "matrix exit=$fail"
 exit $fail
