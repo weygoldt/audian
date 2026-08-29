@@ -166,10 +166,21 @@ def test_source_cycle_visits_every_mode_and_returns():
 
 
 class _Click:
-    """The three things DataBrowser.mouse_clicked reads off an event."""
+    """The three things DataBrowser.mouse_clicked reads off an event.
 
-    def __init__(self, button, modifiers=0):
+    `modifiers` defaults to `NoModifier` and not to `0`.  A real event returns
+    a `KeyboardModifier`, and under Qt5 a stub could return the int because
+    the enums were int-like; under Qt6 they are not, and `0 & Qt.ShiftModifier`
+    is a `TypeError`.  A stub that lies about its types only tests the code it
+    lies to.
+    """
+
+    def __init__(self, button, modifiers=None):
+        from PySide6.QtCore import Qt
+
         self._button = button
+        if modifiers is None:
+            modifiers = Qt.KeyboardModifier.NoModifier
         self._modifiers = modifiers
 
     def button(self):

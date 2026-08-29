@@ -534,7 +534,7 @@ def test_the_span_counts_never_ask_the_parameter_bar_for_more_width(panel):
     full = panel.annotation_under(3.0)
     assert "Volley" in full
     assert label.text() != full
-    assert theme.mono_metrics(theme.SIZE_SMALL_PT).width(label.text()) <= 60
+    assert theme.mono_metrics(theme.SIZE_SMALL_PT).horizontalAdvance(label.text()) <= 60
     assert label.toolTip() == full
     assert panel.parambar.sizeHint().width() == before
 

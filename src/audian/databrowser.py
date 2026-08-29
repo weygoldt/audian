@@ -3434,7 +3434,7 @@ class DataBrowser(QWidget):
         # filtering or zooming would be a control they did not ask for.
         if (
             self.region_mode == DataBrowser.MODE_LABEL
-            and (evt[0].button() & Qt.LeftButton) > 0
+            and evt[0].button() == Qt.MouseButton.LeftButton
             and (evt[0].modifiers() & Qt.ControlModifier)
         ):
             # `mouse_moved` runs through a 60 Hz SignalProxy, so the pointer
@@ -3448,7 +3448,7 @@ class DataBrowser(QWidget):
         # 48 px column to select the plot you were already looking at.  Every
         # panel of a channel lives in that channel's own figure, so the
         # spectrogram selects it as readily as the trace.
-        if (evt[0].button() & Qt.LeftButton) > 0:
+        if evt[0].button() == Qt.MouseButton.LeftButton:
             extend = bool(evt[0].modifiers() & Qt.ShiftModifier)
             # guarded: rail_clicked() relays out the stack, which is not
             # something to do on every click inside the current channel
@@ -3462,11 +3462,11 @@ class DataBrowser(QWidget):
         self.mouse_moved((evt[0].scenePos(),), channel)
 
         # clear marker:
-        if (evt[0].button() & Qt.RightButton) > 0:
+        if evt[0].button() == Qt.MouseButton.RightButton:
             self.plot_ranges.clear_stored_marker()
 
         # store marker position:
-        if (evt[0].button() & Qt.LeftButton) > 0:  # and \
+        if evt[0].button() == Qt.MouseButton.LeftButton:  # and \
             # (evt[0].modifiers() & Qt.ControlModifier) == Qt.ControlModifier:
             self.plot_ranges.store_marker()
 

@@ -674,7 +674,8 @@ def _installed_families() -> frozenset[str]:
     cached = _CACHE.get("families")
     if cached is None:
         try:
-            cached = frozenset(QFontDatabase().families())
+            # Static in Qt6; instantiating it still works but warns.
+            cached = frozenset(QFontDatabase.families())
         except Exception:  # pragma: no cover - no QApplication / no fontconfig
             cached = frozenset()
         _CACHE["families"] = cached
