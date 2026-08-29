@@ -2094,7 +2094,7 @@ def test_the_trace_double_click_still_fits_rather_than_resets(browser):
 def band_reset(browser):
     """Put the band back: `browser` is module scoped and widely shared."""
     yield
-    browser.set_spectrogram_band(0.5 * browser.data.rate)
+    browser.set_spectrogram_band(None, 0.5 * browser.data.rate)
     settle()
 
 
@@ -2158,7 +2158,7 @@ def test_a_band_changes_where_the_lane_opens_and_not_where_it_can_go(
     range to it, so the second and third assertions are the ones that tell a
     default view apart from a ceiling.
     """
-    browser.set_spectrogram_band(2000.0)
+    browser.set_spectrogram_band(None, 2000.0)
     settle()
     assert freq_view(browser) == pytest.approx((0.0, 2000.0))
 
@@ -2175,7 +2175,7 @@ def test_end_still_reaches_nyquist_with_a_band_in_force(browser, band_reset):
     """Under an `rmax` band `end` would stop at 2 kHz -- and stopping there
     is indistinguishable, on screen, from a recording with no energy above
     it."""
-    browser.set_spectrogram_band(2000.0)
+    browser.set_spectrogram_band(None, 2000.0)
     settle()
     browser.apply_ranges("end", "f")
     settle()
@@ -2191,7 +2191,7 @@ def test_the_deepest_zoom_does_not_move_when_a_band_is_set(browser, band_reset):
     frange = browser.plot_ranges["f"]
     before = frange.min_dr
     assert before == pytest.approx(0.06103515625)
-    browser.set_spectrogram_band(2000.0)
+    browser.set_spectrogram_band(None, 2000.0)
     settle()
     assert frange.min_dr == pytest.approx(before)
     assert frange.rmax == pytest.approx(4000.0)
@@ -2200,7 +2200,7 @@ def test_the_deepest_zoom_does_not_move_when_a_band_is_set(browser, band_reset):
 def test_four_zoom_outs_from_the_band_reach_nyquist(browser, band_reset):
     """A route out that does not go through the new key, so that rebinding
     Ctrl+Shift+V later cannot strand a reader inside a band."""
-    browser.set_spectrogram_band(2000.0)
+    browser.set_spectrogram_band(None, 2000.0)
     settle()
     for _ in range(4):
         browser.apply_ranges("zoom_out", "f")
@@ -2285,7 +2285,7 @@ def test_a_band_that_does_not_fit_the_recording_is_clamped(browser):
         write_raw_band(
             {"version": DataBrowser.SPEC_BAND_SETTING_VERSION, "max_hz": 96000.0}
         )
-        assert browser.spectrogram_band() == pytest.approx(4000.0)
+        assert browser.spectrogram_band() == (None, pytest.approx(4000.0))
     finally:
         clear_raw_band()
 
@@ -2294,17 +2294,17 @@ def test_a_band_that_does_not_fit_the_recording_is_clamped(browser):
     "value",
     [
         {"version": 0, "max_hz": 2000.0},
-        {"version": 2, "max_hz": 2000.0},
+        {"version": 3, "max_hz": 2000.0},
         {"max_hz": 2000.0},
         "2000",
-        {"version": 1, "max_hz": "2 kHz"},
-        {"version": 1, "max_hz": float("nan")},
-        {"version": 1, "max_hz": 0},
-        {"version": 1, "max_hz": -1},
-        {"version": 1, "max_hz": None},
+        {"version": 2, "max_hz": "2 kHz"},
+        {"version": 2, "max_hz": float("nan")},
+        {"version": 2, "max_hz": 0},
+        {"version": 2, "max_hz": -1},
+        {"version": 2, "max_hz": None},
     ],
     ids=[
-        "older-version",
+        "version-zero",
         "newer-version",
         "no-version",
         "not-a-dict",
@@ -2320,7 +2320,7 @@ def test_a_band_that_cannot_be_believed_is_ignored(browser, value):
     is dropped rather than guessed at -- `restore_panel_split`'s ladder."""
     try:
         write_raw_band(value)
-        assert browser.spectrogram_band() is None
+        assert browser.spectrogram_band() == (None, None)
     finally:
         clear_raw_band()
 
@@ -2329,13 +2329,13 @@ def test_a_band_at_nyquist_is_written_as_null(browser, band_reset):
     """An 8 kHz recording writing 4000 would cap every 96 kHz recording
     opened afterwards, from a preference nobody typed."""
     try:
-        browser.set_spectrogram_band(2000.0)
+        browser.set_spectrogram_band(None, 2000.0)
         settle()
-        assert stored_band() == {"version": 1, "max_hz": 2000.0}
+        assert stored_band() == {"version": 2, "min_hz": None, "max_hz": 2000.0}
 
-        browser.set_spectrogram_band(4000.0)
+        browser.set_spectrogram_band(None, 4000.0)
         settle()
-        assert stored_band() == {"version": 1, "max_hz": None}
+        assert stored_band() == {"version": 2, "min_hz": None, "max_hz": None}
     finally:
         clear_raw_band()
 
@@ -2353,15 +2353,15 @@ def test_applying_a_band_without_saving_moves_the_lane_and_writes_nothing(
     """
     try:
         clear_raw_band()
-        browser.set_spectrogram_band(2000.0, save=False)
+        browser.set_spectrogram_band(None, 2000.0, save=False)
         settle()
         assert freq_view(browser) == pytest.approx((0.0, 2000.0))
         assert stored_band() is None
 
         # the guard is not poisoned: a real gesture afterwards still writes
-        browser.set_spectrogram_band(1000.0)
+        browser.set_spectrogram_band(None, 1000.0)
         settle()
-        assert stored_band() == {"version": 1, "max_hz": 1000.0}
+        assert stored_band() == {"version": 2, "min_hz": None, "max_hz": 1000.0}
     finally:
         clear_raw_band()
 
@@ -2378,7 +2378,7 @@ def test_changing_the_band_leaves_the_amplitude_fit_alone(browser, band_reset):
     settle()
     before = trace.viewRange()[1]
 
-    browser.set_spectrogram_band(2000.0)
+    browser.set_spectrogram_band(None, 2000.0)
     settle()
 
     assert freq_view(browser) == pytest.approx((0.0, 2000.0))
@@ -2393,7 +2393,7 @@ def test_the_band_reaches_both_frequency_letters(browser, band_reset):
     False` on the default stack, so every mutating `PlotRange` method
     early-returns and no range would move.
     """
-    browser.set_spectrogram_band(2000.0)
+    browser.set_spectrogram_band(None, 2000.0)
     settle()
     assert browser.plot_ranges["f"].rdefault == pytest.approx(2000.0)
     assert browser.plot_ranges["w"].rdefault == pytest.approx(2000.0)
@@ -2405,9 +2405,9 @@ def test_the_band_reaches_both_frequency_letters(browser, band_reset):
 def test_the_field_shows_what_this_recording_actually_opens_at(browser, band_reset):
     """`default_max()` and not the raw preference, so the number in the box
     is the number on the axis."""
-    browser.set_spectrogram_band(2000.0)
+    browser.set_spectrogram_band(None, 2000.0)
     settle()
-    browser.set_band_widget(2000.0)
+    browser.set_band_widget(None, 2000.0)
     assert browser.fmaxw.value() == pytest.approx(2000.0)
 
 
@@ -2537,3 +2537,143 @@ def test_a_time_scroll_still_leaves_a_hand_zoom_alone(browser, unlock_amplitudes
 
     assert view.viewRange()[1] == pytest.approx((-0.16, 0.08))
     assert browser.plot_ranges["x"].user_locked
+
+
+# ------------------------------------------------- the floor of the band
+#
+# The band has two ends now.  A floor is the same kind of thing as the
+# ceiling and obeys the same rule: it moves where the lane OPENS and never
+# where it can go, so 500-2000 Hz still pans and zooms down to 0 and up to
+# Nyquist, and Ctrl+Shift+V still shows the whole axis.
+
+
+def test_a_floor_moves_where_the_lane_opens_and_not_where_it_can_go(
+    browser, band_reset
+):
+    """The `rmax` mistake, in its mirror image: a floor written into `rmin`
+    would take 0 Hz away instead of merely starting above it."""
+    browser.set_spectrogram_band(500.0, 2000.0)
+    settle()
+    assert freq_view(browser) == pytest.approx((500.0, 2000.0))
+
+    c = spec_channel(browser)
+    vb = panel(browser, "spectrogram").axs[c].getViewBox()
+    assert vb.state["limits"]["yLimits"] == [0, 4000.0]
+
+    vb.setYRange(0, 300, padding=0)
+    settle()
+    assert vb.viewRange()[1] == pytest.approx((0.0, 300.0))
+
+
+def test_the_gestures_go_back_to_both_ends(browser, band_reset):
+    """Ctrl+V returns to the band; Ctrl+Shift+V is still the whole axis."""
+    browser.set_spectrogram_band(500.0, 2000.0)
+    settle()
+    c = spec_channel(browser)
+    vb = panel(browser, "spectrogram").axs[c].getViewBox()
+
+    vb.setYRange(1200, 1500, padding=0)
+    settle()
+    browser.apply_ranges("default_view", "f")
+    settle()
+    assert vb.viewRange()[1] == pytest.approx((500.0, 2000.0))
+
+    browser.apply_ranges("reset", "f")
+    settle()
+    assert vb.viewRange()[1] == pytest.approx((0.0, 4000.0))
+
+
+def test_a_floor_at_or_above_the_ceiling_loses(browser, band_reset):
+    """It would open the lane on nothing at all, so it is dropped and the
+    range opens at its limit -- clamped twice, in `set_spectrogram_band` and
+    again in `PlotRange.default_min`."""
+    browser.set_spectrogram_band(3000.0, 2000.0)
+    settle()
+    assert freq_view(browser) == pytest.approx((0.0, 2000.0))
+    assert browser.plot_ranges["f"].rdefault_min is None
+
+
+def test_a_floor_is_stored_and_read_back(browser, band_reset):
+    """Both ends round-trip through the settings file."""
+    try:
+        browser.set_spectrogram_band(500.0, 2000.0)
+        settle()
+        assert stored_band() == {
+            "version": 2,
+            "min_hz": 500.0,
+            "max_hz": 2000.0,
+        }
+        assert browser.spectrogram_band() == (
+            pytest.approx(500.0),
+            pytest.approx(2000.0),
+        )
+    finally:
+        clear_raw_band()
+
+
+def test_a_floor_at_zero_is_written_as_null(browser, band_reset):
+    """The floor's limit is 0 Hz, and an end sitting at its limit is stored
+    as null rather than as this recording's number -- the rule the ceiling
+    already had."""
+    try:
+        browser.set_spectrogram_band(0.0, 2000.0)
+        settle()
+        assert stored_band() == {"version": 2, "min_hz": None, "max_hz": 2000.0}
+    finally:
+        clear_raw_band()
+
+
+def test_a_version_1_band_is_migrated_rather_than_dropped(browser):
+    """Version 1 was max only, and its number still means what it meant.
+
+    The opposite of what `PANEL_SPLIT_SETTING_VERSION` 3 does with a
+    version 2 split -- and for a reason about the values rather than the
+    habit: a version 2 split held up to four numbers with nothing to say
+    which the reader wanted, so there was nothing to carry forward.  A
+    version 1 band holds exactly one number.  Dropping it would throw away
+    a preference the reader typed, to no purpose.
+    """
+    try:
+        write_raw_band({"version": 1, "max_hz": 2000.0})
+        assert browser.spectrogram_band() == (None, pytest.approx(2000.0))
+    finally:
+        clear_raw_band()
+
+
+def test_set_limits_opens_a_range_at_both_ends_of_its_band():
+    """The core of the feature on a bare `PlotRange`, floor included."""
+    from audian.plotranges import PlotRange
+
+    class FakeAxis:
+        def range(self, axspec):
+            return 0, 4000.0, None
+
+        def setLimits(self, **kwargs):
+            pass
+
+        def setYRange(self, r0, r1):
+            pass
+
+    r = PlotRange("f", 1)
+    r.add_yaxis(FakeAxis(), 0)
+
+    r.set_default_min(500.0)
+    r.set_default_max(2000.0)
+    r.set_limits()
+    assert (r.r0[0], r.r1[0]) == pytest.approx((500.0, 2000.0))
+    assert r.rmin == pytest.approx(0.0), "the floor must not become the limit"
+    assert r.rmax == pytest.approx(4000.0)
+
+    r.reset(do_set=False)
+    assert (r.r0[0], r.r1[0]) == pytest.approx((0.0, 4000.0))
+    r.default_view(do_set=False)
+    assert (r.r0[0], r.r1[0]) == pytest.approx((500.0, 2000.0))
+
+
+def test_the_two_band_fields_show_both_ends(browser, band_reset):
+    """The row reads left to right the way the band is written."""
+    browser.set_spectrogram_band(500.0, 2000.0)
+    settle()
+    browser.set_band_widget(500.0, 2000.0)
+    assert browser.fminw.value() == pytest.approx(500.0)
+    assert browser.fmaxw.value() == pytest.approx(2000.0)

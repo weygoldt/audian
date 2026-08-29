@@ -33,6 +33,10 @@ class PlotRange(object):
         #: `set_limits`).  This is the same idea for frequency, and None
         #: means "open at the limit", which is what every range did before.
         self.rdefault = None
+        #: Lower end this range *opens* at, when that is not `rmin`.  The
+        #: mirror of `rdefault`, and a limit no more than it is: a band of
+        #: 500-2000 Hz still pans and zooms down to 0.
+        self.rdefault_min = None
         # set as soon as the user zooms this range by hand.  An automatic
         # fit must never fight a deliberate zoom:
         self.user_locked = False
@@ -134,9 +138,31 @@ class PlotRange(object):
             return self.rdefault
         return min(self.rdefault, self.rmax)
 
+    def default_min(self):
+        """The lower end this range opens at, which is not always its limit.
+
+        Clamped into `rmin`..`default_max()` rather than trusted, for the
+        reason `default_max` is: a preference outlives the recording it was
+        written beside.  A floor at or above the ceiling would open the lane
+        on nothing at all, so it loses and the range opens at `rmin`.
+        """
+        if self.rmin is None:
+            return self.rmin
+        if self.rdefault_min is None or not np.isfinite(self.rdefault_min):
+            return self.rmin
+        floor = max(self.rdefault_min, self.rmin)
+        ceiling = self.default_max()
+        if ceiling is not None and np.isfinite(ceiling) and floor >= ceiling:
+            return self.rmin
+        return floor
+
     def set_default_max(self, rdefault):
         """Set the upper end this range opens at.  None restores the limit."""
         self.rdefault = rdefault
+
+    def set_default_min(self, rdefault_min):
+        """Set the lower end this range opens at.  None restores the limit."""
+        self.rdefault_min = rdefault_min
 
     def set_starttime(self, mode):
         for axx in self.axxs:
@@ -186,7 +212,7 @@ class PlotRange(object):
         # spectrogram clipped to Nyquist, and answers `rmax` for every range
         # that was given no preference.
         for c in range(len(self.r0)):
-            self.r0[c] = self.rmin
+            self.r0[c] = self.rmin if self.is_time() else self.default_min()
             if self.is_time():
                 self.r1[c] = 10
             else:
@@ -534,9 +560,10 @@ class PlotRange(object):
     def default_view(self, channels=None, do_set=True):
         """Back to the span this range opened at.
 
-        `reset` goes all the way out to the limit; this goes back to
-        `default_max`, which is the same thing for every range that was
-        given no preference and is the preferred band for one that was.
+        `reset` goes all the way out to the limits; this goes back to
+        `default_min`..`default_max`, which is the same thing for every
+        range that was given no preference and is the preferred band for
+        one that was.
 
         The two are kept apart rather than folded together because the
         reader needs both: a spectrogram that opens at 0-2 kHz has to have
@@ -545,7 +572,7 @@ class PlotRange(object):
         if not self.is_used():
             return
         self.user_locked = False
-        rmin = self.rmin
+        rmin = self.default_min()
         if rmin is None or not np.isfinite(rmin):
             rmin = -1
         rmax = self.default_max()

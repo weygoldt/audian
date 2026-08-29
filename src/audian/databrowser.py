@@ -1069,7 +1069,18 @@ class DataBrowser(QWidget):
     #: key that goes all the way out, and it is in the Frequency menu and
     #: on the cheat sheet so that it is not folklore.
     SPEC_BAND_SETTING = "spectrogram-band"
-    #: 1: absolute Hz, ``{"version": 1, "max_hz": float | None}``.
+    #: 2: absolute Hz, ``{"version": 2, "min_hz": …, "max_hz": …}``, each
+    #: a float or None.  1 was max only.
+    #:
+    #: A version 1 file is **migrated rather than dropped**, which is the
+    #: opposite of what `PANEL_SPLIT_SETTING_VERSION` 3 does with a version
+    #: 2 split -- and for a reason that is about the values and not about
+    #: the habit.  A version 2 split held up to four numbers with nothing
+    #: to say which of them the reader had wanted, so there was nothing to
+    #: carry forward; a version 1 band holds exactly one number and it
+    #: still means precisely what it meant.  Dropping it would throw away a
+    #: preference the reader typed, to no purpose.  The floor comes up as
+    #: None, which is the whole band, which is what version 1 gave them.
     #:
     #: Absolute and *not* a fraction of Nyquist, which is the deliberate
     #: inverse of the lesson `PANEL_SPLIT_SETTING_VERSION` 1 records.  A
@@ -1082,7 +1093,7 @@ class DataBrowser(QWidget):
     #: at Nyquist until a reader types a number, which keeps the feature
     #: provably inert rather than silently changing what every already
     #: recorded file opens at.
-    SPEC_BAND_SETTING_VERSION = 1
+    SPEC_BAND_SETTING_VERSION = 2
 
     # y-range policies of the trace panels:
     y_shared = 0
@@ -1260,6 +1271,7 @@ class DataBrowser(QWidget):
         self.ofraclabelw = None
         self.cmapw = None
         self.fmaxw = None
+        self.fminw = None
         #: last band written to the settings file, so that restoring one
         #: never counts as a gesture and rewrites it
         self._spec_band_saved = None
@@ -1580,11 +1592,12 @@ class DataBrowser(QWidget):
         # spectrogram y='w'.  Inert on the default stack, where 'w' measures
         # `is_used() == False` and every mutating `PlotRange` method
         # early-returns on that.
-        band = self.spectrogram_band()
-        self._spec_band_saved = band
+        band_min, band_max = self.spectrogram_band()
+        self._spec_band_saved = (band_min, band_max)
         for s in Panel.frequencies:
             if s in self.plot_ranges:
-                self.plot_ranges[s].set_default_max(band)
+                self.plot_ranges[s].set_default_max(band_max)
+                self.plot_ranges[s].set_default_min(band_min)
 
         # requested filtering:
         if "filtered" in self.data:
@@ -2211,6 +2224,23 @@ class DataBrowser(QWidget):
             # window's own minimum with it.  The keys are in the tool tip,
             # the Frequency menu and the cheat sheet instead.
             frange = self.plot_ranges[Panel.frequencies[0]]
+            self.fminw = pg.SpinBox(
+                self,
+                frange.default_min(),
+                bounds=(0, nyquist),
+                suffix="Hz",
+                siPrefix=True,
+                step=0.5,
+                dec=True,
+                decimals=3,
+                minStep=10 ** floor(log10(0.01 * nyquist)),
+            )
+            self.style_parameter_spinbox(self.fminw)
+            self.fminw.sigValueChanged.connect(
+                lambda sb: self.dispatch_spectrogram_band(
+                    sb.value(), self.fmaxw.value()
+                )
+            )
             self.fmaxw = pg.SpinBox(
                 self,
                 frange.default_max(),
@@ -2227,11 +2257,20 @@ class DataBrowser(QWidget):
                 "Frequency band a spectrogram opens at, and the band "
                 "Ctrl+V goes back to"
             )
+            self.fminw.tooltip = self.fmaxw.tooltip
             self.fmaxw.setToolTip(self.spec_band_tooltip(nyquist))
             self.fmaxw.sigValueChanged.connect(
-                lambda sb: self.dispatch_spectrogram_band(sb.value())
+                lambda sb: self.dispatch_spectrogram_band(
+                    self.fminw.value(), sb.value()
+                )
             )
-            group.add_row("Opens at", "", self.fmaxw)
+            # Both ends on one row, so the band reads left to right the way
+            # it is written -- and so that a second end costs no height.
+            # `add_row` places extra widgets in the columns after the
+            # caption, which is what the Overlap row already does with its
+            # slider and its readout.
+            self.fminw.setToolTip(self.spec_band_tooltip(nyquist))
+            group.add_row("Opens at", "", self.fminw, self.fmaxw)
             groups.append(group)
         else:
             self.nfftw = None
@@ -2239,6 +2278,7 @@ class DataBrowser(QWidget):
             self.ofraclabelw = None
             self.cmapw = None
             self.fmaxw = None
+            self.fminw = None
 
         # envelope:
         if "envelope" in self.data:
@@ -2429,7 +2469,7 @@ class DataBrowser(QWidget):
             f"band up to {self.hz_label(nyquist)}"
         )
 
-    def dispatch_spectrogram_band(self, max_hz) -> None:
+    def dispatch_spectrogram_band(self, min_hz, max_hz) -> None:
         """Send a band typed here to every open recording, then store it.
 
         Through the window when there is one, so that a preference typed in
@@ -2444,11 +2484,11 @@ class DataBrowser(QWidget):
         """
         gui = getattr(self, "gui", None)
         if gui is not None and hasattr(gui, "set_spectrogram_band"):
-            gui.set_spectrogram_band(max_hz)
+            gui.set_spectrogram_band(min_hz, max_hz)
         else:
-            self.set_spectrogram_band(max_hz)
+            self.set_spectrogram_band(min_hz, max_hz)
 
-    def set_spectrogram_band(self, max_hz, save: bool = True) -> None:
+    def set_spectrogram_band(self, min_hz, max_hz, save: bool = True) -> None:
         """Set the band a spectrogram opens at, and go there now.
 
         The membership check happens *before* the guard flag is taken, for
@@ -2483,11 +2523,16 @@ class DataBrowser(QWidget):
         if not self.spectrogram or self.spectrogram not in self.data:
             return
         nyquist = 0.5 * self.data.rate
-        band = None if max_hz is None or max_hz >= nyquist else float(max_hz)
+        band_max = None if max_hz is None or max_hz >= nyquist else float(max_hz)
+        band_min = None if min_hz is None or min_hz <= 0 else float(min_hz)
+        # A floor at or above the ceiling would open the lane on nothing.
+        if band_min is not None and band_max is not None and band_min >= band_max:
+            band_min = None
         with self.updating():
             for axspec in Panel.frequencies:
                 if axspec in self.plot_ranges:
-                    self.plot_ranges[axspec].set_default_max(band)
+                    self.plot_ranges[axspec].set_default_max(band_max)
+                    self.plot_ranges[axspec].set_default_min(band_min)
             self.plot_ranges.default_view(
                 Panel.frequencies,
                 list(range(self.data.channels)),
@@ -2495,15 +2540,16 @@ class DataBrowser(QWidget):
             )
         if self.fmaxw is not None:
             self.fmaxw.setToolTip(self.spec_band_tooltip(nyquist))
+            self.fminw.setToolTip(self.spec_band_tooltip(nyquist))
         # `_spec_band_saved` is deliberately NOT updated when `save` is
         # False.  It is the "what is on disk" guard, and setting it from a
         # write that did not happen would make the next gesture in *this*
         # tab compare equal and skip its own write.  Leaving it stale can
         # only cost one redundant rewrite of the same value.
         if save:
-            self.save_spectrogram_band(band)
+            self.save_spectrogram_band(band_min, band_max)
 
-    def set_band_widget(self, max_hz) -> None:
+    def set_band_widget(self, min_hz, max_hz) -> None:
         """Show a band another tab set, without echoing it back.
 
         `blockSignals` for the reason `set_resolution` blocks `ofracw`:
@@ -2512,9 +2558,13 @@ class DataBrowser(QWidget):
         if self.fmaxw is None:
             return
         nyquist = 0.5 * self.data.rate
-        self.fmaxw.blockSignals(True)
-        self.fmaxw.setValue(nyquist if max_hz is None else max_hz)
-        self.fmaxw.blockSignals(False)
+        for widget, value, fallback in (
+            (self.fminw, min_hz, 0.0),
+            (self.fmaxw, max_hz, nyquist),
+        ):
+            widget.blockSignals(True)
+            widget.setValue(fallback if value is None else value)
+            widget.blockSignals(False)
 
     def nfft_label(self, nfft: int) -> str:
         """Label a Fourier window by its length *and* its duration."""
@@ -6520,7 +6570,9 @@ class DataBrowser(QWidget):
         self.spec_scale = min(max(scale, 0.01), 100.0)
 
     def spectrogram_band(self):
-        """The preferred top of the opening frequency band, or None.
+        """The preferred opening frequency band, as ``(min_hz, max_hz)``.
+
+        Either end may be None, meaning "the limit at that end".
 
         Clamped to this recording's Nyquist: a preference outlives the
         recording it was written beside, and a 2 kHz band asked of a
@@ -6541,9 +6593,11 @@ class DataBrowser(QWidget):
 
         saved = settings().get(DataBrowser.SPEC_BAND_SETTING)
         if not isinstance(saved, dict):
-            return None
+            return None, None
         version = saved.get("version")
-        if version != DataBrowser.SPEC_BAND_SETTING_VERSION:
+        # Version 1 was max only and its number still means what it meant,
+        # so it is read rather than dropped; see SPEC_BAND_SETTING_VERSION.
+        if version not in (1, DataBrowser.SPEC_BAND_SETTING_VERSION):
             log.warning(
                 "ignoring %s settings written in version %r; this audian "
                 "writes version %d",
@@ -6551,19 +6605,37 @@ class DataBrowser(QWidget):
                 version,
                 DataBrowser.SPEC_BAND_SETTING_VERSION,
             )
-            return None
-        max_hz = saved.get("max_hz")
-        if max_hz is None:
+            return None, None
+        nyquist = 0.5 * self.data.rate
+        max_hz = self._band_value(saved.get("max_hz"), nyquist)
+        min_hz = None
+        if version != 1:
+            min_hz = self._band_value(saved.get("min_hz"), nyquist)
+        # A floor at or above the ceiling would open the lane on nothing at
+        # all.  `PlotRange.default_min` drops it for the same reason; this
+        # is the first of the two clamps, the way `max_hz` already has two.
+        if min_hz is not None and max_hz is not None and min_hz >= max_hz:
+            min_hz = None
+        return min_hz, max_hz
+
+    @staticmethod
+    def _band_value(value, nyquist):
+        """One end of a stored band, validated and clamped, or None.
+
+        A settings file is a file a reader may edit by hand, so a wrong
+        shape is dropped rather than guessed at.
+        """
+        if value is None:
             return None
         try:
-            max_hz = float(max_hz)
+            value = float(value)
         except (TypeError, ValueError):
             return None
-        if not np.isfinite(max_hz) or max_hz <= 0:
+        if not np.isfinite(value) or value <= 0:
             return None
-        return min(max_hz, 0.5 * self.data.rate)
+        return min(value, nyquist)
 
-    def save_spectrogram_band(self, max_hz) -> None:
+    def save_spectrogram_band(self, min_hz, max_hz) -> None:
         """Write the band.  Once per gesture, never at construction.
 
         `save_setting` reads, updates and rewrites the whole settings file,
@@ -6571,19 +6643,21 @@ class DataBrowser(QWidget):
         overwrite the choice made in the window beside it -- the rule
         `save_panel_split` already carries.
 
-        A band still sitting at Nyquist is written as **null**, not as this
-        recording's number: an 8 kHz recording writing 4000 would cap every
-        96 kHz recording opened afterwards, from a preference nobody typed.
+        An end still sitting at its limit is written as **null**, not as
+        this recording's number: an 8 kHz recording writing 4000 would cap
+        every 96 kHz recording opened afterwards, from a preference nobody
+        typed.  The floor's limit is 0 Hz and it follows the same rule.
         """
-        if max_hz == self._spec_band_saved:
+        if (min_hz, max_hz) == self._spec_band_saved:
             return
-        self._spec_band_saved = max_hz
+        self._spec_band_saved = (min_hz, max_hz)
         from .audian import save_setting
 
         save_setting(
             DataBrowser.SPEC_BAND_SETTING,
             {
                 "version": DataBrowser.SPEC_BAND_SETTING_VERSION,
+                "min_hz": None if min_hz is None else float(min_hz),
                 "max_hz": None if max_hz is None else float(max_hz),
             },
         )

@@ -3294,7 +3294,7 @@ class Audian(QMainWindow):
                     if b is not self.browser():
                         b.apply_ranges(amplitudefunc, s)
 
-    def set_spectrogram_band(self, max_hz):
+    def set_spectrogram_band(self, min_hz, max_hz):
         """Push the preferred opening band to every open recording.
 
         An explicit loop and not the `link_ranges` fan-out: linking mirrors
@@ -3315,9 +3315,9 @@ class Audian(QMainWindow):
         for b in self.browsers:
             if not isinstance(b, DataBrowser) or b.data is None:
                 continue
-            b.set_spectrogram_band(max_hz, save=b is current)
+            b.set_spectrogram_band(min_hz, max_hz, save=b is current)
             if b is not current:
-                b.set_band_widget(max_hz)
+                b.set_band_widget(min_hz, max_hz)
 
     def dispatch_ranges(self, axspec, arange):
         for s in range(2):

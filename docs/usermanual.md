@@ -281,13 +281,21 @@ and centring a range whose floor is 0 Hz can only widen it — measured, both
 ### Opens at
 
 Most recordings are opened to look at one band and no other. The
-**Spectrogram** tab's *Opens at* field says which: set it to 2 kHz and every
-spectrogram lane opens showing 0–2 kHz instead of 0–Nyquist, in this window
-and in every window afterwards. It is remembered in `settings.json`, so it
-is typed once.
+**Spectrogram** tab's *Opens at* row says which, as two fields — a floor and
+a ceiling, read left to right. Set them to 0 Hz and 2 kHz and every
+spectrogram lane opens showing 0–2 kHz instead of 0–Nyquist; set 500 Hz and
+2 kHz and it opens on 500–2000 with the mains hum below it off the picture.
+Both are remembered in `settings.json`, so the band is typed once.
 
-**It is a default view and not a limit.** The axis still zooms, pans and
-`Ctrl+→`s all the way to Nyquist, the deepest zoom is unchanged, and
+Leave either end at its own limit — 0 Hz below, Nyquist above — and that end
+is stored as "no preference" rather than as this recording's number, so it
+does not follow you onto a recording with a different sample rate. A floor
+at or above the ceiling would open the lane on nothing at all, so it is
+dropped and that end opens at its limit.
+
+**It is a default view and not a limit.** The axis still zooms and pans all
+the way down to 0 Hz and up to Nyquist, `Ctrl+→` still reaches the top, the
+deepest zoom is unchanged, and
 `Ctrl+Shift+V` shows the whole band in one key — which the field's own tool
 tip says, because a preference that hid part of a recording with no visible
 way back would be a trap rather than a convenience.
