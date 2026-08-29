@@ -136,7 +136,7 @@ def _filled_glyph_path(kind: str, size: int) -> QPainterPath | None:
 def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> None:
     """Paint one glyph in `color` onto an already open painter."""
     painter.setPen(theme.pen(color, theme.LW_THIN, alpha=alpha))
-    painter.setBrush(Qt.NoBrush)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
     m = 2  # margin
     e = size - 2 * m  # extent
     if kind == "close":
@@ -144,7 +144,7 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         # heavy bevelled X from the platform style; this is the same mark
         # drawn as the design system draws everything else.
         pen = theme.pen(color, theme.LW_CLOSE, alpha=alpha)
-        pen.setCapStyle(Qt.RoundCap)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         i = size * 0.30
         painter.drawLine(QPointF(i, i), QPointF(size - i, size - i))
@@ -251,7 +251,7 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         # it reads at 16 px where an outline would be three rings.
         for u in (0.15, 0.5, 0.85):
             painter.setBrush(theme.brush(color, alpha))
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             r = e * 0.09
             painter.drawEllipse(QPointF(m + e * u, size / 2), r, r)
     elif kind == "play-region":
@@ -275,7 +275,7 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         )
     elif kind == "ask":
         painter.setFont(theme.font_ui(size - 5, bold=True))
-        painter.drawText(QRectF(0, 0, size, size), Qt.AlignCenter, "?")
+        painter.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, "?")
     elif kind == "channels":
         for i in range(3):
             y = m + e * (0.15 + 0.35 * i)
@@ -288,9 +288,9 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
 def glyph_pixmap(kind: str, size: int, color: str, alpha=None) -> QPixmap:
     """One glyph rendered into a transparent pixmap."""
     pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
+    pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
-    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     _draw_glyph(painter, kind, size, color, alpha)
     painter.end()
     return pm
@@ -306,23 +306,23 @@ def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
     """
     icon = QIcon()
     for mode, role, alpha in (
-        (QIcon.Normal, color, None),
-        (QIcon.Active, GLYPH_ACTIVE, None),
-        (QIcon.Selected, GLYPH_ACTIVE, None),
-        (QIcon.Disabled, GLYPH_DISABLED, GLYPH_DISABLED_ALPHA),
+        (QIcon.Mode.Normal, color, None),
+        (QIcon.Mode.Active, GLYPH_ACTIVE, None),
+        (QIcon.Mode.Selected, GLYPH_ACTIVE, None),
+        (QIcon.Mode.Disabled, GLYPH_DISABLED, GLYPH_DISABLED_ALPHA),
     ):
-        icon.addPixmap(glyph_pixmap(kind, size, role, alpha), mode, QIcon.Off)
+        icon.addPixmap(glyph_pixmap(kind, size, role, alpha), mode, QIcon.State.Off)
     # A checked button is filled with primary.dim, which is *dark* in the
     # daylight theme.  Drawing the On state in the same ink as the Off state
     # put a black glyph on navy there -- the icon vanished exactly when the
     # button was active.  On states get the on-primary foreground instead.
     on_pixmap = glyph_pixmap(kind, size, GLYPH_ON, None)
-    for mode in (QIcon.Normal, QIcon.Active, QIcon.Selected):
-        icon.addPixmap(on_pixmap, mode, QIcon.On)
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected):
+        icon.addPixmap(on_pixmap, mode, QIcon.State.On)
     icon.addPixmap(
         glyph_pixmap(kind, size, GLYPH_DISABLED, GLYPH_DISABLED_ALPHA),
-        QIcon.Disabled,
-        QIcon.On,
+        QIcon.Mode.Disabled,
+        QIcon.State.On,
     )
     return icon
 
@@ -413,7 +413,7 @@ class VerticalTabBar(QTabBar):
             self.initStyleOption(option, index)
             # shape only: letting the style draw the label would rotate it
             # its own way and ignore the space the close mark needs
-            painter.drawControl(QStyle.CE_TabBarTabShape, option)
+            painter.drawControl(QStyle.ControlElement.CE_TabBarTabShape, option)
             self._paint_label(painter, index)
             self._paint_close(painter, index)
 
@@ -426,7 +426,7 @@ class VerticalTabBar(QTabBar):
         length = rect.height() - (theme.S6 + self.CLOSE_SIZE + theme.S8) - theme.S8
         if length <= 0:
             return
-        label = metrics.elidedText(self.tabText(index), Qt.ElideMiddle, length)
+        label = metrics.elidedText(self.tabText(index), Qt.TextElideMode.ElideMiddle, length)
         painter.save()
         # bottom-left of the tab becomes the origin; +x now runs up the
         # screen and +y runs across the spine
@@ -436,7 +436,7 @@ class VerticalTabBar(QTabBar):
         painter.setPen(theme.qcolor("fg" if current else "fg.muted"))
         painter.drawText(
             QRect(theme.S8, 0, length, rect.width()),
-            Qt.AlignLeft | Qt.AlignVCenter,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             label,
         )
         painter.restore()
@@ -475,7 +475,7 @@ class VerticalTabBar(QTabBar):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             index = self._close_at(event.pos())
             if index >= 0:
                 self.tabCloseRequested.emit(index)
@@ -503,7 +503,7 @@ class MnemonicStyle(QProxyStyle):
         self.reveal = False
 
     def styleHint(self, hint, option=None, widget=None, data=None) -> int:
-        if hint == QStyle.SH_UnderlineShortcut:
+        if hint == QStyle.StyleHint.SH_UnderlineShortcut:
             return 1 if self.reveal else 0
         return super().styleHint(hint, option, widget, data)
 
@@ -530,7 +530,7 @@ class StatusSeparator(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedWidth(theme.S16)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         make_transparent(self, "audian_status_separator")
 
     def paintEvent(self, ev) -> None:
@@ -777,8 +777,8 @@ class RecentRow(QPushButton):
         super().__init__(parent)
         self.entry = entry
         self.setFlat(True)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet(
             "QPushButton { border: none; background: transparent;"
             f"border-radius: {theme.RADIUS_CONTROL}px; }}"
@@ -796,7 +796,7 @@ class RecentRow(QPushButton):
         # a 60 character file name must not push the column into the next
         # one; the line is elided to the row width in resizeEvent:
         self.name_label.setMinimumWidth(0)
-        self.name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         vbox.addWidget(self.name_label)
 
         # NOTE: the design brief asked for fg.faint on the directory; it
@@ -810,7 +810,7 @@ class RecentRow(QPushButton):
         stats = self.stats_text(entry)
         self.stats_label = QLabel(stats, self)
         self.stats_label.setFont(mono)
-        self.stats_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.stats_label.setStyleSheet(
             f"color: {theme.token('fg.muted')}; background: transparent;"
         )
@@ -833,7 +833,7 @@ class RecentRow(QPushButton):
             f"color: {theme.token('fg.muted')}; background: transparent;"
         )
         self.path_label.setMinimumWidth(0)
-        self.path_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         meta_row.addWidget(self.path_label, 1)
         vbox.addLayout(meta_row)
 
@@ -854,7 +854,7 @@ class RecentRow(QPushButton):
         self.name_label.setText(
             metrics.elidedText(
                 self.entry.get("name", "?"),
-                Qt.ElideRight,
+                Qt.TextElideMode.ElideRight,
                 max(0, self.name_label.width()),
             )
         )
@@ -903,7 +903,7 @@ class RecentRow(QPushButton):
                 return text
         # even first/…/last does not fit: shorten that, never the grid
         return metrics.elidedText(
-            lead + sep.join(parts[:1] + ["…"] + parts[-1:]), Qt.ElideMiddle, width
+            lead + sep.join(parts[:1] + ["…"] + parts[-1:]), Qt.TextElideMode.ElideMiddle, width
         )
 
 
@@ -1015,13 +1015,13 @@ class StartupPage(QWidget):
             f"border-color: {theme.token('primary.dim')}; }}"
         )
         button.clicked.connect(self.gui.open_files)
-        vbox.addWidget(button, 0, Qt.AlignLeft)
+        vbox.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
         # the dashed frame around the page is a drop target, so it has to
         # say so - an unlabelled dashed rectangle advertises nothing:
         self.drop_label = QLabel("Drop .wav files here", self)
         self.drop_label.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.drop_label.setStyleSheet(f"color: {theme.token('fg.muted')};")
-        vbox.addWidget(self.drop_label, 0, Qt.AlignLeft)
+        vbox.addWidget(self.drop_label, 0, Qt.AlignmentFlag.AlignLeft)
         vbox.addStretch(1)
         return vbox
 
@@ -1055,11 +1055,11 @@ class StartupPage(QWidget):
             chip = QLabel(key, self)
             chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
             chip.setStyleSheet(chip_style())
-            grid.addWidget(chip, i, 0, Qt.AlignLeft | Qt.AlignVCenter)
+            grid.addWidget(chip, i, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             desc = QLabel(what, self)
             desc.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
             desc.setStyleSheet(f"color: {theme.token('fg.muted')};")
-            grid.addWidget(desc, i, 1, Qt.AlignLeft | Qt.AlignVCenter)
+            grid.addWidget(desc, i, 1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         vbox.addLayout(grid)
         vbox.addStretch(1)
         return vbox
@@ -1113,13 +1113,13 @@ class StartupPage(QWidget):
     def paintEvent(self, ev):
         super().paintEvent(ev)
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         color = "primary" if self.drag_active else "border.hi"
-        painter.setPen(theme.pen(color, theme.LW_THICK, style=Qt.DashLine))
+        painter.setPen(theme.pen(color, theme.LW_THICK, style=Qt.PenStyle.DashLine))
         if self.drag_active:
             painter.setBrush(theme.brush("primary", self.DROP_FILL_ALPHA))
         else:
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
         m = theme.S12
         painter.drawRoundedRect(
             QRectF(m, m, self.width() - 2 * m, self.height() - 2 * m),
@@ -1161,8 +1161,8 @@ class CommandPalette(QDialog):
     def __init__(self, gui):
         super().__init__(gui)
         self.gui = gui
-        self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setWindowModality(Qt.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setWindowTitle("Audian commands")
         self.entries = [
             (act, path, f"{act.text().replace('&', '')}  {path}")
@@ -1205,15 +1205,15 @@ class CommandPalette(QDialog):
             if keys:
                 label += f"    [{keys}]"
             item = QListWidgetItem(label, self.list)
-            item.setData(Qt.UserRole, act)
+            item.setData(Qt.ItemDataRole.UserRole, act)
         if self.list.count() > 0:
             self.list.setCurrentRow(0)
 
     def eventFilter(self, obj, ev):
-        if obj is self.edit and ev.type() == QEvent.KeyPress:
-            if ev.key() in (Qt.Key_Down, Qt.Key_Up):
+        if obj is self.edit and ev.type() == QEvent.Type.KeyPress:
+            if ev.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up):
                 row = self.list.currentRow()
-                row += 1 if ev.key() == Qt.Key_Down else -1
+                row += 1 if ev.key() == Qt.Key.Key_Down else -1
                 if 0 <= row < self.list.count():
                     self.list.setCurrentRow(row)
                 return True
@@ -1223,7 +1223,7 @@ class CommandPalette(QDialog):
         item = self.list.currentItem()
         if item is None:
             return
-        act = item.data(Qt.UserRole)
+        act = item.data(Qt.ItemDataRole.UserRole)
         self.close()
         if act is not None:
             act.trigger()
@@ -1346,8 +1346,8 @@ class CheatSheet(QDialog):
     def __init__(self, gui):
         super().__init__(gui)
         self.gui = gui
-        self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setWindowModality(Qt.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setWindowTitle("Audian keys")
 
         outer = QVBoxLayout(self)
@@ -1386,19 +1386,19 @@ class CheatSheet(QDialog):
                 chip = QLabel(keys, panel)
                 chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
                 chip.setStyleSheet(chip_style())
-                grid.addWidget(chip, row, 2 * col, Qt.AlignLeft | Qt.AlignVCenter)
+                grid.addWidget(chip, row, 2 * col, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 desc = QLabel(act.text().replace("&", ""), panel)
                 desc.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
                 desc.setStyleSheet(
                     f"color: {theme.token('fg')};background: transparent;"
                 )
-                grid.addWidget(desc, row, 2 * col + 1, Qt.AlignLeft | Qt.AlignVCenter)
+                grid.addWidget(desc, row, 2 * col + 1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 row += 1
             grid.setRowStretch(row, 1)
         self.adjustSize()
 
     def keyPressEvent(self, ev):
-        if ev.key() in (Qt.Key_Escape, Qt.Key_Question):
+        if ev.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Question):
             self.close()
             return
         super().keyPressEvent(ev)
@@ -1410,9 +1410,9 @@ class ShortcutsDialog(QDialog):
     def __init__(self, gui):
         super().__init__(gui)
         self.gui = gui
-        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         # browsable, not modal: the user compares it against the running app
-        self.setWindowModality(Qt.NonModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setWindowTitle("Audian Key Shortcuts")
 
         vbox = QVBoxLayout(self)
@@ -1454,7 +1454,7 @@ class ShortcutsDialog(QDialog):
         widget.adjustSize()
         scrollarea.setWidget(widget)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close, self)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
         buttons.rejected.connect(self.reject)
         vbox.addWidget(buttons)
         # size from the realised layout, and no minimum: a minimum size is
@@ -1564,7 +1564,7 @@ class Audian(QMainWindow):
         # stack is short of, and a horizontal strip spends ~30 px of it on
         # what is usually one or two entries.
         self.tabs.setTabBar(VerticalTabBar(self.tabs))
-        self.tabs.setTabPosition(QTabWidget.West)
+        self.tabs.setTabPosition(QTabWidget.TabPosition.West)
         self.tabs.setDocumentMode(True)
         self.tabs.setMovable(True)
         # a single file needs no tab strip at all - that is the common case,
@@ -1804,12 +1804,12 @@ class Audian(QMainWindow):
         if style is None:
             return
         kind = event.type()
-        if kind == QEvent.KeyPress and event.key() == Qt.Key_Alt:
+        if kind == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Alt:
             reveal = True
-        elif kind == QEvent.KeyRelease and event.key() == Qt.Key_Alt:
+        elif kind == QEvent.Type.KeyRelease and event.key() == Qt.Key.Key_Alt:
             # keep them while the user is walking an open menu
             reveal = QApplication.activePopupWidget() is not None
-        elif kind in (QEvent.MouseButtonPress, QEvent.WindowDeactivate):
+        elif kind in (QEvent.Type.MouseButtonPress, QEvent.Type.WindowDeactivate):
             reveal = False
         else:
             return
@@ -1844,7 +1844,7 @@ class Audian(QMainWindow):
         # the status bar's minimum from 1184 px to 2148 and the window with
         # it.
         self.message_label.setMinimumWidth(0)
-        self.message_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.message_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         #: the unelided line, for the tool tip and for re-eliding on a resize
         self._message_full = ""
         bar.addWidget(self.message_label, 1)
@@ -1876,9 +1876,9 @@ class Audian(QMainWindow):
                 self._readout_separators[field] = rule
             label = QLabel(self.readout_box)
             label.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-            label.setTextFormat(Qt.RichText)
+            label.setTextFormat(Qt.TextFormat.RichText)
             label.setWordWrap(False)
-            label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             # sized from the widest string the field can ever show, so that
             # a moving pointer never reflows the bar:
             label.setFixedWidth(
@@ -1896,8 +1896,8 @@ class Audian(QMainWindow):
         # persistent error indicator, opens the log:
         self.error_button = QToolButton(bar)
         self.error_button.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-        self.error_button.setCursor(Qt.PointingHandCursor)
-        self.error_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.error_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.error_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.error_button.setStyleSheet(
             "QToolButton {"
             f"color: {theme.token('danger')};"
@@ -1927,7 +1927,7 @@ class Audian(QMainWindow):
         self.progress_label = QLabel("", progress_box)
         self.progress_label.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.progress_label.setStyleSheet(f"color: {theme.token('fg.muted')};")
-        self.progress_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         pbox.addWidget(self.progress_label, 1)
         self.progress_bar = QProgressBar(progress_box)
         self.progress_bar.setFixedWidth(6 * theme.S12)
@@ -1942,7 +1942,7 @@ class Audian(QMainWindow):
         # mode chip, far right:
         self.mode_chip = QLabel("", bar)
         self.mode_chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-        self.mode_chip.setAlignment(Qt.AlignCenter)
+        self.mode_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.mode_chip.setFixedWidth(fm.horizontalAdvance("Analyze") + 4 * theme.S8)
         self.mode_chip.setStyleSheet(chip_style("fg.muted"))
         self.mode_chip.setVisible(False)
@@ -2059,7 +2059,7 @@ class Audian(QMainWindow):
             return
         metrics = QFontMetrics(label.font())
         label.setText(
-            metrics.elidedText(self._message_full, Qt.ElideRight, max(label.width(), 1))
+            metrics.elidedText(self._message_full, Qt.TextElideMode.ElideRight, max(label.width(), 1))
         )
 
     def clear_message(self) -> None:
@@ -2144,7 +2144,7 @@ class Audian(QMainWindow):
         label = f"{text} {value:d}%" if text else f"{value:d}%"
         metrics = theme.ui_metrics(theme.SIZE_SMALL_PT)
         self.progress_label.setText(
-            metrics.elidedText(label, Qt.ElideRight, self.progress_label.width())
+            metrics.elidedText(label, Qt.TextElideMode.ElideRight, self.progress_label.width())
         )
         self.progress_bar.setToolTip(label)
         if value >= 100:
@@ -2155,8 +2155,8 @@ class Audian(QMainWindow):
     def show_log(self) -> None:
         """Show every message notify() has seen."""
         dialog = QDialog(self)
-        dialog.setAttribute(Qt.WA_DeleteOnClose)
-        dialog.setWindowModality(Qt.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
         dialog.setWindowTitle("Audian messages")
         vbox = QVBoxLayout(dialog)
         view = QPlainTextEdit(dialog)
@@ -2166,7 +2166,7 @@ class Audian(QMainWindow):
             "\n".join(f"{level:8s} {text}" for level, text in self.messages)
         )
         vbox.addWidget(view)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close, dialog)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
         buttons.rejected.connect(dialog.reject)
         vbox.addWidget(buttons)
         dialog.resize(720, 420)
@@ -2192,7 +2192,7 @@ class Audian(QMainWindow):
         self._toolbar_gaps.append(left)
         self.toolbar_box.addWidget(left)
         line = QFrame(self.toolbar_content)
-        line.setFrameShape(QFrame.VLine)
+        line.setFrameShape(QFrame.Shape.VLine)
         line.setFixedWidth(theme.HAIRLINE)
         line.setStyleSheet(f"background: {theme.token('border')};border: none;")
         self._toolbar_separators.append(line)
@@ -2267,7 +2267,7 @@ class Audian(QMainWindow):
             if widget is not None:
                 widget.setStyleSheet(f"color: {theme.token(token_name)};")
 
-    def toolbar_button(self, act, style=Qt.ToolButtonIconOnly) -> QToolButton:
+    def toolbar_button(self, act, style=Qt.ToolButtonStyle.ToolButtonIconOnly) -> QToolButton:
         button = QToolButton(self.toolbar_content)
         button.setDefaultAction(act)
         button.setToolButtonStyle(style)
@@ -2330,7 +2330,7 @@ class Audian(QMainWindow):
             self.acts.ask_region,
             self.acts.label_region,
         ):
-            button = self.toolbar_button(act, Qt.ToolButtonTextBesideIcon)
+            button = self.toolbar_button(act, Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             self.mode_buttons.append(button)
         self.toolbar_gap()
 
@@ -2357,11 +2357,11 @@ class Audian(QMainWindow):
         # amplitude:
         self._set_glyph(self.acts.auto_zoom_amplitude, "fit")
         self.fit_y_button = self.toolbar_button(
-            self.acts.auto_zoom_amplitude, Qt.ToolButtonTextBesideIcon
+            self.acts.auto_zoom_amplitude, Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
         self.ampl_button = QToolButton(tb)
-        self.ampl_button.setPopupMode(QToolButton.InstantPopup)
-        self.ampl_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.ampl_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.ampl_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.ampl_button.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.ampl_button.setAutoRaise(True)
         self.ampl_button.setToolTip("Amplitude range policy")
@@ -2394,12 +2394,12 @@ class Audian(QMainWindow):
         # right aligned channel selector:
         spacer = QWidget(self.toolbar_content)
         make_transparent(spacer, "audian_toolbar_gap")
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.toolbar_box.addWidget(spacer, 1)
         self.channel_button = QToolButton(self.toolbar_content)
         self._set_glyph(self.channel_button, "channels")
-        self.channel_button.setPopupMode(QToolButton.InstantPopup)
-        self.channel_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.channel_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.channel_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.channel_button.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         self.channel_button.setAutoRaise(True)
         self.channel_button.setToolTip(
@@ -2444,8 +2444,8 @@ class Audian(QMainWindow):
         """
         self.overflow_button = QToolButton(self.toolbar_content)
         self._set_glyph(self.overflow_button, "more")
-        self.overflow_button.setPopupMode(QToolButton.InstantPopup)
-        self.overflow_button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.overflow_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.overflow_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.overflow_button.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.overflow_button.setAutoRaise(True)
         self.overflow_button.setFixedHeight(theme.TOOLBAR_BUTTON_BOX)
@@ -2465,7 +2465,7 @@ class Audian(QMainWindow):
         def unlabel(on: bool) -> None:
             for button in modes:
                 button.setToolButtonStyle(
-                    Qt.ToolButtonIconOnly if on else styles[button]
+                    Qt.ToolButtonStyle.ToolButtonIconOnly if on else styles[button]
                 )
 
         def collapse_gaps(on: bool) -> None:
@@ -2715,9 +2715,9 @@ class Audian(QMainWindow):
         region mode rarely has to be switched at all.  Call this from
         SelectViewBox when a drag starts.
         """
-        if modifiers & Qt.ShiftModifier:
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
             return DataBrowser.MODE_PLAY
-        if modifiers & Qt.AltModifier:
+        if modifiers & Qt.KeyboardModifier.AltModifier:
             return DataBrowser.MODE_ANALYZE
         return None
 
@@ -2782,7 +2782,7 @@ class Audian(QMainWindow):
                     rel_path = file_path
                 try:
                     image_buffer = QBuffer()
-                    image_buffer.open(QBuffer.ReadWrite)
+                    image_buffer.open(QBuffer.OpenModeFlag.ReadWrite)
                     image.save(image_buffer, "PNG")
                     pil_image = Image.open(io.BytesIO(image_buffer.data()))
                     pil_image.save(file_path, pnginfo=metadata)
@@ -2854,7 +2854,7 @@ class Audian(QMainWindow):
 
     def setup_file_actions(self, menu):
         self.acts.open_files = QAction("&Open", self)
-        self.acts.open_files.setShortcuts(QKeySequence.Open)
+        self.acts.open_files.setShortcuts(QKeySequence.StandardKey.Open)
         self.acts.open_files.triggered.connect(self.open_files)
 
         self.acts.save_window = QAction("&Save window as", self)
@@ -2879,7 +2879,7 @@ class Audian(QMainWindow):
         self.acts.close.triggered.connect(lambda x: self.close(None))
 
         self.acts.quit = QAction("&Quit", self)
-        self.acts.quit.setShortcuts(QKeySequence.Quit)
+        self.acts.quit.setShortcuts(QKeySequence.StandardKey.Quit)
         self.acts.quit.triggered.connect(self.quit)
 
         self.data_acts.extend(
@@ -3186,7 +3186,7 @@ class Audian(QMainWindow):
         self.acts.time_down = QAction("Seek &forward", self)
         self._set_glyph(self.acts.time_down, "seek-forward")
         self.acts.time_down.setToolTip("Seek forward (Page down)")
-        self.acts.time_down.setShortcuts(QKeySequence.MoveToNextPage)
+        self.acts.time_down.setShortcuts(QKeySequence.StandardKey.MoveToNextPage)
         self.acts.time_down.triggered.connect(
             lambda x: self.apply_time_ranges("up", self.link_timescroll)
         )
@@ -3194,19 +3194,19 @@ class Audian(QMainWindow):
         self.acts.time_up = QAction("Seek &backward", self)
         self._set_glyph(self.acts.time_up, "seek-backward")
         self.acts.time_up.setToolTip("Seek backward (Page up)")
-        self.acts.time_up.setShortcuts(QKeySequence.MoveToPreviousPage)
+        self.acts.time_up.setShortcuts(QKeySequence.StandardKey.MoveToPreviousPage)
         self.acts.time_up.triggered.connect(
             lambda x: self.apply_time_ranges("down", self.link_timescroll)
         )
 
         self.acts.time_small_down = QAction("Forward", self)
-        self.acts.time_small_down.setShortcuts(QKeySequence.MoveToNextLine)
+        self.acts.time_small_down.setShortcuts(QKeySequence.StandardKey.MoveToNextLine)
         self.acts.time_small_down.triggered.connect(
             lambda x: self.apply_time_ranges("small_up", self.link_timescroll)
         )
 
         self.acts.time_small_up = QAction("Backward", self)
-        self.acts.time_small_up.setShortcuts(QKeySequence.MoveToPreviousLine)
+        self.acts.time_small_up.setShortcuts(QKeySequence.StandardKey.MoveToPreviousLine)
         self.acts.time_small_up.triggered.connect(
             lambda x: self.apply_time_ranges("small_down", self.link_timescroll)
         )
@@ -3215,7 +3215,7 @@ class Audian(QMainWindow):
         self._set_glyph(self.acts.time_end, "skip-forward")
         self.acts.time_end.setToolTip("Skip to end of data (End)")
         self.acts.time_end.setShortcuts(
-            [QKeySequence.MoveToEndOfLine, QKeySequence.MoveToEndOfDocument]
+            [QKeySequence.StandardKey.MoveToEndOfLine, QKeySequence.StandardKey.MoveToEndOfDocument]
         )
         self.acts.time_end.triggered.connect(
             lambda x: self.apply_time_ranges("end", self.link_timescroll)
@@ -3225,7 +3225,7 @@ class Audian(QMainWindow):
         self._set_glyph(self.acts.time_home, "skip-backward")
         self.acts.time_home.setToolTip("Skip to beginning of data (Home)")
         self.acts.time_home.setShortcuts(
-            [QKeySequence.MoveToStartOfLine, QKeySequence.MoveToStartOfDocument]
+            [QKeySequence.StandardKey.MoveToStartOfLine, QKeySequence.StandardKey.MoveToStartOfDocument]
         )
         self.acts.time_home.triggered.connect(
             lambda x: self.apply_time_ranges("home", self.link_timescroll)
@@ -3492,25 +3492,25 @@ class Audian(QMainWindow):
         )
 
         self.acts.frequency_up = QAction("Move &up", self)
-        self.acts.frequency_up.setShortcuts(QKeySequence.MoveToNextChar)
+        self.acts.frequency_up.setShortcuts(QKeySequence.StandardKey.MoveToNextChar)
         self.acts.frequency_up.triggered.connect(
             lambda x: self.apply_ranges("up", Panel.frequencies[0])
         )
 
         self.acts.frequency_down = QAction("Move &down", self)
-        self.acts.frequency_down.setShortcuts(QKeySequence.MoveToPreviousChar)
+        self.acts.frequency_down.setShortcuts(QKeySequence.StandardKey.MoveToPreviousChar)
         self.acts.frequency_down.triggered.connect(
             lambda x: self.apply_ranges("down", Panel.frequencies[0])
         )
 
         self.acts.frequency_home = QAction("&Home", self)
-        self.acts.frequency_home.setShortcuts(QKeySequence.MoveToPreviousWord)
+        self.acts.frequency_home.setShortcuts(QKeySequence.StandardKey.MoveToPreviousWord)
         self.acts.frequency_home.triggered.connect(
             lambda x: self.apply_ranges("home", Panel.frequencies[0])
         )
 
         self.acts.frequency_end = QAction("&End", self)
-        self.acts.frequency_end.setShortcuts(QKeySequence.MoveToNextWord)
+        self.acts.frequency_end.setShortcuts(QKeySequence.StandardKey.MoveToNextWord)
         self.acts.frequency_end.triggered.connect(
             lambda x: self.apply_ranges("end", Panel.frequencies[0])
         )
@@ -3907,14 +3907,14 @@ class Audian(QMainWindow):
         self.acts.show_channels = []
 
         self.acts.select_all_channels = QAction("Select &all channels", self)
-        self.acts.select_all_channels.setShortcuts(QKeySequence.SelectAll)
+        self.acts.select_all_channels.setShortcuts(QKeySequence.StandardKey.SelectAll)
         self.acts.select_all_channels.triggered.connect(
             lambda x: self.select_channels("all_channels")
         )
 
         self.acts.next_channel = QAction("&Next channel", self)
         self.acts.next_channel.setShortcuts(
-            [QKeySequence.SelectNextLine, QKeySequence("Alt+PgDown")]
+            [QKeySequence.StandardKey.SelectNextLine, QKeySequence("Alt+PgDown")]
         )
         self.acts.next_channel.triggered.connect(
             lambda x: self.select_channels("next_channel")
@@ -3922,26 +3922,26 @@ class Audian(QMainWindow):
 
         self.acts.previous_channel = QAction("&Previous channel", self)
         self.acts.previous_channel.setShortcuts(
-            [QKeySequence.SelectPreviousLine, QKeySequence("Alt+PgUp")]
+            [QKeySequence.StandardKey.SelectPreviousLine, QKeySequence("Alt+PgUp")]
         )
         self.acts.previous_channel.triggered.connect(
             lambda x: self.select_channels("previous_channel")
         )
 
         self.acts.select_next_channel = QAction("Select next channel", self)
-        self.acts.select_next_channel.setShortcuts(QKeySequence.SelectNextPage)
+        self.acts.select_next_channel.setShortcuts(QKeySequence.StandardKey.SelectNextPage)
         self.acts.select_next_channel.triggered.connect(
             lambda x: self.select_channels("select_next_channel")
         )
 
         self.acts.select_previous_channel = QAction("Select previous channel", self)
-        self.acts.select_previous_channel.setShortcuts(QKeySequence.SelectPreviousPage)
+        self.acts.select_previous_channel.setShortcuts(QKeySequence.StandardKey.SelectPreviousPage)
         self.acts.select_previous_channel.triggered.connect(
             lambda x: self.select_channels("select_previous_channel")
         )
 
         self.acts.hide_deselected_channels = QAction("Hide deselected channels", self)
-        self.acts.hide_deselected_channels.setShortcuts(QKeySequence.Delete)
+        self.acts.hide_deselected_channels.setShortcuts(QKeySequence.StandardKey.Delete)
         self.acts.hide_deselected_channels.triggered.connect(
             self.hide_deselected_channels
         )
@@ -4828,10 +4828,10 @@ class Audian(QMainWindow):
         depend on the outcome.
         """
         state = self.windowState()
-        if state & Qt.WindowMaximized:
-            self.setWindowState(state & ~Qt.WindowMaximized)
+        if state & Qt.WindowState.WindowMaximized:
+            self.setWindowState(state & ~Qt.WindowState.WindowMaximized)
         else:
-            self.setWindowState(state | Qt.WindowMaximized)
+            self.setWindowState(state | Qt.WindowState.WindowMaximized)
 
     def shortcuts(self):
         # parented, WA_DeleteOnClose and explicitly non-modal: the old
