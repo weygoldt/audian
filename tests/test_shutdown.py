@@ -134,22 +134,23 @@ def test_the_window_has_a_close_event():
 def test_closing_the_window_tears_the_browser_down(window):
     """The close gesture reaches the teardown that frees the recording.
 
-    `DataBrowser.close()` is what releases the loader and, on a recording
-    big enough to have started one, terminates and joins the compression
-    pool.  Spying on it says whether the gesture arrives without needing an
-    8-million-sample file to make the workers real: `inline_samples` means
-    anything smaller never spawns one, so a live-child assertion would pass
-    vacuously on any recording a test can afford to write.
+    Asserted on the released loader rather than on a call to a named method:
+    `Data.close()` sets `self.data` to `None`, so a browser whose teardown
+    ran is one that no longer holds the file open.  A spy on the method name
+    would be satisfied by any rename that happened to keep it, which is not
+    the property this is about -- and on a recording a test can afford to
+    write, `inline_samples` means no compression pool is ever spawned, so a
+    live-child assertion would pass vacuously.
     """
     browser = window.browser()
-    called = []
-    original = browser.close
-    browser.close = lambda *a, **k: (called.append(True), original(*a, **k))[1]
+    assert browser.data.data is not None
 
     QApplication.instance().sendEvent(window, QCloseEvent())
     pump(0.2)
 
-    assert called, "closing the window never tore the browser down"
+    assert browser.data.data is None, (
+        "closing the window never released the recording"
+    )
 
 
 @pytest.mark.xfail(

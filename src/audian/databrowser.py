@@ -1446,7 +1446,7 @@ class DataBrowser(QWidget):
         # colors and fonts are owned by theme.apply()
 
     def __del__(self):
-        self.close()
+        self.shutdown()
 
     @staticmethod
     def read_color_map_setting() -> int:
@@ -3187,9 +3187,16 @@ class DataBrowser(QWidget):
         if datas is None or times is None or len(times) != len(datas):
             self.notify("error", "overview unavailable")
 
-    def close(self):
+    def shutdown(self):
+        """Release the recording and everything derived from it.
+
+        Named `shutdown` rather than `close` because a `QWidget` already has
+        a `close`, and a browser that overrides it makes `widget.close()`
+        mean "let go of the file" to this class and "close the window" to
+        every caller who has only ever seen Qt's.
+        """
         if self.datafig is not None:
-            self.datafig.close()
+            self.datafig.shutdown()
         if self.data is not None:
             self.data.close()
 

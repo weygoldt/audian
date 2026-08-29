@@ -4863,7 +4863,7 @@ class Audian(QMainWindow):
                 if w in self.browsers:
                     self.browsers.remove(w)
                 self.tabs.removeTab(index)
-                w.close()
+                w.shutdown()
                 del w
         if self.tabs.count() == 0:
             self.show_startup()
@@ -4873,7 +4873,7 @@ class Audian(QMainWindow):
             w.flush_labels()
             index = self.tabs.indexOf(w)
             self.tabs.removeTab(index)
-            w.close()
+            w.shutdown()
             del w
         QApplication.quit()
 
