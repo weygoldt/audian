@@ -3194,7 +3194,34 @@ class DataBrowser(QWidget):
         a `close`, and a browser that overrides it makes `widget.close()`
         mean "let go of the file" to this class and "close the window" to
         every caller who has only ever seen Qt's.
+
+        The timers are stopped first, and the order is the point rather than
+        tidiness.  `audio_timer` fires every 50 ms into `mark_audio`, which
+        calls `stop()` on the playback device the window is about to close,
+        and `scroll_timer` walks the very recording the next two lines
+        release.  A timer left running is a read of something that is gone,
+        somewhere between the last tick and the process ending.
+
+        Looked up by name so a subclass whose `__init__` stopped before it
+        built them is a no-op rather than an `AttributeError` raised out of a
+        teardown, and `stop()` is guarded because Qt may already have
+        destroyed the C++ timer under a wrapper Python still holds.
         """
+        for name in (
+            "scroll_timer",
+            "audio_timer",
+            "resize_timer",
+            "filter_timer",
+            "envelope_timer",
+            "overview_timer",
+        ):
+            timer = getattr(self, name, None)
+            if timer is None:
+                continue
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
         if self.datafig is not None:
             self.datafig.shutdown()
         if self.data is not None:
