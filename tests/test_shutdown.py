@@ -179,10 +179,6 @@ def test_closing_the_window_writes_a_pending_label(window):
     assert sidecar.exists(), "the label was never written to disk"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="compression workers are spawned without daemon=True",
-)
 def test_the_compression_workers_are_daemons(monkeypatch, tmp_path):
     """A worker must not be able to hold the process open at exit.
 
@@ -215,7 +211,7 @@ def test_the_compression_workers_are_daemons(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cd, "Process", spy)
 
-    loader = open_files([str(recording)])
+    loader = open_files([str(recording)], 60.0, 10.0)
     compressed = cd.CompressedData(loader)
     try:
         compressed.start(2000, {}, do_short=False)

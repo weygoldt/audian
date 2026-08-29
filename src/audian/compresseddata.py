@@ -341,6 +341,14 @@ class CompressedData:
         self.stats_datas = self.stats_datas.reshape((n, self.data.channels))
         for i in range(nprocs):
             p = Process(
+                # multiprocessing's exit handler *joins* non-daemon children
+                # rather than killing them, so a window closed over a
+                # recording that is still being reduced becomes a process
+                # that will not exit and shows nothing.  These workers only
+                # read -- every file write lives in the parent, after the
+                # pool has finished -- so the worst an abrupt kill can leave
+                # behind is a missing overview the next open recomputes.
+                daemon=True,
                 target=down_sample_worker,
                 args=(
                     i,
