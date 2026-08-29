@@ -1445,9 +1445,6 @@ class DataBrowser(QWidget):
         self.datafig = None
         # colors and fonts are owned by theme.apply()
 
-    def __del__(self):
-        self.shutdown()
-
     @staticmethod
     def read_color_map_setting() -> int:
         """Spectrogram colormap index as stored by a previous session."""

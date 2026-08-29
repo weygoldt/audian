@@ -234,6 +234,9 @@ class Data(object):
     def clear_traces(self):
         self.traces = []
 
+    # Kept for the same reason CompressedData.__del__ is: no Qt, no shiboken
+    # hazard, and it is the last backstop that releases the file handle for a
+    # Data dropped without going through DataBrowser.shutdown.
     def __del__(self):
         self.close()
 

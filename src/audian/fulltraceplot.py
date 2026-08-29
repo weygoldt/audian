@@ -558,9 +558,6 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
         axis.setHeight(0)
         return axis
 
-    def __del__(self):
-        self.shutdown()
-
     def shutdown(self):
         """Stop the navigator's timers and let the worker pool go.
 

@@ -192,6 +192,11 @@ class CompressedData:
             maximum=self.datas[1 : 2 * nbins : 2],
         )
 
+    # Deliberately kept where DataBrowser's and FullTracePlot's finalisers
+    # were removed.  This is a plain Python class with no Qt in it, so it
+    # carries none of the shiboken hazard those two did, and with
+    # FullTracePlot.__del__ gone it is the only thing that still terminates
+    # the worker pool for a CompressedData dropped without a shutdown.
     def __del__(self):
         self.close()
 
