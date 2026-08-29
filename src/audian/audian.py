@@ -4857,6 +4857,15 @@ class Audian(QMainWindow):
 
         `flush_labels` is called by hand here because a tab can go without
         the window going, so the close event is not on this path.
+
+        `deleteLater` because `removeTab` does not destroy the page: measured,
+        the browser stays a child of the tab widget's internal
+        `QStackedWidget`, hidden and off the tab bar but alive with its fifty
+        plots, for as long as the window lives.  `shutdown` had already given
+        the recording back, so what accumulated was widgets rather than file
+        handles -- and never anything `smoke_test --census` could report,
+        since that counts *parentless* top-level widgets and this one keeps a
+        parent.  The `del w` that used to sit here only unbound a local.
         """
         if self.tabs.count() > 0:
             if index is None:
@@ -4868,6 +4877,7 @@ class Audian(QMainWindow):
                     self.browsers.remove(w)
                 self.tabs.removeTab(index)
                 w.shutdown()
+                w.deleteLater()
         if self.tabs.count() == 0:
             self.show_startup()
 
