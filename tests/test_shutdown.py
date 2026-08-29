@@ -1,28 +1,30 @@
 """What happens when the window is closed the way a window manager closes it.
 
-Audian defends two exit paths by hand: `Ctrl+Q` and closing a tab both call
-`flush_labels()` before letting go.  `flush_labels`' own docstring says why --
-"there is no `closeEvent` anywhere in audian and `Audian.quit` never goes
-through Qt's close machinery at all".
+Audian used to defend two exit paths by hand -- `Ctrl+Q` and closing a tab
+both called `flush_labels()` before letting go -- and the window manager's
+close button was a third that called neither.  It goes through Qt's close
+machinery, and there was no `closeEvent` anywhere in the tree for that
+machinery to reach.  So on the most common exit gesture of all:
 
-The window manager's close button is a third path, and it goes through
-exactly the close machinery that sentence says nothing uses.  It calls
-neither.  So on that gesture:
-
-* the pending label save is dropped with the event loop,
-* `CompressedData.close()` never runs, leaving eight non-daemon children for
+* the pending label save went with the event loop,
+* `CompressedData.close()` never ran, leaving non-daemon children for
   `multiprocessing`'s exit handler to join -- which is a hang, not a leak,
   while a large recording is still compressing,
-* `PlayAudio.close()` is reached only from `Audian.__del__`, i.e. never
+* `PlayAudio.close()` was reachable only from `Audian.__del__`, i.e. never
   reliably.
 
-The label window is narrow -- a queued zero-timer save fires on the next turn
-of the loop, so it is lost only if nothing turns the loop again, which is what
-`exec()` returning does.  The child processes are the part with teeth.
+`Audian.closeEvent` now runs that teardown, and `quit` goes through it
+rather than beside it, so the three gestures are one path.
 
-These are marked `xfail` because they describe the bug, not the fix.  They are
-`strict`, so when the `closeEvent` lands they fail as XPASS and the marker has
-to come off in the same commit.
+These assert on effects rather than on calls -- an override that exists, a
+released recording, a sidecar on disk, a daemon flag -- because the names on
+this path have moved once already and a spy on a method name is satisfied by
+any rename that keeps it.
+
+The label window was always narrow: the queued zero-timer save fires on the
+next turn of the loop, so it is lost only if nothing turns the loop again,
+which is what `exec()` returning does.  The child processes are the part with
+teeth.
 """
 
 from __future__ import annotations
@@ -99,10 +101,6 @@ def window(tmp_path):
             QSettings.setPath(fmt, scope, os.fspath(home))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Audian defines no closeEvent, so Qt's close machinery reaches nothing",
-)
 def test_the_window_has_a_close_event():
     """Qt's close machinery has to reach something.
 
@@ -123,14 +121,10 @@ def test_the_window_has_a_close_event():
     ]
     assert defined_in and defined_in[0] == "Audian", (
         "Audian defines no closeEvent, so closing through the window manager "
-        f"runs no teardown at all (found on: {defined_in or 'nothing'})"
+        f"would run no teardown at all (found on: {defined_in or 'nothing'})"
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="no closeEvent: the browser's teardown never runs on this path",
-)
 def test_closing_the_window_tears_the_browser_down(window):
     """The close gesture reaches the teardown that frees the recording.
 
@@ -153,10 +147,6 @@ def test_closing_the_window_tears_the_browser_down(window):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="no closeEvent: the queued label save dies with the event loop",
-)
 def test_closing_the_window_writes_a_pending_label(window):
     """A label made and not yet flushed survives the close gesture.
 

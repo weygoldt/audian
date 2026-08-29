@@ -3647,11 +3647,11 @@ class DataBrowser(QWidget):
     def flush_labels(self) -> None:
         """Write any pending labels before this browser goes away.
 
-        There is no `closeEvent` anywhere in audian and `Audian.quit` never
-        goes through Qt's close machinery at all, so both exit paths call
-        this by hand.  A queued zero-timer save would otherwise be dropped
-        with the event loop, and the last label of a session is exactly the
-        one a reader has not written down anywhere else.
+        A queued zero-timer save would otherwise be dropped with the event
+        loop, and the last label of a session is exactly the one a reader has
+        not written down anywhere else.  `Audian.closeEvent` calls this for
+        every browser when the window goes; `Audian.close_tab` calls it for
+        the one tab that goes without the window.
         """
         if self.labels.dirty or self.label_save_pending:
             self.save_labels()

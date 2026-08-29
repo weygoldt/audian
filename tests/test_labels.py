@@ -658,11 +658,11 @@ def test_the_sidecar_is_written_without_being_asked(labelling):
 
 
 def test_a_flush_writes_what_a_queued_save_had_not(labelling):
-    """What `Audian.close` and `Audian.quit` call.
+    """What `Audian.close_tab` and `Audian.closeEvent` call.
 
-    Neither goes through Qt's close machinery -- there is no ``closeEvent``
-    anywhere in audian -- so a queued zero-timer save would go with the event
-    loop, taking the last label of the session with it.
+    A queued zero-timer save fires on the next turn of the loop, so it would
+    go with the event loop on the way out, taking the last label of the
+    session with it.
     """
     browser = labelling
     path = browser.labels_path()
