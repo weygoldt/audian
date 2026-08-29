@@ -3026,6 +3026,31 @@ class DataBrowser(QWidget):
 
         Shared across channels is the default: for an electrode array,
         comparable amplitudes across electrodes are the measurement.
+
+        **`force` has to reach the per-range lock as well as `y_locked`,
+        and it did not.**  `PlotRange._user_zoomed` sets `user_locked` the
+        moment the reader zooms an amplitude axis by hand, and
+        `PlotRanges.auto_fit` defaults to `respect_lock=True`, so every
+        forced fit died at `if respect_lock and self.user_locked: return`.
+        The two gestures that ask for a fit *by name* -- `v` and the double
+        click on a trace's y axis -- therefore did nothing at all on the
+        one axis a reader is most likely to have dragged.  Measured: a lane
+        fitted at (-0.116965, 0.128933), hand-zoomed to (-0.16, 0.08),
+        double clicked, still (-0.16, 0.08).
+
+        It was invisible to the tests because they squash a lane with
+        `setYRange`, which is not a user zoom and leaves the lock clear;
+        the same test passed while the application did nothing.
+
+        `respect_lock=not force` is the whole fix, and it also *releases*
+        the lock -- `PlotRange.auto` clears `user_locked` whenever it is
+        called with `respect_lock=False`.  That is what the gesture means:
+        the reader asked to go back to the automatic view, so the automatic
+        view should keep following the data afterwards.
+
+        The unforced call in `set_times` keeps `respect_lock=True`, which
+        is the rule that matters there -- a time scroll must never fight a
+        zoom the reader chose.
         """
         if self.y_locked and not force:
             return
@@ -3039,7 +3064,13 @@ class DataBrowser(QWidget):
         )
         with self.updating():
             if hasattr(self.plot_ranges, "auto_fit"):
-                self.plot_ranges.auto_fit(t0, t1, channels=channels, headroom=0.08)
+                self.plot_ranges.auto_fit(
+                    t0,
+                    t1,
+                    channels=channels,
+                    headroom=0.08,
+                    respect_lock=not force,
+                )
             else:
                 self.plot_ranges.auto(
                     Panel.amplitudes, t0, t1, channels, self.isVisible()

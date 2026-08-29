@@ -44,6 +44,7 @@ from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
 from audian.databrowser import DataBrowser  # noqa: E402
+from audian.panels import Panel  # noqa: E402
 from audian.timeplot import TICK_VALUES_MIN_HEIGHT  # noqa: E402
 
 #: The window every measurement quoted in this file was made at.
@@ -2431,3 +2432,108 @@ def test_the_opens_at_row_costs_the_bar_no_width(browser):
     assert groups["Spectrogram"] == 535
     assert browser.parambar.minimumSizeHint().width() == 535 + 2 * theme.S8
     assert browser.window().minimumSizeHint().width() == 734
+
+
+# ------------------------------------------- a lane the reader zoomed by hand
+#
+# Reported from the application after the rest of this was written and
+# green: "double clicking the trace y axis still does not reset anything".
+#
+# It was true, and every test here missed it, because they all squash a lane
+# with `setYRange` -- which is not a user zoom and leaves `user_locked`
+# clear.  A reader squashes it by dragging, `SelectViewBox` emits
+# `sigUserZoomed`, `PlotRange._user_zoomed` sets the lock, and
+# `auto_fit_y(force=True)` then died at
+# `if respect_lock and self.user_locked: return` without touching anything.
+#
+# So the lock is set explicitly below, which is the state a drag leaves
+# behind, and these are the only tests in this file that exercise the
+# gesture the way the application is actually used.
+
+
+@pytest.fixture
+def unlock_amplitudes(browser):
+    """Clear any lock a test set, and refit, before the next one runs."""
+    yield
+    for axspec in Panel.amplitudes:
+        arange = browser.plot_ranges.get(axspec)
+        if arange is not None:
+            arange.set_user_locked(False)
+    browser.auto_ampl()
+    settle()
+
+
+def hand_zoom(browser, ax, r0, r1):
+    """Squash a lane the way a drag does: the range AND the lock.
+
+    `setYRange` alone is what every other test in this file uses and is
+    precisely what hid this defect -- it moves the range without ever
+    setting `user_locked`, so a fit that respects the lock looks like a fit
+    that works.
+    """
+    ax.getViewBox().setYRange(r0, r1, padding=0)
+    browser.plot_ranges[ax.y()].set_user_locked(True)
+    settle()
+
+
+@pytest.mark.parametrize("how", ["double click", "v"])
+def test_a_hand_zoomed_trace_still_answers_the_gesture(
+    browser, unlock_amplitudes, how
+):
+    """The reported defect, both ways into it.
+
+    Measured before the fix: fitted at open to (-0.116965, 0.128933), hand
+    zoomed to (-0.16, 0.08), double clicked, and still (-0.16, 0.08) -- the
+    gesture did nothing at all.  `v` was identical, because both go through
+    `auto_amplitude` -> `auto_ampl` -> `auto_fit_y(force=True)`.
+    """
+    ax = panel(browser, "trace").axs[0]
+    view = ax.getViewBox()
+    _t, (y0, y1) = view.viewRange()
+
+    hand_zoom(browser, ax, -0.16, 0.08)
+    assert view.viewRange()[1] == pytest.approx((-0.16, 0.08))
+    assert browser.plot_ranges["x"].user_locked
+
+    if how == "v":
+        browser.window().acts.auto_zoom_amplitude.trigger()
+        settle()
+    else:
+        click_axis(browser, 0, ax, double=True)
+
+    assert view.viewRange()[1] == pytest.approx((y0, y1), abs=1e-6)
+
+
+def test_the_gesture_releases_the_lock_it_overrode(browser, unlock_amplitudes):
+    """Going back to the automatic view means the automatic view keeps
+    following the data afterwards.
+
+    `PlotRange.auto` clears `user_locked` whenever it is called with
+    `respect_lock=False`, so the one-line fix releases the lock as well as
+    overriding it -- and a lane left locked-but-fitted would silently stop
+    tracking on the next time scroll.
+    """
+    ax = panel(browser, "trace").axs[0]
+    hand_zoom(browser, ax, -0.16, 0.08)
+    assert browser.plot_ranges["x"].user_locked
+
+    click_axis(browser, 0, ax, double=True)
+    assert not browser.plot_ranges["x"].user_locked
+
+
+def test_a_time_scroll_still_leaves_a_hand_zoom_alone(browser, unlock_amplitudes):
+    """The rule the fix must not break.
+
+    `set_times` calls `auto_fit_y()` unforced, and an automatic fit must
+    never fight a zoom the reader chose.  Only the gestures that ask for a
+    fit by name override the lock.
+    """
+    ax = panel(browser, "trace").axs[0]
+    view = ax.getViewBox()
+    hand_zoom(browser, ax, -0.16, 0.08)
+
+    browser.auto_fit_y()  # what a scroll does: unforced
+    settle()
+
+    assert view.viewRange()[1] == pytest.approx((-0.16, 0.08))
+    assert browser.plot_ranges["x"].user_locked
