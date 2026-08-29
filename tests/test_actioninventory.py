@@ -171,6 +171,68 @@ def test_the_action_inventory_is_what_it_was(window):
     assert not changed, "bindings changed:\n" + json.dumps(changed, indent=2)
 
 
+#: Actions this sweep must not fire, and why.  Everything not named here is
+#: expected to survive being triggered on a loaded two-channel recording.
+UNSWEEPABLE = {
+    # Ends the process or the document under the sweep's feet.
+    "quit": "quits",
+    "close": "closes the tab being tested",
+    # Opens a native modal dialog, which blocks with no event loop to close it.
+    "open_files": "modal file dialog",
+    "new_tab": "modal file dialog",
+    "load_annotations": "modal file dialog",
+    "save_window": "modal file dialog",
+    "save_region": "modal file dialog",
+    "screen_shot": "modal file dialog",
+    "about": "modal message box",
+}
+
+
+def test_every_action_survives_being_triggered(window):
+    """Fire all of them and report every one that raised, not just the first.
+
+    The inventory above proves a key is still *bound*.  It says nothing
+    about whether the thing behind it still runs, and the Qt6 changes most
+    likely to break a handler -- a mouse button flag compared against an
+    int, an event whose `pos()` became a `QPointF`, an enum that is no
+    longer an int -- all fail inside the slot rather than at connection
+    time.
+
+    So: trigger everything, catch everything, and print the whole list.
+    Actions that open a modal dialog or end the session are named in
+    UNSWEEPABLE with a reason; that list is the honest statement of what
+    this does not cover.
+    """
+    app = QApplication.instance()
+    failures = []
+    fired = 0
+
+    for name, act in sorted(vars(window.acts).items()):
+        if name.startswith("__") or not hasattr(act, "trigger"):
+            continue
+        if name in UNSWEEPABLE:
+            continue
+        try:
+            act.trigger()
+            app.processEvents()
+            fired += 1
+        except Exception as exc:  # noqa: BLE001 - the whole point is breadth
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+
+        # Close whatever it opened, so the next trigger starts from the
+        # window rather than from a stacked dialog.
+        for widget in QApplication.topLevelWidgets():
+            if widget is not window and widget.isVisible():
+                widget.close()
+        app.processEvents()
+
+    assert not failures, f"{len(failures)} of {fired} actions raised:\n  " + "\n  ".join(
+        failures
+    )
+    # A sweep that silently stopped finding actions would pass forever.
+    assert fired >= 100, f"only {fired} actions fired; the inventory has 124"
+
+
 def test_every_bound_key_is_unique_within_its_context(window):
     """Two actions on one key means one of them silently never fires.
 
