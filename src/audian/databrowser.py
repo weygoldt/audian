@@ -11,23 +11,29 @@ from math import fabs, floor, isfinite, log10
 from typing import NamedTuple, Optional
 from scipy.signal import butter, sosfiltfilt
 
-try:
-    from PyQt5.QtCore import Signal
-except ImportError:
-    from PyQt5.QtCore import pyqtSignal as Signal
-from PyQt5.QtCore import Qt, QEvent, QPoint, QRectF, QSettings, QSize, QTimer
-from PyQt5.QtGui import QCursor, QIcon, QPainter, QPixmap
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout
-from PyQt5.QtWidgets import QLayout
-from PyQt5.QtWidgets import QScrollArea, QSplitter, QFrame, QSlider
-from PyQt5.QtWidgets import QLineEdit, QToolButton
-from PyQt5.QtWidgets import QSizePolicy, QSpacerItem, QAbstractSpinBox
-from PyQt5.QtWidgets import QButtonGroup, QStackedLayout
-from PyQt5.QtWidgets import QAction, QMenu, QComboBox
-from PyQt5.QtWidgets import QLabel
-from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QFileDialog
-from PyQt5.QtWidgets import QGraphicsRectItem
+from PySide6.QtCore import (
+    QEvent,
+    QPoint,
+    QRectF,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import QCursor, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout
+from PySide6.QtWidgets import QLayout
+from PySide6.QtWidgets import QScrollArea, QSplitter, QFrame, QSlider
+from PySide6.QtWidgets import QLineEdit, QToolButton
+from PySide6.QtWidgets import QSizePolicy, QSpacerItem, QAbstractSpinBox
+from PySide6.QtWidgets import QButtonGroup, QStackedLayout
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QComboBox, QMenu
+from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog
+from PySide6.QtWidgets import QGraphicsRectItem
 from audioio import fade
 from audioio import update_starttime
 from audioio import bext_history_str, add_history

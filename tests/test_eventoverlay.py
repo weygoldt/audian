@@ -30,8 +30,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 import pyqtgraph as pg  # noqa: E402
-from PyQt5.QtCore import Qt  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import eventoverlay, session, theme  # noqa: E402
 from audian.layers import PointLayer  # noqa: E402
@@ -982,7 +982,7 @@ def test_equalize_regrows_a_group_whose_contents_changed(app):
     clipped to a four pixel sliver.  Both halves are checked here: the frames
     grow, and they grow by what the contents actually need.
     """
-    from PyQt5.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     from audian.databrowser import ParameterGroup
 
     groups = [ParameterGroup("A"), ParameterGroup("B")]

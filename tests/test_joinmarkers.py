@@ -33,8 +33,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 import pyqtgraph as pg  # noqa: E402
-from PyQt5.QtCore import Qt  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 import audian.audian as audian_app  # noqa: E402
 from audian.databrowser import DataBrowser  # noqa: E402

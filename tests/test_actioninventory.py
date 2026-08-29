@@ -45,8 +45,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from PyQt5.QtCore import QEvent, QSettings  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QEvent, QSettings  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
 
@@ -152,7 +152,7 @@ def test_the_action_inventory_is_what_it_was(window):
         GOLDEN.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n")
         pytest.skip(f"regenerated {GOLDEN.name} with {len(current)} actions")
 
-    assert GOLDEN.exists(), f"{GOLDEN} missing; run with --regenerate on PyQt5 first"
+    assert GOLDEN.exists(), f"{GOLDEN} missing; regenerate it with AUDIAN_REGENERATE_GOLDEN=1"
     expected = json.loads(GOLDEN.read_text())
 
     # Report the whole difference at once.  A binding change usually moves

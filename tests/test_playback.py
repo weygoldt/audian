@@ -197,7 +197,7 @@ def _clickable(current=0, mode=DataBrowser.MODE_ZOOM):
 
 def test_clicking_a_lane_focuses_that_channel():
     """The rail card used to be the only way to select a channel."""
-    from PyQt5.QtCore import Qt
+    from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=0)
     DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton),), 5)
@@ -205,7 +205,7 @@ def test_clicking_a_lane_focuses_that_channel():
 
 
 def test_shift_clicking_a_lane_extends_the_selection():
-    from PyQt5.QtCore import Qt
+    from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=2)
     DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton, Qt.ShiftModifier),), 6)
@@ -215,7 +215,7 @@ def test_shift_clicking_a_lane_extends_the_selection():
 def test_clicking_the_current_lane_does_not_relayout():
     """rail_clicked() relays out the whole stack; a click inside the lane
     that is already current must not pay for that."""
-    from PyQt5.QtCore import Qt
+    from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=5)
     DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton),), 5)
@@ -223,7 +223,7 @@ def test_clicking_the_current_lane_does_not_relayout():
 
 
 def test_right_clicking_a_lane_does_not_change_the_channel():
-    from PyQt5.QtCore import Qt
+    from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=0)
     DataBrowser.mouse_clicked(stub, (_Click(Qt.RightButton),), 5)
@@ -238,7 +238,7 @@ def test_ctrl_clicking_a_lane_in_label_mode_does_not_relayout_the_stack():
     click and the drag would take the grip out from under the hand.  Outside
     label mode Ctrl+click still focuses, because nothing else claims it.
     """
-    from PyQt5.QtCore import Qt
+    from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=0, mode=DataBrowser.MODE_LABEL)
     stub.mouse_moved = lambda evt, channel: None

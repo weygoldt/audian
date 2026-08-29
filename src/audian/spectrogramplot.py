@@ -3,12 +3,7 @@
 import numpy as np
 import pyqtgraph as pg
 
-from PyQt5.QtCore import QTimer
-
-try:
-    from PyQt5.QtCore import Signal
-except ImportError:
-    from PyQt5.QtCore import pyqtSignal as Signal
+from PySide6.QtCore import QTimer, Signal
 from thunderlab.powerspectrum import decibel
 
 from . import theme

@@ -47,10 +47,10 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tests"))
 
 import pyqtgraph as pg  # noqa: E402
-from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
-from PyQt5.QtGui import QKeySequence  # noqa: E402
-from PyQt5.QtGui import QMouseEvent  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QKeySequence  # noqa: E402
+from PySide6.QtGui import QMouseEvent  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian.databrowser import DataBrowser  # noqa: E402
 from audian.labels import (  # noqa: E402
@@ -1798,7 +1798,7 @@ def test_escape_puts_the_label_down(labelling):
     category on "event" and of ``F9`` left the labels visible, both of them
     bindings that work. Activated, the same key press deselects.
     """
-    from PyQt5.QtTest import QTest
+    from PySide6.QtTest import QTest
 
     browser = labelling
     ax = panel(browser, "spectrogram").axs[0]

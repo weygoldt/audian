@@ -90,7 +90,7 @@ def test_spectrogram_colormap_never_raises():
 
 
 def test_apply_twice_under_offscreen():
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
     theme.apply(app)
@@ -100,7 +100,7 @@ def test_apply_twice_under_offscreen():
 
 
 def test_style_helpers_are_idempotent():
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     import pyqtgraph as pg
 
@@ -122,8 +122,8 @@ def test_style_helpers_are_idempotent():
 
 
 def test_strip_pg_menus_removes_menus_and_keeps_ctrl_widgets():
-    from PyQt5.QtCore import QEvent
-    from PyQt5.QtWidgets import QApplication, QMenu
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication, QMenu
 
     import pyqtgraph as pg
 
@@ -719,7 +719,7 @@ def test_a_predicted_mark_differs_by_dash_and_never_by_hue():
     A predicted volley pulse in a different colour would read as a different
     stimulus, so the only pen difference is the [2, 2] dash.
     """
-    from PyQt5.QtCore import Qt
+    from PySide6.QtCore import Qt
 
     observed = theme.annotation_pen("trial")
     predicted = theme.annotation_pen("trial", observed=False)
@@ -736,7 +736,7 @@ def test_an_unvalidated_alignment_is_dashed_and_hatched_never_faded():
     opacity reduction stops meaning anything outdoors -- which is where this
     tool is used.
     """
-    from PyQt5.QtCore import Qt
+    from PySide6.QtCore import Qt
 
     for name in theme.THEMES:
         theme.set_theme(name)

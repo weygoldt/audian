@@ -25,8 +25,8 @@ the whole reason one drag moves every channel: there is only one ratio.
 from __future__ import annotations
 
 import pyqtgraph as pg
-from PyQt5.QtCore import QPointF, QRectF, QSizeF, Qt
-from PyQt5.QtGui import QPainterPath
+from PySide6.QtCore import QPointF, QRectF, QSizeF, Qt
+from PySide6.QtGui import QPainterPath
 
 from . import theme
 

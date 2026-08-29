@@ -32,8 +32,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tests"))
 
-from PyQt5.QtCore import Qt  # noqa: E402
-from PyQt5.QtWidgets import QSizePolicy  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QSizePolicy  # noqa: E402
 
 from audian import theme  # noqa: E402
 from audian.databrowser import ParameterGroup, ParameterTabs  # noqa: E402

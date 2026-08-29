@@ -76,8 +76,8 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import (
+from PySide6.QtCore import Qt
+from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
@@ -86,7 +86,7 @@ from PyQt5.QtGui import (
     QPalette,
     QPen,
 )
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication,
     QStyleFactory,
     QWidget,
@@ -1510,7 +1510,7 @@ def restyle_tree(root: Any) -> int:
     this was written is still covered as long as it was styled through
     :func:`tint` or :func:`frame`.
     """
-    from PyQt5.QtWidgets import QWidget
+    from PySide6.QtWidgets import QWidget
 
     count = 0
     widgets = [root] + list(root.findChildren(QWidget))
@@ -1790,6 +1790,29 @@ def strip_pg_menus(plot_item: Any) -> None:
     ``setDownsampling()`` all reach into them.  Deleting the menus naively
     takes those widgets with it and turns the next ``showGrid()`` into a
     ``RuntimeError``.
+
+    What keeps them alive is adopting the **action**, not the widget.
+
+    ``~QWidgetAction`` deletes its default widget, and ``releaseWidget()``
+    does not clear that pointer -- it is the API for widgets the action
+    *created*, not for the default one.  So anything that destroys the action
+    destroys the widget with it, and re-parenting the widget first does not
+    help, because the action still believes it owns it.  Measured under
+    shiboken, with the widgets already re-parented onto the holder:
+
+        after setParent(holder)          6 of 6 alive
+        after menu.clear()               0 of 6 alive
+        after menu.deleteLater() only    6 of 6 alive
+
+    ``clear()`` is the whole difference: it destroys the actions.  Under
+    PyQt5's sip the released widget survived that on its Python reference
+    alone, which is what the first version of this function relied on.
+
+    So each ``QWidgetAction`` is removed from its menu and given the hidden
+    holder as its parent before anything is torn down.  The menus can then be
+    cleared and deleted without reaching the widgets: measured 6 of 6 kept and
+    30 of 30 ``ctrl`` widgets alive afterwards, with ``showGrid()`` and
+    ``setDownsampling()`` both working.
     """
     if plot_item is None:
         return
@@ -1807,23 +1830,33 @@ def strip_pg_menus(plot_item: Any) -> None:
     if ctrl_menu is None:
         _adopt_ctrl_widgets(plot_item)
         return
+    holder = _menu_holder()
     kept: list[Any] = []
+    adopted: list[Any] = []
     visited: list[Any] = []
     stack = [ctrl_menu]
     while stack:
         current = stack.pop()
         visited.append(current)
-        for action in current.actions():
+        for action in list(current.actions()):
             submenu = action.menu()
             if submenu is not None:
                 stack.append(submenu)
             elif isinstance(action, QWidgetAction):
                 widget = action.defaultWidget()
                 if widget is not None:
-                    action.releaseWidget(widget)
+                    # Take the action out of the menu and give it a parent
+                    # that outlives the menu.  See the docstring: the action
+                    # owns the widget, so the action is what has to survive.
+                    current.removeAction(action)
+                    action.setParent(holder)
+                    adopted.append(action)
                     kept.append(widget)
-    # Hold a Python reference so the released widgets outlive the menus.
+    # Python references as well, so `_adopt_ctrl_widgets` and the control
+    # panel can find the widgets by name, and so the actions are not collected
+    # out from under them.
     plot_item._audian_ctrl_widgets = kept
+    plot_item._audian_ctrl_actions = adopted
     plot_item.ctrlMenu = None
     # Every visited menu, not just the root: pyqtgraph creates each submenu
     # parentless (`QtWidgets.QMenu(name)`), so walking them without deleting
@@ -1836,9 +1869,6 @@ def strip_pg_menus(plot_item: Any) -> None:
         except RuntimeError:
             # already taken down with its owning action
             pass
-    # Re-parenting has to happen *after* the menus are gone: tearing down a
-    # QWidgetAction re-parents its default widget back to None, so parking
-    # the widgets before the delete silently undoes itself.
     _adopt_ctrl_widgets(plot_item)
 
 

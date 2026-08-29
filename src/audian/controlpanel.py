@@ -64,7 +64,7 @@ from typing import Optional
 import numpy as np
 import pyqtgraph as pg
 
-from PyQt5.QtWidgets import QHBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QWidget
 
 from . import theme, windowing
 from .eventoverlay import _passive

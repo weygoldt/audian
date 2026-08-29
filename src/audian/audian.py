@@ -11,20 +11,21 @@ import multiprocessing as mp
 import pyqtgraph as pg
 
 from pathlib import Path
-from PyQt5.QtCore import QPointF, Qt, QTimer, QBuffer, QSize, QRect, QRectF, QEvent
-from PyQt5.QtGui import QKeySequence, QIcon, QGuiApplication
-from PyQt5.QtGui import QPixmap, QPainter, QPainterPath, QFontMetrics
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget
-from PyQt5.QtWidgets import QTabBar, QStylePainter, QStyleOptionTab
-from PyQt5.QtWidgets import QStyle, QProxyStyle
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel
-from PyQt5.QtWidgets import QAction, QActionGroup, QPushButton
-from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QScrollArea
-from PyQt5.QtWidgets import QFileDialog, QMessageBox
-from PyQt5.QtWidgets import QStackedWidget, QStatusBar, QToolButton
-from PyQt5.QtWidgets import QLineEdit, QGridLayout, QSizePolicy, QFrame
-from PyQt5.QtWidgets import QProgressBar, QKeySequenceEdit, QMenu
-from PyQt5.QtWidgets import QListWidget, QListWidgetItem, QPlainTextEdit
+from PySide6.QtCore import QPointF, Qt, QTimer, QBuffer, QSize, QRect, QRectF, QEvent
+from PySide6.QtGui import QKeySequence, QIcon, QGuiApplication
+from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QFontMetrics
+from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
+from PySide6.QtWidgets import QTabBar, QStylePainter, QStyleOptionTab
+from PySide6.QtWidgets import QStyle, QProxyStyle
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel
+from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QScrollArea
+from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QStackedWidget, QStatusBar, QToolButton
+from PySide6.QtWidgets import QLineEdit, QGridLayout, QSizePolicy, QFrame
+from PySide6.QtWidgets import QProgressBar, QKeySequenceEdit, QMenu
+from PySide6.QtWidgets import QListWidget, QListWidgetItem, QPlainTextEdit
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from audioio.audioconverter import parse_load_kwargs
@@ -5030,7 +5031,7 @@ def audian_cli(cargs=[], plugins=None):
         args.events_path,
     )
     main.show()
-    app.exec_()
+    app.exec()
 
 
 def main(cargs):

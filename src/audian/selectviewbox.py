@@ -1,12 +1,8 @@
 import numpy as np
 import pyqtgraph as pg
 
-try:
-    from PyQt5.QtCore import Signal
-except ImportError:
-    from PyQt5.QtCore import pyqtSignal as Signal
-from PyQt5.QtCore import Qt, QRectF
-from PyQt5.QtGui import QTransform
+from PySide6.QtCore import Qt, QRectF, Signal
+from PySide6.QtGui import QTransform
 
 from . import theme
 

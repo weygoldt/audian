@@ -29,9 +29,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # offscreen has no compositor; keep Qt from probing for one:
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 
-from PyQt5.QtCore import QEvent, QSettings, qInstallMessageHandler  # noqa: E402
-from PyQt5.QtCore import QtCriticalMsg, QtFatalMsg, QtWarningMsg  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QEvent, QSettings, qInstallMessageHandler  # noqa: E402
+from PySide6.QtCore import QtMsgType  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 # Qt chatter that is noise on the offscreen platform and does not indicate a
 # fault in the application itself:
@@ -69,9 +69,9 @@ def _handler(mode, context, message):
     messages.append((mode, text))
     if any(b in text for b in BENIGN):
         return
-    if mode in (QtCriticalMsg, QtFatalMsg) or any(m in text for m in FATAL_MARKERS):
+    if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg) or any(m in text for m in FATAL_MARKERS):
         faults.append(text)
-    elif mode == QtWarningMsg:
+    elif mode == QtMsgType.QtWarningMsg:
         # warnings are reported but only fail the run when they name a fault
         sys.stderr.write(f"[qt-warning] {text}\n")
 
@@ -137,7 +137,7 @@ def run_interactions(app, main_win):
     change that re-decimates, a dialog that has lost its parent - are
     reachable only by acting on it.
     """
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     browser = main_win.browser()
     steps = list(INTERACTIONS)
@@ -470,7 +470,7 @@ def main(argv=None):
         # hidden holder.  What must never appear is an unowned window, or a
         # second visible one, or any top-level QLabel - that last one is the
         # hover-popup bug this overhaul existed to kill.
-        from PyQt5.QtWidgets import QLabel
+        from PySide6.QtWidgets import QLabel
 
         for _ in range(5):
             app.sendPostedEvents(None, QEvent.DeferredDelete)

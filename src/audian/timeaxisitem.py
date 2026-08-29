@@ -3,7 +3,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from math import floor, log10
-from PyQt5.QtCore import QPointF
+from PySide6.QtCore import QPointF
 
 from . import theme
 

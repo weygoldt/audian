@@ -39,9 +39,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from PyQt5.QtCore import QEvent, QSettings  # noqa: E402
-from PyQt5.QtGui import QCloseEvent  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QEvent, QSettings  # noqa: E402
+from PySide6.QtGui import QCloseEvent  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
 

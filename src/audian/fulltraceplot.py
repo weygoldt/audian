@@ -22,10 +22,9 @@ from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
-from PyQt5.QtCore import pyqtSignal as Signal
-from PyQt5.QtGui import QGuiApplication, QPainter, QPainterPath
-from PyQt5.QtWidgets import QSizePolicy
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication, QPainter, QPainterPath
+from PySide6.QtWidgets import QSizePolicy
 
 from . import activity, theme
 from .compresseddata import CompressedData

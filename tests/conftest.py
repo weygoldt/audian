@@ -63,8 +63,8 @@ def _qt_teardown():
     yield
 
     try:
-        from PyQt5.QtCore import QEvent
-        from PyQt5.QtWidgets import QApplication
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
     except Exception:  # pragma: no cover - no Qt in this environment
         return
 

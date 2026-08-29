@@ -70,13 +70,9 @@ from typing import NamedTuple, Optional
 import numpy as np
 import pyqtgraph as pg
 
-from PyQt5.QtCore import Qt, QObject, QRect
-from PyQt5.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtCore import QObject, QRect, Qt, Signal
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 
-try:
-    from PyQt5.QtCore import Signal
-except ImportError:  # pragma: no cover - PyQt5 always has pyqtSignal
-    from PyQt5.QtCore import pyqtSignal as Signal
 
 from . import theme, windowing
 from .layers import (

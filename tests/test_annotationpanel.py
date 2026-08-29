@@ -32,8 +32,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from PyQt5.QtCore import QSize, Qt  # noqa: E402
-from PyQt5.QtWidgets import (  # noqa: E402
+from PySide6.QtCore import QSize, Qt  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QMainWindow,
     QMenu,

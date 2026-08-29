@@ -104,9 +104,9 @@ from __future__ import annotations
 from typing import Optional
 
 import pyqtgraph as pg
-from PyQt5.QtCore import QAbstractTableModel, QModelIndex, QRectF, QSize, Qt, QVariant
-from PyQt5.QtGui import QColor, QIcon, QIconEngine
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QIcon, QIconEngine
+from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
@@ -891,11 +891,11 @@ class CategoryModel(QAbstractTableModel):
             return self.HEADER[index]
         if orientation == Qt.Vertical and role == Qt.DisplayRole:
             return f"{index}"
-        return QVariant()
+        return None
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
-            return QVariant()
+            return None
         row = self.rows[index.row()]
         column = index.column()
         if role in (Qt.DisplayRole, Qt.EditRole):
@@ -911,11 +911,11 @@ class CategoryModel(QAbstractTableModel):
             return f"{count} label{'' if count == 1 else 's'} in this recording"
         if role == Qt.TextAlignmentRole:
             return Qt.AlignLeft | Qt.AlignVCenter
-        return QVariant()
+        return None
 
     def flags(self, index):
         if not index.isValid():
-            return Qt.NoItemFlag
+            return Qt.ItemFlag.NoItemFlags
         return Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable
 
     def setData(self, index, value, role=Qt.EditRole) -> bool:
@@ -1104,11 +1104,11 @@ class LabelTableModel(QAbstractTableModel):
             return self.HEADER[index]
         if orientation == Qt.Vertical and role == Qt.DisplayRole:
             return f"{index}"
-        return QVariant()
+        return None
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
-            return QVariant()
+            return None
         label = self.store.labels[index.row()]
         column = index.column()
         if role in (Qt.DisplayRole, Qt.EditRole):
@@ -1128,11 +1128,11 @@ class LabelTableModel(QAbstractTableModel):
             if column in (0, 1, 7):
                 return Qt.AlignLeft | Qt.AlignVCenter
             return Qt.AlignRight | Qt.AlignVCenter
-        return QVariant()
+        return None
 
     def flags(self, index):
         if not index.isValid():
-            return Qt.NoItemFlag
+            return Qt.ItemFlag.NoItemFlags
         flags = Qt.ItemIsSelectable | Qt.ItemIsEnabled
         # only the note: everything else is geometry the mouse put there, and
         # a typo in a frequency is a label that moves without being redrawn

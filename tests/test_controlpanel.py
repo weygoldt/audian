@@ -36,8 +36,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget  # noqa: E402
 
 from audian import theme  # noqa: E402
 from audian.controlpanel import ControlPanel  # noqa: E402
@@ -230,7 +230,7 @@ def test_the_scale_label_never_hides_the_value_held_at_the_left_edge(
     it underneath.  The fill is the plot's own ground, so a step drawn over
     it reads exactly as it does anywhere else in the band.
     """
-    QColor = pytest.importorskip("PyQt5.QtGui").QColor
+    QColor = pytest.importorskip("PySide6.QtGui").QColor
     rows = [
         control_row(1.0, tick_hz=5.0, randomness=1.0),
         control_row(30.2, tick_hz=20.0, randomness=0.5),

@@ -4,7 +4,7 @@ from math import ceil, floor, log10
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
+from PySide6.QtCore import Qt
 
 from . import theme
 

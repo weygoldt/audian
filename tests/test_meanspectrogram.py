@@ -31,7 +31,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from PyQt5.QtCore import QPoint  # noqa: E402
+from PySide6.QtCore import QPoint  # noqa: E402
 from thunderlab.powerspectrum import decibel  # noqa: E402
 
 from test_panelsplitter import (  # noqa: E402

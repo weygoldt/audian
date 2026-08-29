@@ -5,7 +5,7 @@ import inspect
 import numpy as np
 from audioio import BufferedArray
 from math import ceil, floor
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal as Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from . import theme
 
