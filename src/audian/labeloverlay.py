@@ -212,7 +212,7 @@ def _passive(item) -> None:
     buttons both let a drag through unchanged when it was measured.  See the
     module docstring for the one item that did not.
     """
-    item.setAcceptedMouseButtons(Qt.NoButton)
+    item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
     item.setAcceptHoverEvents(False)
 
 
@@ -810,12 +810,12 @@ class _SwatchEngine(QIconEngine):
         super().__init__()
         self.index = int(index)
 
-    def paint(self, painter, rect, mode=QIcon.Normal, state=QIcon.Off):
+    def paint(self, painter, rect, mode=QIcon.Mode.Normal, state=QIcon.State.Off):
         painter.setBrush(theme.qcolor(theme.MARKER_ICON_BG))
         painter.setPen(theme.pen(theme.MARKER_ICON_RING))
         painter.drawRect(rect.adjusted(0, 0, -1, -1))
         painter.setBrush(QColor(theme.marker_color(self.index)))
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         d = rect.width() // 5
         painter.drawEllipse(rect.adjusted(d, d, -d, -d))
 
@@ -836,10 +836,10 @@ class _KindDelegate(QStyledItemDelegate):
         return editor
 
     def setEditorData(self, editor, index):
-        editor.setCurrentText(index.model().data(index, Qt.EditRole))
+        editor.setCurrentText(index.model().data(index, Qt.ItemDataRole.EditRole))
 
     def setModelData(self, editor, model, index):
-        model.setData(index, editor.currentText(), Qt.EditRole)
+        model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
 
     def updateEditorGeometry(self, editor, option, index):
         editor.setGeometry(option.rect)
@@ -856,10 +856,10 @@ class _ColorDelegate(QStyledItemDelegate):
         return editor
 
     def setEditorData(self, editor, index):
-        editor.setCurrentText(str(index.model().data(index, Qt.EditRole)))
+        editor.setCurrentText(str(index.model().data(index, Qt.ItemDataRole.EditRole)))
 
     def setModelData(self, editor, model, index):
-        model.setData(index, editor.currentText(), Qt.EditRole)
+        model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
 
     def updateEditorGeometry(self, editor, option, index):
         editor.setGeometry(option.rect)
@@ -886,39 +886,39 @@ class CategoryModel(QAbstractTableModel):
     def columnCount(self, parent=None) -> int:
         return len(self.HEADER)
 
-    def headerData(self, index, orientation, role=Qt.DisplayRole):
-        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+    def headerData(self, index, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return self.HEADER[index]
-        if orientation == Qt.Vertical and role == Qt.DisplayRole:
+        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
             return f"{index}"
         return None
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
         row = self.rows[index.row()]
         column = index.column()
-        if role in (Qt.DisplayRole, Qt.EditRole):
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             if column == 0:
                 return row.name
             if column == 1:
                 return row.kind
             return str(row.color)
-        if role == Qt.DecorationRole and column == 2:
+        if role == Qt.ItemDataRole.DecorationRole and column == 2:
             return swatch_icon(row.color)
-        if role == Qt.ToolTipRole and column == 0:
+        if role == Qt.ItemDataRole.ToolTipRole and column == 0:
             count = self.store.count_in(row.name)
             return f"{count} label{'' if count == 1 else 's'} in this recording"
-        if role == Qt.TextAlignmentRole:
-            return Qt.AlignLeft | Qt.AlignVCenter
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         return None
 
     def flags(self, index):
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
-        return Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable
+        return Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
 
-    def setData(self, index, value, role=Qt.EditRole) -> bool:
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole) -> bool:
         if not index.isValid():
             return False
         row = self.rows[index.row()]
@@ -990,10 +990,10 @@ class CategoryModel(QAbstractTableModel):
                 f"Removing {listed} also removes "
                 f"{total} label{'' if total == 1 else 's'} of this recording.\n"
                 "This cannot be undone.",
-                QMessageBox.Cancel | QMessageBox.Yes,
-                QMessageBox.Cancel,
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.Cancel,
             )
-            if answer != QMessageBox.Yes:
+            if answer != QMessageBox.StandardButton.Yes:
                 return
         for r in rows:
             self.beginRemoveRows(QModelIndex(), r, r)
@@ -1019,8 +1019,8 @@ class CategoryDialog(QDialog):
         self.model = CategoryModel(store, self)
         self.dropped: list[str] = []
         self.setWindowTitle("Audian label categories")
-        self.setWindowModality(Qt.NonModal)
-        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(theme.S12, theme.S12, theme.S12, theme.S12)
         outer.setSpacing(theme.S8)
@@ -1029,7 +1029,7 @@ class CategoryDialog(QDialog):
         outer.addLayout(row)
         self.view = QTableView(self)
         self.view.setModel(self.model)
-        self.view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.view.setItemDelegateForColumn(1, _KindDelegate(self))
         self.view.setItemDelegateForColumn(2, _ColorDelegate(self))
         self.view.horizontalHeader().setStretchLastSection(True)
@@ -1045,7 +1045,7 @@ class CategoryDialog(QDialog):
         remove.clicked.connect(lambda: self.model.remove_rows(self.view))
         buttons.addWidget(remove)
         buttons.addStretch(1)
-        box = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok, self)
+        box = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok, self)
         box.rejected.connect(self.reject)
         box.accepted.connect(self.accept)
         outer.addWidget(box)
@@ -1099,19 +1099,19 @@ class LabelTableModel(QAbstractTableModel):
     def columnCount(self, parent=None) -> int:
         return len(self.HEADER)
 
-    def headerData(self, index, orientation, role=Qt.DisplayRole):
-        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+    def headerData(self, index, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return self.HEADER[index]
-        if orientation == Qt.Vertical and role == Qt.DisplayRole:
+        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
             return f"{index}"
         return None
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
         label = self.store.labels[index.row()]
         column = index.column()
-        if role in (Qt.DisplayRole, Qt.EditRole):
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return (
                 label.category,
                 label.kind,
@@ -1122,25 +1122,25 @@ class LabelTableModel(QAbstractTableModel):
                 _hertz(label.f1),
                 label.note,
             )[column]
-        if role == Qt.DecorationRole and column == 0:
+        if role == Qt.ItemDataRole.DecorationRole and column == 0:
             return swatch_icon(self.store.color_of(label.category))
-        if role == Qt.TextAlignmentRole:
+        if role == Qt.ItemDataRole.TextAlignmentRole:
             if column in (0, 1, 7):
-                return Qt.AlignLeft | Qt.AlignVCenter
-            return Qt.AlignRight | Qt.AlignVCenter
+                return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         return None
 
     def flags(self, index):
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
-        flags = Qt.ItemIsSelectable | Qt.ItemIsEnabled
+        flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
         # only the note: everything else is geometry the mouse put there, and
         # a typo in a frequency is a label that moves without being redrawn
         if index.column() == len(self.HEADER) - 1:
-            flags |= Qt.ItemIsEditable
+            flags |= Qt.ItemFlag.ItemIsEditable
         return flags
 
-    def setData(self, index, value, role=Qt.EditRole) -> bool:
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole) -> bool:
         if not index.isValid() or index.column() != len(self.HEADER) - 1:
             return False
         if not self.store.set_note(index.row(), str(value)):
@@ -1181,21 +1181,21 @@ class LabelTable(QDialog):
         self.on_change = on_change
         self.model = LabelTableModel(store, self)
         self.setWindowTitle("Audian labels")
-        self.setWindowModality(Qt.NonModal)
-        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(theme.S12, theme.S12, theme.S12, theme.S12)
         outer.setSpacing(theme.S8)
         self.view = QTableView(self)
         self.view.setModel(self.model)
         self.view.setFont(theme.font_mono())
-        self.view.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.view.resizeColumnsToContents()
         self.view.horizontalHeader().setStretchLastSection(True)
         outer.addWidget(self.view)
-        box = QDialogButtonBox(QDialogButtonBox.Close, self)
-        remove = box.addButton("&Remove", QDialogButtonBox.DestructiveRole)
+        box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        remove = box.addButton("&Remove", QDialogButtonBox.ButtonRole.DestructiveRole)
         remove.clicked.connect(self.remove_selected)
         box.rejected.connect(self.reject)
         outer.addWidget(box)
@@ -1233,7 +1233,7 @@ def category_chip(parent: QWidget, category: LabelCategory, checked: bool, key: 
     chip.setCheckable(True)
     chip.setChecked(bool(checked))
     chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-    chip.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+    chip.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     chip.setFixedHeight(theme.CHIP_HEIGHT)
     chip.setIconSize(QSize(theme.S12, theme.S12))
     chip.setIcon(swatch_icon(category.color))
@@ -1294,14 +1294,14 @@ class CategoryStrip(QWidget):
         self.more = QToolButton(self)
         self.more.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         self.more.setFixedHeight(theme.CHIP_HEIGHT)
-        self.more.setPopupMode(QToolButton.InstantPopup)
+        self.more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.more.setVisible(False)
         self.menu = QMenu(self)
         self.more.setMenu(self.menu)
         # Ignored: the strip takes the width the column has and never asks
         # for more.  Fixed height, because the number of lines is chosen here
         # and must not follow the number of categories.
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(self.strip_height())
 
     @classmethod
