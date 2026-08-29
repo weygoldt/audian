@@ -1,0 +1,1208 @@
+{
+  "about": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "Help",
+    "text": "About Audian"
+  },
+  "analysis_results": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "Region",
+    "text": "Analysis results"
+  },
+  "analyze_region": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "A"
+    ],
+    "path": "Region",
+    "text": "Analyze"
+  },
+  "ask_region": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Q"
+    ],
+    "path": "Region",
+    "text": "Request"
+  },
+  "audio_source": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+P"
+    ],
+    "path": "Region",
+    "text": "Cycle playback source"
+  },
+  "auto_scroll": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "!"
+    ],
+    "path": "View \u203a Time",
+    "text": "Auto scroll"
+  },
+  "auto_zoom_amplitude": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "V"
+    ],
+    "path": "View \u203a Amplitude",
+    "text": "Fit Y"
+  },
+  "center_amplitude": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "C"
+    ],
+    "path": "View \u203a Amplitude",
+    "text": "Center"
+  },
+  "cheat_sheet": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "?",
+      "Shift+/"
+    ],
+    "path": "Help",
+    "text": "Cheat sheet"
+  },
+  "clear_annotations": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Fixed labels",
+    "text": "Clear fixed labels"
+  },
+  "close": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+W"
+    ],
+    "path": "File",
+    "text": "Close tab"
+  },
+  "color_map_cycler": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+C"
+    ],
+    "path": "Spectrogram",
+    "text": "Color map"
+  },
+  "command_palette": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Shift+P"
+    ],
+    "path": "Help",
+    "text": "Command palette"
+  },
+  "cross_hair": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+C"
+    ],
+    "path": "Region",
+    "text": "Cross hair"
+  },
+  "daylight_mode": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Shift+L"
+    ],
+    "path": "View",
+    "text": "Daylight mode"
+  },
+  "default_view_frequency": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+V"
+    ],
+    "path": "View \u203a Frequency",
+    "text": "Fit"
+  },
+  "delete_label": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Del"
+    ],
+    "path": "View \u203a Editable labels",
+    "text": "Delete selected label"
+  },
+  "envelope_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "E"
+    ],
+    "path": "View \u203a Envelope",
+    "text": "Envelope cutoff down"
+  },
+  "envelope_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+E"
+    ],
+    "path": "View \u203a Envelope",
+    "text": "Envelope cutoff up"
+  },
+  "frequency_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Left"
+    ],
+    "path": "View \u203a Frequency",
+    "text": "Move down"
+  },
+  "frequency_end": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Right"
+    ],
+    "path": "View \u203a Frequency",
+    "text": "End"
+  },
+  "frequency_home": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Left"
+    ],
+    "path": "View \u203a Frequency",
+    "text": "Home"
+  },
+  "frequency_resolution_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "R"
+    ],
+    "path": "Spectrogram",
+    "text": "Decrease resolution"
+  },
+  "frequency_resolution_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+R"
+    ],
+    "path": "Spectrogram",
+    "text": "Increase resolution"
+  },
+  "frequency_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Right"
+    ],
+    "path": "View \u203a Frequency",
+    "text": "Move up"
+  },
+  "hide_deselected_channels": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Del"
+    ],
+    "path": "View \u203a Channels",
+    "text": "Hide deselected channels"
+  },
+  "highpass_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "H"
+    ],
+    "path": "Spectrogram",
+    "text": "Decrease highpass cutoff"
+  },
+  "highpass_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+H"
+    ],
+    "path": "Spectrogram",
+    "text": "Increase highpass cutoff"
+  },
+  "key_shortcuts": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+K"
+    ],
+    "path": "Help",
+    "text": "Key shortcuts"
+  },
+  "label_editor": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+L"
+    ],
+    "path": "View \u203a Editable labels",
+    "text": "Label categories\u2026"
+  },
+  "label_region": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "B"
+    ],
+    "path": "Region",
+    "text": "Label"
+  },
+  "label_table": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+M"
+    ],
+    "path": "View \u203a Editable labels",
+    "text": "Label list\u2026"
+  },
+  "link_amplitude": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Alt+A"
+    ],
+    "path": "View \u203a Amplitude",
+    "text": "Link amplitude"
+  },
+  "link_channels": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Alt+C"
+    ],
+    "path": "View \u203a Channels",
+    "text": "Link channels"
+  },
+  "link_envelope": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Alt+E"
+    ],
+    "path": "View \u203a Envelope",
+    "text": "Link envelope"
+  },
+  "link_filter": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [],
+    "path": "Spectrogram",
+    "text": "Link filter"
+  },
+  "link_frequency": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Frequency",
+    "text": "Link frequency"
+  },
+  "link_panels": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Panels",
+    "text": "Link panels"
+  },
+  "link_power": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Alt+P"
+    ],
+    "path": "Spectrogram",
+    "text": "Link power"
+  },
+  "link_time_scroll": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Alt+T"
+    ],
+    "path": "View \u203a Time",
+    "text": "Link time scroll"
+  },
+  "link_time_zoom": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Alt+Z"
+    ],
+    "path": "View \u203a Time",
+    "text": "Link time zoom"
+  },
+  "load_annotations": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Shift+A"
+    ],
+    "path": "View \u203a Fixed labels",
+    "text": "Load fixed labels\u2026"
+  },
+  "lowpass_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "L"
+    ],
+    "path": "Spectrogram",
+    "text": "Decrease lowpass cutoff"
+  },
+  "lowpass_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+L"
+    ],
+    "path": "Spectrogram",
+    "text": "Increase lowpass cutoff"
+  },
+  "max_power_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "K"
+    ],
+    "path": "Spectrogram",
+    "text": "Max down"
+  },
+  "max_power_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+K"
+    ],
+    "path": "Spectrogram",
+    "text": "Max up"
+  },
+  "maximize_window": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Shift+M"
+    ],
+    "path": "View",
+    "text": "Toggle maximize"
+  },
+  "message_log": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "Help",
+    "text": "Message log"
+  },
+  "meta_data": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "File",
+    "text": "Meta data"
+  },
+  "min_power_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "J"
+    ],
+    "path": "Spectrogram",
+    "text": "Min down"
+  },
+  "min_power_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+J"
+    ],
+    "path": "Spectrogram",
+    "text": "Min up"
+  },
+  "navigator_activity": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Alt+F6"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Navigator: activity"
+  },
+  "navigator_all_channels": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+F6"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Navigator: all channels"
+  },
+  "new_tab": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+T"
+    ],
+    "path": "File",
+    "text": "New tab"
+  },
+  "next_annotation": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "N"
+    ],
+    "path": "View \u203a Fixed labels",
+    "text": "Next fixed label"
+  },
+  "next_channel": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Alt+PgDown",
+      "Shift+Down"
+    ],
+    "path": "View \u203a Channels",
+    "text": "Next channel"
+  },
+  "next_file": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": false,
+    "keys": [
+      "Ctrl+PgDown"
+    ],
+    "path": "",
+    "text": "Next tab"
+  },
+  "open_files": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+O"
+    ],
+    "path": "File",
+    "text": "Open"
+  },
+  "overlap_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "O"
+    ],
+    "path": "Spectrogram",
+    "text": "Decrease overlap"
+  },
+  "overlap_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+O"
+    ],
+    "path": "Spectrogram",
+    "text": "Increase overlap"
+  },
+  "pan_zoom": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Z"
+    ],
+    "path": "Region",
+    "text": "Pan  zoom"
+  },
+  "play_region": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "P"
+    ],
+    "path": "Region",
+    "text": "Play"
+  },
+  "play_window": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Space"
+    ],
+    "path": "Region",
+    "text": "Play window"
+  },
+  "power_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "D"
+    ],
+    "path": "Spectrogram",
+    "text": "Power down"
+  },
+  "power_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+D"
+    ],
+    "path": "Spectrogram",
+    "text": "Power up"
+  },
+  "previous_annotation": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+N"
+    ],
+    "path": "View \u203a Fixed labels",
+    "text": "Previous fixed label"
+  },
+  "previous_channel": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Alt+PgUp",
+      "Shift+Up"
+    ],
+    "path": "View \u203a Channels",
+    "text": "Previous channel"
+  },
+  "previous_file": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": false,
+    "keys": [
+      "Ctrl+PgUp"
+    ],
+    "path": "",
+    "text": "Previous tab"
+  },
+  "quit": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "File",
+    "text": "Quit"
+  },
+  "rect_zoom": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+R"
+    ],
+    "path": "Region",
+    "text": "Rectangle zoom"
+  },
+  "reset_amplitude": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+V"
+    ],
+    "path": "View \u203a Amplitude",
+    "text": "Reset"
+  },
+  "reset_frequency": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Shift+V"
+    ],
+    "path": "View \u203a Frequency",
+    "text": "Reset"
+  },
+  "reset_panel_split": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+F3"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Reset spectrogram split"
+  },
+  "save_region": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "S"
+    ],
+    "path": "Region",
+    "text": "Save"
+  },
+  "save_window": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+S",
+      "Ctrl+Shift+S"
+    ],
+    "path": "File",
+    "text": "Save window as"
+  },
+  "screen_shot": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Alt+S"
+    ],
+    "path": "File",
+    "text": "Screenshot"
+  },
+  "select_all_channels": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+A"
+    ],
+    "path": "View \u203a Channels",
+    "text": "Select all channels"
+  },
+  "select_channel0": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+0"
+    ],
+    "path": "View \u203a Channels \u203a Show channels",
+    "text": "Show channel 0"
+  },
+  "select_channel1": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+1"
+    ],
+    "path": "View \u203a Channels \u203a Show channels",
+    "text": "Show channel 1"
+  },
+  "select_next_channel": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+PgDown"
+    ],
+    "path": "View \u203a Channels",
+    "text": "Select next channel"
+  },
+  "select_previous_channel": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+PgUp"
+    ],
+    "path": "View \u203a Channels",
+    "text": "Select previous channel"
+  },
+  "show_all_annotation_layers": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+F8"
+    ],
+    "path": "View \u203a Fixed labels",
+    "text": "Show all layers"
+  },
+  "show_envelope": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+E"
+    ],
+    "path": "View \u203a Envelope",
+    "text": "Show envelope"
+  },
+  "time_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "PgDown"
+    ],
+    "path": "View \u203a Time",
+    "text": "Seek forward"
+  },
+  "time_end": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+End",
+      "End"
+    ],
+    "path": "View \u203a Time",
+    "text": "End"
+  },
+  "time_home": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Home",
+      "Home"
+    ],
+    "path": "View \u203a Time",
+    "text": "Home"
+  },
+  "time_small_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Down"
+    ],
+    "path": "View \u203a Time",
+    "text": "Forward"
+  },
+  "time_small_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Up"
+    ],
+    "path": "View \u203a Time",
+    "text": "Backward"
+  },
+  "time_snap": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "."
+    ],
+    "path": "View \u203a Time",
+    "text": "Snap"
+  },
+  "time_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "PgUp"
+    ],
+    "path": "View \u203a Time",
+    "text": "Seek backward"
+  },
+  "time_zoom_in": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Time",
+    "text": "Zoom in"
+  },
+  "time_zoom_in_centered": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+T"
+    ],
+    "path": "View \u203a Time",
+    "text": "Zoom in centered"
+  },
+  "time_zoom_out": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Time",
+    "text": "Zoom out"
+  },
+  "time_zoom_out_centered": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "T"
+    ],
+    "path": "View \u203a Time",
+    "text": "Zoom out centered"
+  },
+  "toggle_annotations": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "F8"
+    ],
+    "path": "View \u203a Fixed labels",
+    "text": "Show fixed labels"
+  },
+  "toggle_cbars": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "F5"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Toggle color bars"
+  },
+  "toggle_fulldata": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "F6"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Toggle navigator"
+  },
+  "toggle_grid": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "G"
+    ],
+    "path": "View",
+    "text": "Toggle grid"
+  },
+  "toggle_labels": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "F9"
+    ],
+    "path": "View \u203a Editable labels",
+    "text": "Show editable labels"
+  },
+  "toggle_mean_spec": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+F2"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Toggle mean spectrogram"
+  },
+  "toggle_power": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "F4"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Toggle power"
+  },
+  "toggle_spectrograms": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "F3"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Toggle spectrograms"
+  },
+  "toggle_start_time": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Shift+T"
+    ],
+    "path": "View \u203a Time",
+    "text": "Toggle start time"
+  },
+  "toggle_traces": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "F2"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Toggle traces"
+  },
+  "undo_label": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+B"
+    ],
+    "path": "View \u203a Editable labels",
+    "text": "Undo last label change"
+  },
+  "use_heterodyne": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "Region",
+    "text": "Use heterodyne frequency"
+  },
+  "zoom_amplitude_in": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "+",
+      "="
+    ],
+    "path": "View \u203a Amplitude",
+    "text": "Zoom in"
+  },
+  "zoom_amplitude_out": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "-"
+    ],
+    "path": "View \u203a Amplitude",
+    "text": "Zoom out"
+  },
+  "zoom_back": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Alt+Left",
+      "Backspace"
+    ],
+    "path": "Region",
+    "text": "Zoom back"
+  },
+  "zoom_ffrequency_in": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Frequency",
+    "text": "Zoom spectrogram-power frequency in"
+  },
+  "zoom_ffrequency_out": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Frequency",
+    "text": "Zoom spectrogram-power frequency out"
+  },
+  "zoom_forward": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Alt+Right",
+      "Shift+Backspace"
+    ],
+    "path": "Region",
+    "text": "Zoom forward"
+  },
+  "zoom_frequency_in": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl++",
+      "Ctrl+="
+    ],
+    "path": "View \u203a Frequency",
+    "text": "Zoom in"
+  },
+  "zoom_frequency_out": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+-"
+    ],
+    "path": "View \u203a Frequency",
+    "text": "Zoom out"
+  },
+  "zoom_home": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Alt+Backspace"
+    ],
+    "path": "Region",
+    "text": "Zoom home"
+  },
+  "zoom_region": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Z"
+    ],
+    "path": "Region",
+    "text": "Zoom"
+  },
+  "zoom_uamplitude_in": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Amplitude",
+    "text": "Zoom third amplitude in"
+  },
+  "zoom_uamplitude_out": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Amplitude",
+    "text": "Zoom third amplitude out"
+  },
+  "zoom_wfrequency_in": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Frequency",
+    "text": "Zoom second frequency in"
+  },
+  "zoom_wfrequency_out": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Frequency",
+    "text": "Zoom second frequency out"
+  },
+  "zoom_xamplitude_in": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Amplitude",
+    "text": "Zoom trace amplitude in"
+  },
+  "zoom_xamplitude_out": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Amplitude",
+    "text": "Zoom trace amplitude out"
+  },
+  "zoom_yamplitude_in": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Amplitude",
+    "text": "Zoom second amplitude in"
+  },
+  "zoom_yamplitude_out": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "View \u203a Amplitude",
+    "text": "Zoom second amplitude out"
+  }
+}
