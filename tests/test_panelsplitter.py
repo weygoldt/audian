@@ -2427,11 +2427,23 @@ def test_the_opens_at_row_costs_the_bar_no_width(browser):
     the bar 551 (= 535 + 2 * S8) and the window floor 734.  The row is paid
     for in height instead: the bar goes 154 -> 168 and every group's frame
     116 -> 130, because this group was tied-tallest at three rows.
+
+    Re-measured on Qt6, which lays text out through a different rasteriser
+    and so does not agree with Qt5 about how wide a label is: 501, 517 and
+    695.  The *claim* is unchanged and is what this test is really for -- the
+    row still costs the bar no width, and the bar is still exactly the group
+    plus its two margins.  The absolute numbers moved because every one of
+    them is downstream of font metrics.
+
+    They moved the right way.  `todo.md` records the 734 floor as the thing
+    that would stop audian tiling into half a 14" laptop panel; on Qt6 that
+    floor is 695.  Nothing was done to earn that and nothing depends on it,
+    but it is worth knowing the port did not cost width.
     """
     groups = {g.title: g.minimumSizeHint().width() for g in browser.param_groups}
-    assert groups["Spectrogram"] == 535
-    assert browser.parambar.minimumSizeHint().width() == 535 + 2 * theme.S8
-    assert browser.window().minimumSizeHint().width() == 734
+    assert groups["Spectrogram"] == 501
+    assert browser.parambar.minimumSizeHint().width() == 501 + 2 * theme.S8
+    assert browser.window().minimumSizeHint().width() == 695
 
 
 # ------------------------------------------- a lane the reader zoomed by hand
