@@ -298,7 +298,7 @@ class ParameterGroup(QWidget):
         the stretch instead of the spacer; see `SPACER_COLUMN`.
         """
         policy = widget.sizePolicy()
-        policy.setHorizontalPolicy(QSizePolicy.Expanding)
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Expanding)
         widget.setSizePolicy(policy)
         return widget
 
@@ -308,9 +308,9 @@ class ParameterGroup(QWidget):
     #: the Labels file row -- elide themselves to whatever width they are
     #: given and are useless at their size hint, which is zero.
     WIDE_POLICIES = (
-        QSizePolicy.Expanding,
-        QSizePolicy.MinimumExpanding,
-        QSizePolicy.Ignored,
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.MinimumExpanding,
+        QSizePolicy.Policy.Ignored,
     )
 
     @staticmethod
@@ -472,8 +472,8 @@ class ParameterTabs(QWidget):
         outer.addWidget(host)
         # see the class docstring: without this the stack's inherited
         # expandingDirections() grows the bar into the channel stack
-        host.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         self.group_buttons = QButtonGroup(self)
         self.group_buttons.setExclusive(True)
@@ -490,7 +490,7 @@ class ParameterTabs(QWidget):
         # NoFocus, the way the channel rail's toggles are: a focused
         # checkable QToolButton eats Space, which is play-window, and the
         # arrow keys, which nudge the view -- and a tab is clicked often.
-        button.setFocusPolicy(Qt.NoFocus)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         button.setToolTip(self.group_tip(group))
         index = len(self.groups)
         button.clicked.connect(lambda _c=False, i=index: self.show_index(i))
@@ -588,7 +588,7 @@ class LogSlider(QSlider):
     STEPS = 1000
 
     def __init__(self, fmin: float, fmax: float, parent: Optional[QWidget] = None):
-        super().__init__(Qt.Horizontal, parent)
+        super().__init__(Qt.Orientation.Horizontal, parent)
         self.fmin = float(fmin)
         self.fmax = float(fmax)
         self.setRange(0, self.STEPS)
@@ -631,7 +631,7 @@ def colormap_icon(index: int, width: int = 64, height: int = 12) -> QIcon:
         painter.setPen(theme.qcolor(f"#{r:02x}{g:02x}{b:02x}"))
         painter.drawLine(x, 0, x, height)
     painter.setPen(theme.pen("border"))
-    painter.setBrush(Qt.NoBrush)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawRect(0, 0, width - 1, height - 1)
     painter.end()
     return QIcon(pixmap)
@@ -690,7 +690,7 @@ class LevelMeter(QWidget):
         self.db = None
         self.selected = False
         self.setFixedHeight(self.HEIGHT)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(theme.S16)
 
     def set_level(self, db, selected: bool = False) -> None:
@@ -705,8 +705,8 @@ class LevelMeter(QWidget):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, False)
-        painter.setPen(Qt.NoPen)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.fillRect(self.rect(), theme.brush("border"))
         if self.db is None:
             painter.end()
@@ -747,11 +747,11 @@ class ChannelRailRow(QWidget):
         self.browser = browser
         self.drag_origin = None
         self.expanded = False
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         # a plain QWidget ignores a background set through the style sheet
         # unless it is told to paint one - without this the current channel
         # gets no highlight at all and the cue is bold text alone:
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(DataBrowser.RAIL_WIDTH)
         self.setToolTip("S solo, M mute, double-click maximise, drag reorder")
 
@@ -769,7 +769,7 @@ class ChannelRailRow(QWidget):
         # it points at is marked in the plot itself, by a raised view box.
         self.card = QWidget(self)
         self.card.setObjectName("railCard")
-        self.card.setAttribute(Qt.WA_StyledBackground, True)
+        self.card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         card = QVBoxLayout(self.card)
         card.setContentsMargins(theme.S4, 0, theme.S4, 0)
         card.setSpacing(0)
@@ -790,7 +790,7 @@ class ChannelRailRow(QWidget):
         self.number.setMinimumWidth(
             theme.mono_metrics(theme.SIZE_SMALL_PT).horizontalAdvance("00")
         )
-        self.number.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.number.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         # A stacked row has to fit inside a dense lane.  Whatever this row
         # asks for, the grid gives it, so an unconstrained stack simply made
         # every lane taller: at 54 px the sixteen channel stack no longer fit
@@ -852,7 +852,7 @@ class ChannelRailRow(QWidget):
         button.setCheckable(True)
         button.setToolTip(tip)
         button.setFont(theme.font_mono(theme.SIZE_SMALL_PT, bold=True))
-        button.setFocusPolicy(Qt.NoFocus)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # a one glyph toggle does not need the 45 px the generic tool button
         # padding gives it, and in a stacked rail two of them side by side
         # are what sets the column's width
@@ -907,7 +907,7 @@ class ChannelRailRow(QWidget):
     def mousePressEvent(self, event) -> None:
         self.drag_origin = event.pos()
         modifiers = QApplication.keyboardModifiers()
-        self.browser.rail_clicked(self.channel, bool(modifiers & Qt.ShiftModifier))
+        self.browser.rail_clicked(self.channel, bool(modifiers & Qt.KeyboardModifier.ShiftModifier))
 
     def mouseMoveEvent(self, event) -> None:
         if self.drag_origin is None:
@@ -924,18 +924,18 @@ class ChannelRailRow(QWidget):
     def event(self, event) -> bool:
         # claim S and M before the application-wide shortcuts see them:
         if (
-            event.type() == QEvent.ShortcutOverride
-            and event.key() in (Qt.Key_S, Qt.Key_M)
-            and event.modifiers() == Qt.NoModifier
+            event.type() == QEvent.Type.ShortcutOverride
+            and event.key() in (Qt.Key.Key_S, Qt.Key.Key_M)
+            and event.modifiers() == Qt.KeyboardModifier.NoModifier
         ):
             event.accept()
             return True
         return super().event(event)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_S:
+        if event.key() == Qt.Key.Key_S:
             self.browser.toggle_solo(self.channel)
-        elif event.key() == Qt.Key_M:
+        elif event.key() == Qt.Key.Key_M:
             self.browser.toggle_mute(self.channel)
         else:
             super().keyPressEvent(event)
@@ -1682,7 +1682,7 @@ class DataBrowser(QWidget):
             border.setZValue(1000)
             border.setPen(theme.border_pen(selected=True))
             # and it must never swallow a click meant for the plot beneath
-            border.setAcceptedMouseButtons(Qt.NoButton)
+            border.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             border.setAcceptHoverEvents(False)
             fig.scene().addItem(border)
             fig.sigDeviceRangeChanged.connect(self.update_borders)
@@ -1899,7 +1899,7 @@ class DataBrowser(QWidget):
         it stays on screen when the lanes do not all fit - an axis that
         scrolls away is an axis the reader cannot use.
         """
-        self.splitter = QSplitter(Qt.Vertical, self)
+        self.splitter = QSplitter(Qt.Orientation.Vertical, self)
         self.splitter.setChildrenCollapsible(False)
         stack_pane = QWidget(self)
         pane = QVBoxLayout(stack_pane)
@@ -1919,8 +1919,8 @@ class DataBrowser(QWidget):
         if self.scrollable_stack:
             self.stack_area = QScrollArea(stack_pane)
             self.stack_area.setWidgetResizable(True)
-            self.stack_area.setFrameShape(QFrame.NoFrame)
-            self.stack_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.stack_area.setFrameShape(QFrame.Shape.NoFrame)
+            self.stack_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self.stack_area.setWidget(stack_widget)
             # The rows divide up the *viewport*, and the viewport is still
             # zero-sized while the browser is being built.  Without this
@@ -1936,7 +1936,7 @@ class DataBrowser(QWidget):
         # rounded off, so the layout never distributes them itself:
         self.stack_spacer_row = self.data.channels
         self.stack_grid.addItem(
-            QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding),
+            QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding),
             self.stack_spacer_row,
             0,
             1,
@@ -1971,7 +1971,7 @@ class DataBrowser(QWidget):
         # dialog, which keeps it.
         deselect_act = QAction("Deselect the editable label", self)
         deselect_act.setShortcut("Escape")
-        deselect_act.setShortcutContext(Qt.WindowShortcut)
+        deselect_act.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         deselect_act.triggered.connect(self.deselect_label)
         self.addAction(deselect_act)
 
@@ -2003,7 +2003,7 @@ class DataBrowser(QWidget):
         self.taxis.set_start_time(self.data.start_time)
         self.taxis.mode_source = self.lane_starttime_mode
         self.taxis_fig.addItem(self.taxis, row=0, col=0)
-        self.taxis_fig.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.taxis_fig.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         # the corner between the rail and the time axis: the one place in
         # the stack that is not a lane, an axis or a control, which is
@@ -2079,7 +2079,7 @@ class DataBrowser(QWidget):
         # stack host for the reason its docstring gives; pinning the band
         # around it as well means a future row added to this bar cannot make
         # the whole thing elastic without somebody noticing.
-        self.parambar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.parambar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         grid = QGridLayout(self.parambar)
         grid.setContentsMargins(theme.S8, theme.S8, theme.S8, theme.S6)
         grid.setHorizontalSpacing(theme.S16)
@@ -2189,11 +2189,11 @@ class DataBrowser(QWidget):
             )
             group.add_row("Window", "R / ⇧R", self.nfftw)
 
-            self.ofracw = QSlider(Qt.Horizontal, self.parambar)
+            self.ofracw = QSlider(Qt.Orientation.Horizontal, self.parambar)
             self.ofracw.tooltip = "Overlap of Fourier windows"
             self.ofracw.setToolTip(self.ofracw.tooltip)
             self.ofracw.setRange(0, 99)
-            self.ofracw.setTickPosition(QSlider.TicksBelow)
+            self.ofracw.setTickPosition(QSlider.TickPosition.TicksBelow)
             self.ofracw.setTickInterval(25)
             self.ofracw.setValue(int(round(100 * spectrogram.overlap_frac)))
             self.ofracw.valueChanged.connect(
@@ -2412,7 +2412,7 @@ class DataBrowser(QWidget):
         if self.data.rate > 50000:
             self.hetbuttonw = QToolButton(self.parambar)
             self.hetbuttonw.setDefaultAction(self.acts.use_heterodyne)
-            self.hetbuttonw.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            self.hetbuttonw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             group.add_row("Heterodyne", "", self.audiohetfw, self.hetbuttonw)
         else:
             self.audiohetfw.setVisible(False)
@@ -2429,7 +2429,7 @@ class DataBrowser(QWidget):
         # constant across a tab change.  QStackedLayout is: it reports the
         # max over ALL its pages, hidden ones included.
         for group in groups:
-            group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             self.param_tabs.add(group)
         grid.addWidget(self.param_tabs, 0, 0)
         grid.setColumnStretch(0, 1)
@@ -2450,7 +2450,7 @@ class DataBrowser(QWidget):
         by removing a button with no glyph in it.
         """
         theme.style_spinbox(spin)
-        spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
     @staticmethod
     def hz_label(hz: float) -> str:
@@ -3231,17 +3231,17 @@ class DataBrowser(QWidget):
         dialog.setWindowTitle("Meta data")
         # browsable, so explicitly non-modal, and destroyed when closed
         # instead of being kept alive forever by its C++ parent:
-        dialog.setWindowModality(Qt.NonModal)
-        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         vbox = QVBoxLayout(dialog)
         vbox.setContentsMargins(theme.S12, theme.S12, theme.S12, theme.S12)
         vbox.setSpacing(theme.S8)
         label = QLabel(mdtable)
-        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         scrollarea = QScrollArea(dialog)
         scrollarea.setWidget(label)
         vbox.addWidget(scrollarea)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close, dialog)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
         buttons.rejected.connect(dialog.reject)
         vbox.addWidget(buttons)
         dialog.show()
@@ -3435,7 +3435,7 @@ class DataBrowser(QWidget):
         if (
             self.region_mode == DataBrowser.MODE_LABEL
             and evt[0].button() == Qt.MouseButton.LeftButton
-            and (evt[0].modifiers() & Qt.ControlModifier)
+            and (evt[0].modifiers() & Qt.KeyboardModifier.ControlModifier)
         ):
             # `mouse_moved` runs through a 60 Hz SignalProxy, so the pointer
             # may not have reached this lane in `hover_panel` yet
@@ -3449,7 +3449,7 @@ class DataBrowser(QWidget):
         # panel of a channel lives in that channel's own figure, so the
         # spectrogram selects it as readily as the trace.
         if evt[0].button() == Qt.MouseButton.LeftButton:
-            extend = bool(evt[0].modifiers() & Qt.ShiftModifier)
+            extend = bool(evt[0].modifiers() & Qt.KeyboardModifier.ShiftModifier)
             # guarded: rail_clicked() relays out the stack, which is not
             # something to do on every click inside the current channel
             if extend or channel != self.current_channel:
@@ -3737,7 +3737,7 @@ class DataBrowser(QWidget):
         for i, category in enumerate(self.labels.categories[:9]):
             act = QAction(category.name, self)
             act.setShortcut(str(i + 1))
-            act.setShortcutContext(Qt.WindowShortcut)
+            act.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             act.triggered.connect(
                 lambda _checked=False, name=category.name: self.category_key(name)
             )
@@ -3795,7 +3795,7 @@ class DataBrowser(QWidget):
 
         def finished(result=0):
             self.label_dialog = None
-            if result != QDialog.Accepted:
+            if result != QDialog.DialogCode.Accepted:
                 return
             # a dropped category takes its labels with it, the grips included
             self.revalidate_selection()
@@ -4329,7 +4329,7 @@ class DataBrowser(QWidget):
         # a label that asks for the width of its longest string would relayout
         # the whole bar under the pointer -- the failure `annotation_hoverw`
         # was rebuilt to stop.  The full text stays in the tool tip.
-        self.label_statusw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.label_statusw.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         theme.tint(self.label_statusw, "fg.muted")
         group.add_row("File", "", self.label_statusw)
 
@@ -4418,7 +4418,7 @@ class DataBrowser(QWidget):
         text = self.label_status_text()
         label.setToolTip(text)
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
-        label.setText(metrics.elidedText(text, Qt.ElideRight, max(label.width(), 1)))
+        label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(label.width(), 1)))
         if self.label_undow is not None:
             self.label_undow.setEnabled(self.labels.can_undo())
         self.update_label_alert()
@@ -4858,7 +4858,7 @@ class DataBrowser(QWidget):
         reaches for either is asking for the same thing.
         """
         modifiers = QApplication.keyboardModifiers()
-        extend = bool(modifiers & (Qt.ControlModifier | Qt.ShiftModifier))
+        extend = bool(modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
         self.solo_annotation_layer(layer_id, extend)
 
     def apply_annotation_layers(self, wanted) -> bool:
@@ -5298,7 +5298,7 @@ class DataBrowser(QWidget):
         text = self.annotation_under(time)
         label.setToolTip(text)
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
-        label.setText(metrics.elidedText(text, Qt.ElideRight, max(label.width(), 1)))
+        label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(label.width(), 1)))
 
     # -- the parameter bar group --
 
@@ -5318,7 +5318,7 @@ class DataBrowser(QWidget):
         theme.tint(self.annotation_sourcew, "fg")
         self.annotation_badgew = QLabel("", self.parambar)
         self.annotation_badgew.setFont(theme.font_mono(theme.SIZE_SMALL_PT, bold=True))
-        self.annotation_badgew.setAlignment(Qt.AlignCenter)
+        self.annotation_badgew.setAlignment(Qt.AlignmentFlag.AlignCenter)
         loadw = QToolButton(self.parambar)
         loadw.setText("Load…")
         loadw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
@@ -5403,7 +5403,7 @@ class DataBrowser(QWidget):
         # Ignored, not Preferred: the label takes the width the row has and
         # never asks for more, so what the pointer is near cannot change the
         # geometry of the bar (see show_annotation_under).
-        self.annotation_hoverw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.annotation_hoverw.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         theme.tint(self.annotation_hoverw, "fg.muted")
         group.add_row("Pointer", "", self.annotation_hoverw)
 
@@ -5608,7 +5608,7 @@ class DataBrowser(QWidget):
             return
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
         label.setText(
-            metrics.elidedText(label.toolTip(), Qt.ElideRight, max(label.width(), 1))
+            metrics.elidedText(label.toolTip(), Qt.TextElideMode.ElideRight, max(label.width(), 1))
         )
 
     def update_label_alert(self) -> None:
@@ -5678,7 +5678,7 @@ class DataBrowser(QWidget):
         chip.setCheckable(True)
         chip.setChecked(bool(checked))
         chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-        chip.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        chip.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         chip.setFixedHeight(theme.CHIP_HEIGHT)
         # exactly the pixmap size: a legend icon scaled by even one pixel
         # loses the hairline that says whether the line is solid or broken
@@ -5739,7 +5739,7 @@ class DataBrowser(QWidget):
             return
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
         session_id = bundle.meta.session_id or "session"
-        name = metrics.elidedText(session_id, Qt.ElideMiddle, 20 * theme.S8)
+        name = metrics.elidedText(session_id, Qt.TextElideMode.ElideMiddle, 20 * theme.S8)
         # The channel goes in the label, not only in the tool tip: the fit is
         # per channel, and which one it was made against is the difference
         # between an annotation that was checked against what is on screen
@@ -5824,7 +5824,7 @@ class DataBrowser(QWidget):
         if (
             self.stack_area is not None
             and obj is self.stack_area.viewport()
-            and event.type() == QEvent.Resize
+            and event.type() == QEvent.Type.Resize
             and self.show_channels
         ):
             self.update_stretches(event.size().height())
@@ -7791,7 +7791,7 @@ class DataBrowser(QWidget):
             # `drag_modifiers` is latched when the drag starts and cleared
             # only after both region signals have gone out, so it still says
             # what was held down when the press happened
-            if vbox.drag_modifiers & Qt.ControlModifier:
+            if vbox.drag_modifiers & Qt.KeyboardModifier.ControlModifier:
                 self.select_label_from_region(channel, vbox, rect)
             else:
                 self.label_from_region(channel, vbox, rect)
@@ -8062,7 +8062,7 @@ class DataBrowser(QWidget):
                     vmarker.setValue(-1)
 
     def analyze_region(self, t0, t1, channel):
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         if t0 < 0:
             t0 = 0
         if t1 > self.data.data.frames / self.data.data.rate:
@@ -8105,8 +8105,8 @@ class DataBrowser(QWidget):
             return
         dialog = QDialog(self)
         dialog.setWindowTitle("Audian analysis table")
-        dialog.setWindowModality(Qt.NonModal)
-        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         vbox = QVBoxLayout(dialog)
         vbox.setContentsMargins(theme.S12, theme.S12, theme.S12, theme.S12)
         vbox.setSpacing(theme.S8)
@@ -8120,12 +8120,12 @@ class DataBrowser(QWidget):
                 c += 1
         vbox.addWidget(self.analysis_table)
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Close | QDialogButtonBox.Save | QDialogButtonBox.Reset,
+            QDialogButtonBox.StandardButton.Close | QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Reset,
             dialog,
         )
         buttons.rejected.connect(dialog.reject)
-        buttons.button(QDialogButtonBox.Reset).clicked.connect(self.clear_analysis)
-        buttons.button(QDialogButtonBox.Save).clicked.connect(self.save_analysis)
+        buttons.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(self.clear_analysis)
+        buttons.button(QDialogButtonBox.StandardButton.Save).clicked.connect(self.save_analysis)
         vbox.addWidget(buttons)
         dialog.finished.connect(lambda _: setattr(self, "analysis_table", None))
         dialog.adjustSize()
