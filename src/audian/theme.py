@@ -708,9 +708,9 @@ def _font(stack: Sequence[str], size: int | None, bold: bool, mono: bool) -> QFo
             font.setFamilies(list(stack))
         font.setPointSize(pt)
         font.setBold(bold)
-        font.setStyleStrategy(QFont.PreferAntialias)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         if mono:
-            font.setStyleHint(QFont.Monospace)
+            font.setStyleHint(QFont.StyleHint.Monospace)
             font.setFixedPitch(True)
         _CACHE[key] = font
     return QFont(font)  # a copy: callers may mutate what they are given
@@ -814,7 +814,7 @@ def brush(c: Any, alpha: float | int | None = None) -> QBrush:
 
 def no_pen() -> QPen:
     """Return a ``Qt.NoPen`` pen, for axis lines and unstroked shapes."""
-    return QPen(Qt.NoPen)
+    return QPen(Qt.PenStyle.NoPen)
 
 
 # ---------------------------------------------------------------------------
@@ -919,7 +919,7 @@ def grid_pen() -> QPen:
 
 def crosshair_pen() -> QPen:
     """Pen for the dashed hover crosshair.  Decoration, hence ``fg.faint``."""
-    return pen("fg.faint", width=LW_HAIRLINE, style=Qt.DashLine)
+    return pen("fg.faint", width=LW_HAIRLINE, style=Qt.PenStyle.DashLine)
 
 
 def cursor_pen() -> QPen:
@@ -1389,7 +1389,7 @@ def annotation_pen(
         # and look solid.
         p.setDashPattern([2.0, 2.0])
     elif unvalidated:
-        p.setStyle(Qt.DashLine)
+        p.setStyle(Qt.PenStyle.DashLine)
     return p
 
 
@@ -1405,7 +1405,7 @@ def annotation_brush(
     """
     b = brush(annotation_color(role), alpha=alpha)
     if unvalidated:
-        b.setStyle(Qt.BDiagPattern)
+        b.setStyle(Qt.BrushStyle.BDiagPattern)
     return b
 
 
@@ -1989,42 +1989,42 @@ def palette() -> QPalette:
 
     p = QPalette()
     roles = {
-        QPalette.Window: "bg.base",
-        QPalette.WindowText: "fg",
-        QPalette.Base: "bg.surface",
-        QPalette.AlternateBase: "bg.raised",
-        QPalette.Text: "fg",
-        QPalette.Button: "bg.surface",
-        QPalette.ButtonText: "fg",
-        QPalette.BrightText: "danger",
-        QPalette.ToolTipBase: "bg.raised",
-        QPalette.ToolTipText: "fg",
-        QPalette.PlaceholderText: "fg.faint",
-        QPalette.Highlight: "primary",
-        QPalette.HighlightedText: "bg.base",
-        QPalette.Link: "primary",
-        QPalette.LinkVisited: "primary.dim",
-        QPalette.Light: "border.hi",
-        QPalette.Midlight: "border",
-        QPalette.Mid: "border",
-        QPalette.Dark: "border.hi",
-        QPalette.Shadow: "bg.base",
+        QPalette.ColorRole.Window: "bg.base",
+        QPalette.ColorRole.WindowText: "fg",
+        QPalette.ColorRole.Base: "bg.surface",
+        QPalette.ColorRole.AlternateBase: "bg.raised",
+        QPalette.ColorRole.Text: "fg",
+        QPalette.ColorRole.Button: "bg.surface",
+        QPalette.ColorRole.ButtonText: "fg",
+        QPalette.ColorRole.BrightText: "danger",
+        QPalette.ColorRole.ToolTipBase: "bg.raised",
+        QPalette.ColorRole.ToolTipText: "fg",
+        QPalette.ColorRole.PlaceholderText: "fg.faint",
+        QPalette.ColorRole.Highlight: "primary",
+        QPalette.ColorRole.HighlightedText: "bg.base",
+        QPalette.ColorRole.Link: "primary",
+        QPalette.ColorRole.LinkVisited: "primary.dim",
+        QPalette.ColorRole.Light: "border.hi",
+        QPalette.ColorRole.Midlight: "border",
+        QPalette.ColorRole.Mid: "border",
+        QPalette.ColorRole.Dark: "border.hi",
+        QPalette.ColorRole.Shadow: "bg.base",
     }
     for role, name in roles.items():
         p.setColor(role, qcolor(name))
 
     disabled = {
-        QPalette.WindowText: "fg.faint",
-        QPalette.Text: "fg.faint",
-        QPalette.ButtonText: "fg.faint",
-        QPalette.Highlight: "primary.dim",
-        QPalette.HighlightedText: "fg.muted",
-        QPalette.Base: "bg.base",
-        QPalette.Button: "bg.base",
-        QPalette.Window: "bg.base",
+        QPalette.ColorRole.WindowText: "fg.faint",
+        QPalette.ColorRole.Text: "fg.faint",
+        QPalette.ColorRole.ButtonText: "fg.faint",
+        QPalette.ColorRole.Highlight: "primary.dim",
+        QPalette.ColorRole.HighlightedText: "fg.muted",
+        QPalette.ColorRole.Base: "bg.base",
+        QPalette.ColorRole.Button: "bg.base",
+        QPalette.ColorRole.Window: "bg.base",
     }
     for role, name in disabled.items():
-        p.setColor(QPalette.Disabled, role, qcolor(name))
+        p.setColor(QPalette.ColorGroup.Disabled, role, qcolor(name))
 
     _CACHE[key] = p
     return QPalette(p)
