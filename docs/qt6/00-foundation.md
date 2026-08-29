@@ -33,24 +33,60 @@ across a 60 px drag).
 What this migration owes the visualisation layer is a boundary, not a
 replacement.
 
-## APIs that are gone, and what replaces them
+## APIs that are gone -- and which of them this tree actually uses
 
-Measured by calling them:
+The general Qt6 removals are not the same list as this application's
+problems, and conflating the two is how a migration invents work.  Swept
+mechanically across all 34 modules, then each hit resolved against both
+bindings' live namespaces:
 
-| Qt5 API | Qt6 status | Replacement |
+| Qt5 API | Qt6 status | Sites here |
 | --- | --- | --- |
-| `QWheelEvent.delta()` | **removed** | `angleDelta()` -> `QPoint` |
-| `QFontMetrics.width()` | **removed** | `horizontalAdvance()` |
-| `QPainter.HighQualityAntialiasing` | **removed** | `RenderHint.Antialiasing` |
-| `QMouseEvent.pos()` | deprecated, returns `QPoint` | `position()` -> `QPointF` |
-| `QAction`, `QShortcut` | moved | `QtWidgets` -> `QtGui` |
-| `AA_EnableHighDpiScaling`, `AA_UseHighDpiPixmaps` | present but inert | delete; Qt6 always scales |
+| `QAction`, `QActionGroup` | moved to `QtGui` | **2** -- `audian.py:21`, `databrowser.py:27` |
+| `QVariant` | absent from `PySide6.QtCore` | **7**, all in `labeloverlay.py`; return `None` |
+| `QtCriticalMsg` and friends | not top-level | **3** in `scripts/smoke_test.py`; use `QtMsgType.*` |
+| `pyqtSignal` | absent | **2** unguarded, 5 already behind a `try` |
+| `Qt.NoItemFlag` | never existed | **2**; the name is `NoItemFlags`, latent bug on Qt5 too |
+| `QFontMetrics.width()` | removed | **0** -- all 8 sites already use `horizontalAdvance()` |
+| `QPainter.HighQualityAntialiasing` | removed | **0** |
+| `QDesktopWidget`, `QApplication.desktop()` | removed | **0** -- already on `primaryScreen()` |
+| `QRegExp`, `setMargin()`, `sip.*` | removed | **0** |
+| `AA_EnableHighDpiScaling` etc. | inert | **0** -- never set |
 
-Unscoped enum access (`Qt.AlignCenter`, `Qt.LeftButton`) still *resolves* in
-PySide6 6.11, so it is not a crash -- but the brief asks for scoped enums and
-they are what the new code speaks.
+Twenty-one lines, in eight files, take all 34 modules from `ImportError` to
+importing clean under PySide6.  The application is in much better shape for
+this than its age suggests: someone has already migrated away from
+`QFontMetrics.width`, `QApplication.desktop` and `QRegExp`.
 
-`exec_()` survives as an alias.  It goes anyway.
+`QWheelEvent.delta()` *is* removed in Qt6, but the one `ev.delta()` here
+(`selectviewbox.py:104`) is a `QGraphicsSceneWheelEvent`, which keeps it --
+upstream pyqtgraph uses it the same way.  `QMouseEvent.pos()` survives as a
+deprecation at six sites; `.position()` returns `QPointF`, not `QPoint`, so
+those are not blind replacements.
+
+Unscoped enum access (`Qt.AlignCenter`, `Qt.LeftButton`) still resolves in
+PySide6 6.11 under its forgiving-enum mode, so the 545 references are a
+cleanup and not a blocker.  Nineteen of them are inside comments and
+docstrings -- two are warnings *not* to set a flag -- so the scoping pass has
+to read, not `sed`.
+
+`exec_()` survives as an alias.  The one site goes anyway.
+
+### The one that actually crashes
+
+`theme.strip_pg_menus()` is the real Qt6 problem in this tree, and it is not
+mechanical.  It releases pyqtgraph's `PlotItem.ctrl` widgets from their
+`QWidgetAction`s, keeps a Python reference, and deletes the menus.  Under sip
+that keeps them alive.  Under shiboken it does not:
+
+    releaseWidget only    sip: alive     shiboken: alive
+    + menu.clear()        sip: alive     shiboken: DEAD   <- theme.py:1832
+
+`QWidgetAction.releaseWidget()` does not hand ownership to Python under
+shiboken, so `clear()` destroys each action and takes its widget's C++ object
+with it.  Everything in `_audian_ctrl_widgets` becomes a dead wrapper, and the
+next `showGrid()` raises.  That is the app path -- `rangeplot.py:39` strips
+and `rangeplot.py:117` shows the grid -- not merely a test.
 
 ## Persistence: smaller risk than it looks
 
