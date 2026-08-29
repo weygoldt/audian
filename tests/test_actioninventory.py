@@ -208,10 +208,17 @@ def test_every_action_survives_being_triggered(window):
     Actions that open a modal dialog or end the session are named in
     UNSWEEPABLE with a reason; that list is the honest statement of what
     this does not cover.
+
+    The theme is put back afterwards.  `daylight_mode` is one of the actions
+    fired, and the theme is process-wide state, so leaving it flipped makes
+    every later module that switches themes assert against a switch that was
+    already made -- which is a failure in a test that is not this one, blamed
+    on a file that did nothing wrong.
     """
     app = QApplication.instance()
     failures = []
     fired = 0
+    theme_before = theme.current_theme()
 
     for name, act in sorted(vars(window.acts).items()):
         if name.startswith("__") or not hasattr(act, "trigger"):
@@ -232,11 +239,16 @@ def test_every_action_survives_being_triggered(window):
                 widget.close()
         app.processEvents()
 
+    if theme.current_theme() != theme_before:
+        window.set_app_theme(theme_before)
+        app.processEvents()
+
     assert not failures, f"{len(failures)} of {fired} actions raised:\n  " + "\n  ".join(
         failures
     )
     # A sweep that silently stopped finding actions would pass forever.
     assert fired >= 100, f"only {fired} actions fired; the inventory has 124"
+    assert theme.current_theme() == theme_before, "the sweep left the theme switched"
 
 
 def test_every_bound_key_is_unique_within_its_context(window):
