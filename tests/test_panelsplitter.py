@@ -42,6 +42,7 @@ from PyQt5.QtGui import QMouseEvent  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
+from audian.databrowser import DataBrowser  # noqa: E402
 from audian.timeplot import TICK_VALUES_MIN_HEIGHT  # noqa: E402
 
 #: The window every measurement quoted in this file was made at.
@@ -1599,17 +1600,53 @@ def test_double_clicking_a_y_axis_puts_it_back_where_the_lane_opened(browser, ki
     assert (w0, w1) == pytest.approx((y0, y1), abs=1e-6)
 
 
-def test_a_single_click_on_a_y_axis_changes_nothing(browser):
-    """The axis still forwards an ordinary click to its view box, which is
-    what it did before this gesture existed."""
+def test_a_single_click_on_a_y_axis_is_still_forwarded_to_the_view_box(browser):
+    """The axis still hands an ordinary click on to its view box.
+
+    Asserting only that the range did not move proves nothing: that is just
+    as true when the click is swallowed, and swallowing it is exactly what a
+    ``return`` in place of the ``super()`` call would do.  So this counts the
+    forwarding, and checks the range as well.
+    """
     ax = panel(browser, "trace").axs[1]
     view = ax.getViewBox()
+    seen = []
+    original = view.mouseClickEvent
+    view.mouseClickEvent = lambda ev: seen.append(ev.double()) or original(ev)
     _t, (y0, y1) = view.viewRange()
     try:
         view.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
         settle()
         _t, (z0, z1) = view.viewRange()
         click_axis(browser, 1, ax, double=False)
+        assert seen == [False], "the axis swallowed a plain click"
+        _t, (w0, w1) = view.viewRange()
+        assert (w0, w1) == pytest.approx((z0, z1))
+    finally:
+        view.mouseClickEvent = original
+        view.setYRange(y0, y1, padding=0)
+        settle()
+
+
+@pytest.mark.parametrize("button", ["right", "middle"])
+def test_only_the_left_button_resets_an_axis(browser, button):
+    """Nothing held the button guard: taking it out left every test green."""
+    ax = panel(browser, "trace").axs[1]
+    view = ax.getViewBox()
+    which = Qt.RightButton if button == "right" else Qt.MiddleButton
+    _t, (y0, y1) = view.viewRange()
+    try:
+        view.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
+        settle()
+        _t, (z0, z1) = view.viewRange()
+        at = axis_centre(ax)
+        x, y = at.x(), at.y()
+        send_at(browser, 1, QEvent.MouseMove, x, y, Qt.NoButton, Qt.NoButton)
+        send_at(browser, 1, QEvent.MouseButtonPress, x, y, which, which)
+        send_at(browser, 1, QEvent.MouseButtonRelease, x, y, which, Qt.NoButton)
+        send_at(browser, 1, QEvent.MouseButtonDblClick, x, y, which, which)
+        send_at(browser, 1, QEvent.MouseButtonRelease, x, y, which, Qt.NoButton)
+        pump(0.2)
         _t, (w0, w1) = view.viewRange()
         assert (w0, w1) == pytest.approx((z0, z1))
     finally:
@@ -1617,10 +1654,186 @@ def test_a_single_click_on_a_y_axis_changes_nothing(browser):
         settle()
 
 
-def test_the_reset_reaches_every_lane_of_the_range(wide_browser):
-    """These axes are linked: an amplitude is comparable across electrodes
-    or it is not a measurement, so resetting one lane of sixteen would leave
-    a stack that cannot be read across."""
+def test_a_double_click_beside_the_axis_does_not_reset(browser):
+    """`pg.GraphicsScene` is built with ``clickRadius=2``, so an event lands
+    on an item from up to two pixels away.
+
+    Measured before the axis checked where the press actually was, on a lane
+    whose view box spans x 61 to 996.5: a double click at x 62, 63, 994 and
+    995 reset the range -- over the waveform, and on the right hand side
+    where no axis is drawn at all.
+    """
+    ax = panel(browser, "trace").axs[1]
+    view = ax.getViewBox()
+    left = ax.getAxis("left")
+    edge = left.mapRectToScene(left.boundingRect()).right()
+    at = axis_centre(ax)
+    _t, (y0, y1) = view.viewRange()
+    try:
+        for dx in (1, 2, 3):
+            view.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
+            settle()
+            _t, (z0, z1) = view.viewRange()
+            x = edge + dx
+            send_at(browser, 1, QEvent.MouseMove, x, at.y(), Qt.NoButton, Qt.NoButton)
+            send_at(
+                browser,
+                1,
+                QEvent.MouseButtonPress,
+                x,
+                at.y(),
+                Qt.LeftButton,
+                Qt.LeftButton,
+            )
+            send_at(
+                browser,
+                1,
+                QEvent.MouseButtonRelease,
+                x,
+                at.y(),
+                Qt.LeftButton,
+                Qt.NoButton,
+            )
+            send_at(
+                browser,
+                1,
+                QEvent.MouseButtonDblClick,
+                x,
+                at.y(),
+                Qt.LeftButton,
+                Qt.LeftButton,
+            )
+            send_at(
+                browser,
+                1,
+                QEvent.MouseButtonRelease,
+                x,
+                at.y(),
+                Qt.LeftButton,
+                Qt.NoButton,
+            )
+            pump(0.2)
+            _t, (w0, w1) = view.viewRange()
+            assert (w0, w1) == pytest.approx((z0, z1)), (
+                f"{dx} px past the axis reset it"
+            )
+    finally:
+        view.setYRange(y0, y1, padding=0)
+        settle()
+
+
+def test_a_collapsed_axis_carries_no_gesture(wide_browser):
+    """The dense stack -- sixteen channels with the spectrograms off -- takes
+    the y gutter to nothing, and both axes measure 0.0 px wide.
+
+    Wiring the gesture onto an axis nobody can see would leave it reachable
+    only through the two pixel fringe over the data, with nothing on screen
+    to say it was there.
+    """
+    specs = wide_browser.show_specs
+    try:
+        wide_browser.set_panels(traces=True, specs=0)
+        settle()
+        pump(0.3)
+        c = wide_browser.visible_channels()[0]
+        ax = panel(wide_browser, "trace").axs[c]
+        left = ax.getAxis("left")
+        assert left.boundingRect().width() == 0.0
+        view = ax.getViewBox()
+        _t, (y0, y1) = view.viewRange()
+        view.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
+        settle()
+        _t, (z0, z1) = view.viewRange()
+        click_axis(wide_browser, c, ax, double=True)
+        _t, (w0, w1) = view.viewRange()
+        assert (w0, w1) == pytest.approx((z0, z1))
+    finally:
+        wide_browser.set_panels(traces=True, specs=specs)
+        # and put the range back: the squash above is this test's, and the
+        # stack fixture is module scoped
+        wide_browser.auto_ampl()
+        settle()
+
+
+def test_the_gesture_leaves_fixed_amplitude_mode_alone(browser):
+    """In fixed +-1 the lane opened at +-1, so a refit is exactly not "back
+    to the way the lane opened" -- and it broke the reader out of a mode the
+    tool bar went on claiming.  Measured before this: y_fixed at (-1.0, 1.0),
+    double click, (-0.116965, 0.128933), menu still reading "Y: fixed +-1".
+    """
+    mode = browser.y_mode
+    picked = list(browser.selected_channels)
+    current = browser.current_channel
+    try:
+        # Focus the lane this test reads, and do it first.  A click on an
+        # axis is forwarded to the view box and `mouse_clicked` focuses the
+        # lane it lands in, so the double click below narrows the selection
+        # to channel 0 -- and `set_ranges` only touches `range_channels()`.
+        # A test that set the mode while a different lane was selected would
+        # find channel 0 still fitted and blame the gesture.
+        browser.rail_clicked(0, False)
+        browser.set_y_mode(DataBrowser.y_fixed)
+        settle()
+        ax = panel(browser, "trace").axs[0]
+        view = ax.getViewBox()
+        _t, (y0, y1) = view.viewRange()
+        assert (y0, y1) == pytest.approx((-1.0, 1.0))
+        view.setYRange(-0.4, 0.2, padding=0)
+        settle()
+        click_axis(browser, 0, ax, double=True)
+        _t, (w0, w1) = view.viewRange()
+        assert (w0, w1) == pytest.approx((-1.0, 1.0))
+        assert browser.y_mode == DataBrowser.y_fixed
+    finally:
+        browser.set_y_mode(mode)
+        browser.set_channels(selected_channels=picked, current_channel=current)
+        settle()
+
+
+def test_a_frequency_reset_follows_the_y_mode_like_every_other_range_command(
+    roomy_browser,
+):
+    """`apply_ranges` passes `range_channels()`, which is the *selection* in
+    per-channel y mode -- so a frequency reset moves the selected lanes and
+    leaves the rest, exactly as `Ctrl+Left` does.
+
+    Measured on two channels with only channel 0 selected, both squashed to
+    1200-2400 Hz: channel 0 came back to 0-4000 and channel 1 stayed
+    squashed.  A gesture that quietly reached further than the keys would be
+    the surprise, so this pins the behaviour rather than wishing it away.
+    """
+    mode = roomy_browser.y_mode
+    picked = list(roomy_browser.selected_channels)
+    current = roomy_browser.current_channel
+    try:
+        roomy_browser.set_y_mode(DataBrowser.y_per_channel)
+        roomy_browser.rail_clicked(0, False)
+        settle()
+        shown = roomy_browser.visible_channels()
+        assert len(shown) > 1
+        axs = [panel(roomy_browser, "spectrogram").axs[c] for c in shown]
+        full = [ax.getViewBox().viewRange()[1] for ax in axs]
+        for ax in axs:
+            ax.getViewBox().setYRange(1200.0, 2400.0, padding=0)
+        settle()
+        click_axis(roomy_browser, shown[0], axs[0], double=True)
+        after = [ax.getViewBox().viewRange()[1] for ax in axs]
+        assert after[0] == pytest.approx(full[0], abs=1e-6)
+        assert after[1] == pytest.approx((1200.0, 2400.0), abs=1e-6)
+    finally:
+        roomy_browser.set_y_mode(mode)
+        roomy_browser.set_channels(selected_channels=picked, current_channel=current)
+        for ax in panel(roomy_browser, "spectrogram").axs:
+            ax.getViewBox().setYRange(0.0, 4000.0, padding=0)
+        settle()
+
+
+def test_an_amplitude_reset_reaches_every_lane(wide_browser):
+    """`auto_fit_y` fits every visible channel whatever the selection is.
+
+    An amplitude is comparable across electrodes or it is not a measurement,
+    so refitting one lane of sixteen would leave a stack that cannot be read
+    across."""
     shown = wide_browser.visible_channels()
     assert len(shown) > 1
     axs = [panel(wide_browser, "trace").axs[c] for c in shown]
@@ -1636,13 +1849,22 @@ def test_the_reset_reaches_every_lane_of_the_range(wide_browser):
         assert (a0, a1) == pytest.approx((b0, b1), abs=1e-6)
 
 
-def test_both_y_axes_of_a_lane_carry_the_gesture(browser):
-    """The right axis draws no tick values but is still an axis to click."""
+def test_only_the_y_axes_are_wired_and_only_a_drawn_one_answers(browser):
+    """Both y axes are wired; only the one with width answers.
+
+    The right axis is wired for the same reason the left is -- it is a
+    `YAxisItem` and could be given width -- but measured it is 0.0 px wide on
+    every lane, so the geometry test in `mouseClickEvent` is what decides,
+    not the wiring.  Saying "the right axis is still an axis to click" would
+    be a claim about a column that is not there.
+    """
     for kind in ("trace", "spectrogram"):
         c = spec_channel(browser) if kind == "spectrogram" else 0
         ax = panel(browser, kind).axs[c]
         for side in ("left", "right"):
             assert ax.getAxis(side)._on_reset is not None, (kind, side)
+        assert ax.getAxis("left").boundingRect().width() > 0
+        assert ax.getAxis("right").boundingRect().width() == 0.0
     # and the time axis is not a y axis: nothing was wired to it
     ax = panel(browser, "trace").axs[0]
     for side in ("bottom", "top"):

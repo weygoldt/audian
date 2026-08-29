@@ -47,7 +47,10 @@ class YAxisItem(pg.AxisItem):
         that is and how to put it back are the plot's business.
         """
         self._on_reset = callback
-        self.setCursor(Qt.PointingHandCursor if callback else Qt.ArrowCursor)
+        if callback is None:
+            self.unsetCursor()
+        else:
+            self.setCursor(Qt.PointingHandCursor)
 
     def mouseClickEvent(self, ev):
         """A double click puts this axis back to the whole of the data.
@@ -65,8 +68,28 @@ class YAxisItem(pg.AxisItem):
 
         Unhandled events go to `AxisItem.mouseClickEvent`, which forwards to
         the linked view box -- so a plain click still does whatever it did.
+
+        **The press has to land on the axis itself**, and that is not implied
+        by the event arriving here.  `pg.GraphicsScene` is built with
+        ``clickRadius=2``, so `itemsNearEvent` delivers to an item from up to
+        two pixels away: measured on a two channel stack whose view box spans
+        x 61 to 996.5, a double click at x 62, 63, 994 or 995 reached this
+        axis and reset the range -- over the waveform, and on the right hand
+        side with no axis drawn there at all.
+
+        A collapsed axis is that bug at its worst.  In the dense stack --
+        sixteen channels with the spectrograms off, the layout this fork
+        exists for -- `adjust_layout` takes the y gutter to nothing and both
+        axes measure 0.0 px wide, so the *only* way to reach the gesture
+        would have been that two pixel fringe over the data, with nothing on
+        screen to say it was there.
         """
-        if self._on_reset is not None and ev.double() and ev.button() == Qt.LeftButton:
+        if (
+            self._on_reset is not None
+            and ev.double()
+            and ev.button() == Qt.LeftButton
+            and self.boundingRect().contains(ev.pos())
+        ):
             self._on_reset()
             ev.accept()
             return

@@ -5942,7 +5942,7 @@ class DataBrowser(QWidget):
                 content -= theme.PLOT_FRAME_HEIGHT
         return int(max(1, round(content)))
 
-    def default_spec_height(self, content: int, traces: int) -> float:
+    def default_spec_height(self, content: int) -> float:
         """The spectrogram's share of a lane that has not been dragged.
 
         The allowance, and nothing else.  `lane_geometry` grows a lane by
@@ -5960,16 +5960,22 @@ class DataBrowser(QWidget):
         height `spectrogramplot.can_render` demands before it will draw.
 
         This used to take a share of the lane as well, one per F3 size, so
-        that F3 could be pressed again for a taller spectrogram.  F3 is a
-        toggle now and the boundary is dragged, so there is one default and
-        it is the one the stack was solved for.
+        that F3 could be pressed again for a taller spectrogram, and it had a
+        floor under what the traces kept for the sizes that took most of the
+        lane.  F3 is a toggle now and the boundary is dragged, so there is
+        one default, the share is 1, and the floor cannot bind: it was
+        ``min(traces * PANEL_SPLIT_MIN_HEIGHT, lane)`` against a share of the
+        whole lane, so ``min(max(lane, floor), lane)`` was ``lane``
+        identically.  Enumerated over content 1 to 1000 and one to sixteen
+        trace rows, it changed the answer in no case.  Gone rather than kept
+        as a no-op, which is why this no longer needs to know how many trace
+        rows there are.
 
-        The floor is applied to what the *traces* keep rather than to the
-        spectrogram, and only as far as the lane allows.
+        `panel_split_limits` still applies a floor, and that one does bind:
+        it is what stops the boundary being *dragged* into a row too short
+        to draw.
         """
-        lane = max(1.0, float(content - theme.SPECTROGRAM_MIN_HEIGHT))
-        floor = min(traces * float(theme.PANEL_SPLIT_MIN_HEIGHT), lane)
-        return content - min(max(lane, floor), lane)
+        return content - max(1.0, float(content - theme.SPECTROGRAM_MIN_HEIGHT))
 
     def panel_split_limits(self, content: int, traces: int) -> tuple[float, float]:
         """How far the boundary may be dragged, as spectrogram heights.
@@ -5982,7 +5988,7 @@ class DataBrowser(QWidget):
         the first pixel of travel and can never be dragged back.
         """
         floor = float(theme.PANEL_SPLIT_MIN_HEIGHT)
-        default = self.default_spec_height(content, traces)
+        default = self.default_spec_height(content)
         lo = max(1.0, min(floor, default))
         hi = min(float(content - traces), max(content - traces * floor, default))
         return (lo, hi) if lo <= hi else (hi, hi)
@@ -6047,7 +6053,7 @@ class DataBrowser(QWidget):
             return max(1, content), 0
         scale = self.spec_scale
         if scale is None:
-            spec = self.default_spec_height(content, traces)
+            spec = self.default_spec_height(content)
         else:
             spec = float(scale) * theme.SPECTROGRAM_MIN_HEIGHT
         lo, hi = self.panel_split_limits(content, traces)
@@ -6295,10 +6301,13 @@ class DataBrowser(QWidget):
         number that default happened to come to in this window: the default
         follows the lane height, and freezing this window's answer into the
         settings file would open the next stack on a split nobody chose.
-        That is not hypothetical - a version 1 file was found holding an
-        entry for F3 size 0, which had no boundary at all, so no gesture
+
+        Version 2 made the same point by *omitting* a key nothing had
+        dragged, and had an anecdote for it -- a real file was found holding
+        an entry for F3 size 0, which had no boundary at all, so no gesture
         could have written it and nothing ever read it, and every drag
-        rewrote it.
+        rewrote it.  With one split there is one key and it is always
+        written, so the null is what carries that rule now.
         """
         from .audian import save_setting
 

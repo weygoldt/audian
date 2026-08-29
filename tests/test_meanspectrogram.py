@@ -567,14 +567,24 @@ def test_the_spectrograms_going_away_ends_the_mean(stack, mean_off):
     assert spec_item(stack, 0).mean_channels is None
 
 
-def test_the_spectrogram_size_does_not_end_the_mean(stack, mean_off):
-    """F3 cycles the spectrogram's size, which is not a reason to leave."""
+def test_setting_the_spectrogram_on_again_does_not_end_the_mean(stack, mean_off):
+    """Asking for the panel that is already there is not a reason to leave.
+
+    This used to loop over F3 sizes 2, 3 and 4 and was called
+    `test_the_spectrogram_size_does_not_end_the_mean`.  F3 is a toggle now
+    and `set_panels` normalises anything truthy to 1, so those three ran the
+    same assertion three times over a size that no longer exists.  What is
+    left of the claim -- and it is still worth holding -- is that a
+    `set_panels` which does not turn the spectrogram *off* leaves the mean
+    alone.
+    """
     lane = enter_mean(stack)
-    for size in (2, 3, 4):
-        stack.set_panels(specs=size)
+    for specs in (1, 2):
+        stack.set_panels(specs=specs)
         settle()
         pump(0.4)
-        assert stack.mean_spec, f"specs={size} dropped the mean"
+        assert stack.show_specs == 1
+        assert stack.mean_spec, f"specs={specs} dropped the mean"
         assert spec_item(stack, lane).mean_channels == list(range(CHANNELS))
 
 

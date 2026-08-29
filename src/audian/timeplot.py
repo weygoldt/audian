@@ -249,13 +249,42 @@ class TimePlot(RangePlot):
         format's full scale, so a double click that "reset" the amplitude
         would answer with a flat line.
 
-        Every lane of the range goes with it, not this one alone.  These axes
-        are linked -- an amplitude is comparable across electrodes or it is
-        not a measurement -- and resetting one lane of sixteen would leave a
-        stack that cannot be read across, which is the whole point of it.
+        Except in **fixed +-1** mode, where the lane opened at +-1 and a
+        refit is precisely not that.  Left out, the gesture broke the reader
+        out of a mode the tool bar went on claiming: measured, `y_fixed` at
+        (-1.0, 1.0), double click, range (-0.116965, 0.128933) with the menu
+        still reading "Y: fixed +-1".  `v` has that wart too, but `v` is a
+        key called "auto zoom amplitude" and this is advertised as a reset.
+
+        **How many lanes go with it is not the same on the two branches,
+        and that follows the application rather than this gesture.**
+        `auto_fit_y` fits every visible channel; `apply_ranges` passes
+        `range_channels()`, which is the selection when the y mode is
+        per-channel.  So a frequency reset in per-channel mode moves the
+        selected lanes and not the rest -- measured on two channels with
+        only channel 0 selected, both squashed to 1200-2400 Hz: channel 0
+        came back to 0-4000 and channel 1 stayed squashed.  That is what
+        `Ctrl+Left` and every other range command already do, and a gesture
+        that quietly reached further than the keys would be the surprise.
+
+        Routed through the window when there is one, so the explicit
+        `link_ranges` fan-out `v` and `Shift+V` use runs for this too.  Note
+        that it reaches a linked tab either way -- measured with two tabs and
+        a link-off control, a double click on the amplitude axis moved the
+        other tab with `link_ranges` on and left it alone with it off, both
+        before and after this routing existed, because `sigRangesChanged`
+        gets there through `Audian.dispatch_ranges` on its own.  Going
+        through the window is for saying so in one place rather than
+        depending on which of the two paths fires.
         """
-        if self.y() in Panel.amplitudes:
-            self.browser.auto_ampl()
+        gui = getattr(self.browser, "gui", None)
+        if self.y() in Panel.amplitudes and self.browser.y_mode != self.browser.y_fixed:
+            if gui is not None:
+                gui.auto_amplitude()
+            else:
+                self.browser.auto_ampl()
+        elif gui is not None:
+            gui.apply_ranges("reset", self.y())
         else:
             self.browser.apply_ranges("reset", self.y())
 
