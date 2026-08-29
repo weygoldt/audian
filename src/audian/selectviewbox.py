@@ -29,7 +29,7 @@ class SelectViewBox(pg.ViewBox):
         self.rbScaleBox.setPen(theme.selection_pen())
         self.rbScaleBox.setBrush(theme.selection_brush())
         self.channel = channel
-        self.drag_modifiers = Qt.NoModifier
+        self.drag_modifiers = Qt.KeyboardModifier.NoModifier
         self.setAcceptHoverEvents(True)
 
     def publish_region_mode(self) -> None:
@@ -84,9 +84,9 @@ class SelectViewBox(pg.ViewBox):
         be swallowed by the view box.  Zooming needs an explicit modifier.
         """
         mods = ev.modifiers()
-        if mods & Qt.ControlModifier:
+        if mods & Qt.KeyboardModifier.ControlModifier:
             zoom_axis = self.XAxis
-        elif mods & Qt.ShiftModifier:
+        elif mods & Qt.KeyboardModifier.ShiftModifier:
             zoom_axis = self.YAxis
         else:
             # let the event propagate to the enclosing scroll area:
@@ -143,7 +143,7 @@ class SelectViewBox(pg.ViewBox):
                     self.sigSelectedRegionAt.emit(
                         self.channel, self, rect, ev.scenePos()
                     )
-                    self.drag_modifiers = Qt.NoModifier
+                    self.drag_modifiers = Qt.KeyboardModifier.NoModifier
                 else:
                     ## update shape of scale box
                     self.updateScaleBox(ev.buttonDownPos(), ev.pos())

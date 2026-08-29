@@ -59,8 +59,8 @@ class PanelSplitter(pg.GraphicsWidget):
         self.channel = channel
         self.browser = browser
         self.setAcceptHoverEvents(True)
-        self.setAcceptedMouseButtons(Qt.LeftButton)
-        self.setCursor(Qt.SplitVCursor)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        self.setCursor(Qt.CursorShape.SplitVCursor)
         self.setZValue(HANDLE_Z)
         self._hovered = False
         self._dragging = False
@@ -96,7 +96,7 @@ class PanelSplitter(pg.GraphicsWidget):
         every `which` gives the band a maximum width of zero, and a control
         0 px wide is one that paints nothing and can never be clicked.
         """
-        if which == Qt.MaximumSize:
+        if which == Qt.SizeHint.MaximumSize:
             # QWIDGETSIZE_MAX wide, nothing tall
             return QSizeF(16777215.0, 0.0)
         return QSizeF(0.0, 0.0)
@@ -172,7 +172,7 @@ class PanelSplitter(pg.GraphicsWidget):
 
     def mousePressEvent(self, ev) -> None:
         """Latch where the boundary is now, measured off the real rows."""
-        if ev.button() != Qt.LeftButton:
+        if ev.button() != Qt.MouseButton.LeftButton:
             ev.ignore()
             return
         if not self._latch(ev.scenePos().y()):
@@ -232,7 +232,7 @@ class PanelSplitter(pg.GraphicsWidget):
 
     def mouseDoubleClickEvent(self, ev) -> None:
         """Back to the default split, the way a `QSplitter` handle behaves."""
-        if ev.button() != Qt.LeftButton:
+        if ev.button() != Qt.MouseButton.LeftButton:
             ev.ignore()
             return
         self._dragging = False

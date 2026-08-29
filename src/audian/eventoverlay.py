@@ -816,7 +816,7 @@ def _passive(item) -> None:
     reader is most likely to make.  An annotation states where something is;
     it is not a control.
     """
-    item.setAcceptedMouseButtons(Qt.NoButton)
+    item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
     item.setAcceptHoverEvents(False)
 
 
@@ -1277,15 +1277,15 @@ LEGEND_H = 12
 
 def _mark_style(observed: bool, unvalidated: bool):
     if not observed:
-        return Qt.DashLine
-    return Qt.DashLine if unvalidated else Qt.SolidLine
+        return Qt.PenStyle.DashLine
+    return Qt.PenStyle.DashLine if unvalidated else Qt.PenStyle.SolidLine
 
 
 def _legend_pixmap(color: str, observed: bool, unvalidated: bool) -> QPixmap:
     pixmap = QPixmap(LEGEND_W, LEGEND_H)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing, False)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
     painter.setPen(
         theme.pen(
             color,
@@ -1315,22 +1315,22 @@ def legend_icon(color: str, observed: bool = True, unvalidated: bool = False) ->
 
 def _span_pixmap(color: str, alpha: float, unvalidated: bool) -> QPixmap:
     pixmap = QPixmap(LEGEND_W, LEGEND_H)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing, False)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
     inset = 3
     # the chip says what the lane says: a weak interior between two full
     # height edges, so a reader who can only see the edges outdoors still
     # matches the chip to the mark
     interior = theme.brush(color, alpha=alpha)
     if unvalidated:
-        interior.setStyle(Qt.BDiagPattern)
+        interior.setStyle(Qt.BrushStyle.BDiagPattern)
     painter.fillRect(QRect(inset, 0, LEGEND_W - 2 * inset, LEGEND_H), interior)
     painter.setPen(
         theme.pen(
             color,
             width=theme.LW_THIN,
-            style=Qt.DashLine if unvalidated else Qt.SolidLine,
+            style=Qt.PenStyle.DashLine if unvalidated else Qt.PenStyle.SolidLine,
             cosmetic=False,
         )
     )
@@ -1353,7 +1353,7 @@ def swatch_pixmap(color: str) -> QPixmap:
     canvas as `legend_icon`, so every chip sits on one baseline.
     """
     pixmap = QPixmap(LEGEND_W, LEGEND_H)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setBrush(theme.brush(color))
     painter.setPen(theme.pen("border", width=theme.HAIRLINE, cosmetic=False))
