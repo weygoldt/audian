@@ -12,7 +12,11 @@
 set -u
 
 PREFIX=${1:?usage: baseline_matrix.sh <output-prefix>}
-PY=${PY:-.venv/bin/python}
+# Whichever interpreter has audian installed.  This used to default to
+# `.venv`, which is the PyQt5 environment the baseline was recorded in, so
+# running the acceptance matrix the documented way on the Qt6 branch failed
+# at the first import.
+PY=${PY:-.venv-qt6/bin/python}
 WAV=${WAV:-data/Gryllus_campestris.wav}
 export QT_QPA_PLATFORM=offscreen
 

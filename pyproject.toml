@@ -19,7 +19,9 @@ dependencies = [
   "sounddevice",
   "thunderlab>=1.6.0"
 ]
-requires-python = ">=3.8"
+# PySide6 6.11 wheels start at 3.9; the old ">=3.8" would resolve to a
+# Python that has no binding to install.
+requires-python = ">=3.9"
 authors = [
   {name = "Jan Benda", email = "jan.benda@uni-tuebingen.de"},
 ]
@@ -38,7 +40,6 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.12",
     "Operating System :: OS Independent",
     "Topic :: Multimedia :: Sound/Audio",
