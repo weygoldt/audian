@@ -50,7 +50,13 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
 
-#: Generated on PyQt5 at the commit the migration branched from.
+#: First generated on PyQt5 at the commit the migration branched from, then
+#: regenerated once on PySide6.  That regeneration moved exactly two lines:
+#: `open_files` gains "Open" beside "Ctrl+O", because Qt6's
+#: `QKeySequence.StandardKey.Open` includes the XF86Open media key and Qt5's
+#: did not.  Ctrl+O is untouched, nothing else in 124 actions moved, and the
+#: other nineteen StandardKey values the application uses are byte-identical
+#: across the two versions.
 GOLDEN = Path(__file__).parent / "data" / "action-inventory.json"
 
 RATE = 8000

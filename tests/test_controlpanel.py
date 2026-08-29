@@ -37,6 +37,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QPainterPath  # noqa: E402
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget  # noqa: E402
 
 from audian import theme  # noqa: E402
@@ -351,8 +352,15 @@ def test_a_value_nobody_measured_is_a_gap_and_never_a_zero(app, make_panel, tmp_
     assert panel.curves["tick_hz"].opts["connect"] == "finite"
     path = panel.curves["tick_hz"].getPath()
     kinds = [path.elementAt(i).type for i in range(path.elementCount())]
-    # more than one MoveTo means the path really is broken at the gap
-    assert kinds.count(0) > 1, "the staircase was drawn straight across a null"
+    # More than one MoveTo means the path really is broken at the gap.
+    #
+    # Against the enum member and not against `0`: Qt6's ElementType is a
+    # plain Python enum rather than an int-like one, so `kinds.count(0)`
+    # matches nothing and the assertion fails on a path that is perfectly
+    # correct.  Comparing to the member says what is meant and holds either
+    # way.
+    moves = kinds.count(QPainterPath.ElementType.MoveToElement)
+    assert moves > 1, "the staircase was drawn straight across a null"
 
 
 def test_a_window_before_the_first_change_row_draws_nothing(app, panel):

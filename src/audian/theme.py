@@ -70,7 +70,6 @@ helper still maps to the active theme's equivalent.  Prefer helpers.
 from __future__ import annotations
 
 import copy
-
 from string import Template
 from typing import Any, Iterable, Sequence
 

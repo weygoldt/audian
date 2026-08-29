@@ -560,7 +560,8 @@
     "checked": false,
     "in_menus": true,
     "keys": [
-      "Ctrl+O"
+      "Ctrl+O",
+      "Open"
     ],
     "path": "File",
     "text": "Open"
