@@ -24,6 +24,7 @@ and are the case whose cost is measured.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -1886,3 +1887,547 @@ def test_an_old_spectrogram_size_arrives_as_simply_on(browser, split_reset):
     browser.set_panels(specs=0)
     settle()
     assert browser.show_specs == 0
+
+
+# ----------------------------------------------- the keys the axes now share
+#
+# The reported defect: "v/ctrl+v only resets the trace y axis and double
+# click only resets the spec y axis".  Measured, the halves were these -- the
+# frequency axis had the gesture and no key at all (`setup_frequency_actions`
+# defined link, two zooms, up, down, home and end, and neither a fit nor a
+# reset), while the amplitude axis had `v` and `Shift+V` as well as the
+# gesture.  So each axis had half the vocabulary, and `Ctrl+V` was bound to
+# nothing anywhere in the tree.
+
+
+@pytest.mark.parametrize("kind", ["trace", "spectrogram"])
+def test_the_double_click_and_the_lane_s_own_key_agree(browser, kind):
+    """The user's sentence as an assertion: on both views, both actions do
+    the same thing.
+
+    Squash the lane, double click its axis, record; squash it identically,
+    press the lane's bare key, record; the two must be the same range.  It
+    was already true on the trace by coincidence -- the gesture calls
+    `gui.auto_amplitude()`, which is exactly what `v` is connected to -- and
+    is now true on the spectrogram by construction, because both go through
+    `apply_ranges("default_view", ...)`.
+
+    Red before this commit on the spectrogram half with ``AttributeError:
+    'Actions' object has no attribute 'default_view_frequency'``.
+    """
+    gui = browser.window()
+    c = spec_channel(browser) if kind == "spectrogram" else 0
+    ax = panel(browser, kind).axs[c]
+    view = ax.getViewBox()
+    _t, (y0, y1) = view.viewRange()
+    squashed = (y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0))
+
+    view.setYRange(*squashed, padding=0)
+    settle()
+    click_axis(browser, c, ax, double=True)
+    _t, by_mouse = view.viewRange()
+
+    view.setYRange(*squashed, padding=0)
+    settle()
+    act = (
+        gui.acts.default_view_frequency
+        if kind == "spectrogram"
+        else gui.acts.auto_zoom_amplitude
+    )
+    act.trigger()
+    settle()
+    _t, by_key = view.viewRange()
+
+    assert by_mouse == pytest.approx(by_key, abs=1e-6)
+
+
+def test_the_frequency_axis_has_a_key_back_to_its_band(browser):
+    """Ctrl+V, which was bound to nothing at all before this commit.
+
+    With no band configured `default_view` and `reset` are the same call, so
+    this returns the whole axis -- measured 0 to 4000 Hz on the 8 kHz
+    fixture.  What it is *for* is the case where a band is set; see
+    tests/test_specband.py.
+    """
+    gui = browser.window()
+    assert gui.acts.default_view_frequency.shortcut().toString() == "Ctrl+V"
+    c = spec_channel(browser)
+    ax = panel(browser, "spectrogram").axs[c]
+    view = ax.getViewBox()
+    view.setYRange(1200, 2400, padding=0)
+    settle()
+    gui.acts.default_view_frequency.trigger()
+    settle()
+    _t, (w0, w1) = view.viewRange()
+    assert (w0, w1) == pytest.approx((0.0, 4000.0))
+
+
+def test_the_frequency_axis_has_a_key_all_the_way_out(browser):
+    """Ctrl+Shift+V, the escape hatch.
+
+    A reader who sets a 2 kHz band has to be able to get back to the whole
+    axis, and that route must not be folklore -- it is in the Frequency
+    menu, on the cheat sheet, and in the Opens-at field's own tool tip.
+    """
+    gui = browser.window()
+    assert gui.acts.reset_frequency.shortcut().toString() == "Ctrl+Shift+V"
+    c = spec_channel(browser)
+    ax = panel(browser, "spectrogram").axs[c]
+    view = ax.getViewBox()
+    view.setYRange(1200, 2400, padding=0)
+    settle()
+    gui.acts.reset_frequency.trigger()
+    settle()
+    _t, (w0, w1) = view.viewRange()
+    assert (w0, w1) == pytest.approx((0.0, 4000.0))
+
+
+def test_the_way_out_is_discoverable(browser):
+    """A key that works and that nothing tells the reader about is folklore.
+
+    Both new actions have to reach the command palette (which walks the
+    menus) and the cheat sheet (which reads `CheatSheet.GROUPS` by name).
+    """
+    from audian.audian import CheatSheet
+
+    gui = browser.window()
+    named = {name for _title, names in CheatSheet.GROUPS for name in names}
+    assert "default_view_frequency" in named
+    assert "reset_frequency" in named
+
+    actions = [act for act, _path in gui.all_actions()]
+    assert gui.acts.default_view_frequency in actions
+    assert gui.acts.reset_frequency in actions
+
+
+def test_the_two_fit_actions_are_not_the_same_command(browser):
+    """"Fit Y" names the amplitude axis -- the tool bar button and the
+    "Y: fixed +-1" readout both use Y that way -- so the frequency entry is
+    "Fit" and not "Fit Y".
+
+    `all_actions` dedupes by `id(act)` and the palette renders text plus
+    menu path, so two identically worded rows under View > Amplitude and
+    View > Frequency would read as a bug.
+    """
+    gui = browser.window()
+    assert gui.acts.auto_zoom_amplitude.text() == "&Fit Y"
+    assert gui.acts.default_view_frequency.text() == "&Fit"
+    assert gui.acts.reset_frequency.text() == "&Reset"
+
+    entries = gui.all_actions()
+    rendered = {f"{act.text().replace('&', '')}  {path}" for act, path in entries}
+    assert len(rendered) == len(entries)
+
+
+def test_v_leaves_frequency_alone_and_ctrl_v_leaves_amplitude_alone(browser):
+    """The keys stay per axis kind.
+
+    `v` takes `Panel.amplitudes` and Ctrl+V takes `Panel.frequencies`; a
+    later change making either axis-agnostic across kinds would be a
+    surprise, because the reader presses one to fix one lane.
+    """
+    gui = browser.window()
+    c = spec_channel(browser)
+    fax = panel(browser, "spectrogram").axs[c]
+    aax = panel(browser, "trace").axs[0]
+    fview, aview = fax.getViewBox(), aax.getViewBox()
+
+    fview.setYRange(1200, 2400, padding=0)
+    settle()
+    _t, before = fview.viewRange()
+    gui.acts.auto_zoom_amplitude.trigger()
+    settle()
+    _t, after = fview.viewRange()
+    assert after == pytest.approx(before), "v moved a frequency axis"
+
+    _t, before_a = aview.viewRange()
+    gui.acts.default_view_frequency.trigger()
+    settle()
+    _t, after_a = aview.viewRange()
+    assert after_a == pytest.approx(before_a), "Ctrl+V moved an amplitude axis"
+
+
+def test_the_trace_double_click_still_fits_rather_than_resets(browser):
+    """A pin on 10b8832, which measured this and chose it deliberately.
+
+    `reset` on an amplitude goes to the format's full scale -- (-1.0, 1.0)
+    -- and on a recording peaking at a few percent of it that is a flat
+    line, not a reset.  The fitted answer is (-0.116965, 0.128933).  This
+    goes red the moment somebody folds the amplitude branch of
+    `reset_y_range` onto `default_view` for symmetry's sake.
+    """
+    ax = panel(browser, "trace").axs[0]
+    view = ax.getViewBox()
+    view.setYRange(-0.16, 0.08, padding=0)
+    settle()
+    click_axis(browser, 0, ax, double=True)
+    _t, (w0, w1) = view.viewRange()
+    assert (w0, w1) != pytest.approx((-1.0, 1.0))
+    assert (w0, w1) == pytest.approx((-0.116965, 0.128933), abs=1e-4)
+
+
+# --------------------------------------------- the band a spectrogram opens at
+#
+# These live here, and not in a module of their own, because a module of
+# their own needs its own browser fixtures and **two more windows in the
+# process is enough to take the whole suite down**.  Measured, three ways:
+# pristine master runs 747 passed with no crash; this branch with the band
+# tests in a separate file segfaulted in two runs out of four, always inside
+# `theme.collect_orphan_widgets` at `widget.parentWidget()`, once while
+# building `test_parameterbar`'s fixture and once while building the band
+# module's own; and this branch with that file removed runs 755 passed
+# clean.  The three modules in isolation
+# (`test_panelsplitter test_parameterbar test_specband`) also pass -- 165 of
+# them -- so it is the whole suite's accumulated widget state and not any
+# one module.
+#
+# The latent defect is `collect_orphan_widgets` walking a snapshot of
+# `QApplication.topLevelWidgets()` and reparenting inside the same loop, so
+# a `setParent` can destroy a widget a later iteration then dereferences.
+# It is pre-existing and untouched by this commit; it is in todo.md with
+# these numbers.  Reusing the `browser` fixture that is already here costs
+# no window at all, which is the cheap way not to trip it.
+
+
+@pytest.fixture
+def band_reset(browser):
+    """Put the band back: `browser` is module scoped and widely shared."""
+    yield
+    browser.set_spectrogram_band(0.5 * browser.data.rate)
+    settle()
+
+
+def band_settings_path():
+    """The redirected settings file of whichever browser is current."""
+    import audian.audian as audian_app
+
+    return Path(audian_app.settings_path())
+
+
+def stored_band():
+    path = band_settings_path()
+    if not path.exists():
+        return None
+    with open(path) as sf:
+        return json.load(sf).get(DataBrowser.SPEC_BAND_SETTING)
+
+
+def write_raw_band(value):
+    path = band_settings_path()
+    existing = {}
+    if path.exists():
+        with open(path) as sf:
+            existing = json.load(sf)
+    existing[DataBrowser.SPEC_BAND_SETTING] = value
+    with open(path, "w") as sf:
+        json.dump(existing, sf)
+
+
+def clear_raw_band():
+    path = band_settings_path()
+    if not path.exists():
+        return
+    with open(path) as sf:
+        existing = json.load(sf)
+    existing.pop(DataBrowser.SPEC_BAND_SETTING, None)
+    with open(path, "w") as sf:
+        json.dump(existing, sf)
+
+
+def freq_view(browser):
+    c = spec_channel(browser)
+    return panel(browser, "spectrogram").axs[c].getViewBox().viewRange()[1]
+
+
+# ---- a default, and not a limit -------------------------------------------
+#
+# The whole design in one idea.  The tempting implementation puts the
+# reader's 2 kHz into `PlotRange.rmax`, and it looks right -- the lane opens
+# at 0-2 kHz.  It is wrong in a way nothing on screen says: `rmax` is what
+# `set_ranges` clips to and what `set_limits` hands `setLimits`, so Nyquist
+# stops existing.
+
+
+def test_a_band_changes_where_the_lane_opens_and_not_where_it_can_go(
+    browser, band_reset
+):
+    """Red without the feature, and red *again* on the `rmax` implementation.
+
+    An `rmax` band gives ``yLimits == [0, 2000]`` and clips the hand-set
+    range to it, so the second and third assertions are the ones that tell a
+    default view apart from a ceiling.
+    """
+    browser.set_spectrogram_band(2000.0)
+    settle()
+    assert freq_view(browser) == pytest.approx((0.0, 2000.0))
+
+    c = spec_channel(browser)
+    vb = panel(browser, "spectrogram").axs[c].getViewBox()
+    assert vb.state["limits"]["yLimits"] == [0, 4000.0]
+
+    vb.setYRange(3000, 4000, padding=0)
+    settle()
+    assert vb.viewRange()[1] == pytest.approx((3000.0, 4000.0))
+
+
+def test_end_still_reaches_nyquist_with_a_band_in_force(browser, band_reset):
+    """Under an `rmax` band `end` would stop at 2 kHz -- and stopping there
+    is indistinguishable, on screen, from a recording with no energy above
+    it."""
+    browser.set_spectrogram_band(2000.0)
+    settle()
+    browser.apply_ranges("end", "f")
+    settle()
+    assert freq_view(browser) == pytest.approx((2000.0, 4000.0))
+
+
+def test_the_deepest_zoom_does_not_move_when_a_band_is_set(browser, band_reset):
+    """`min_dr = (rmax - rmin) / 2**16`, so an `rmax` band would halve it.
+
+    Nothing else in the suite can see that: it changes how far a reader can
+    zoom in, four figures down, and no view range ever reports it.
+    """
+    frange = browser.plot_ranges["f"]
+    before = frange.min_dr
+    assert before == pytest.approx(0.06103515625)
+    browser.set_spectrogram_band(2000.0)
+    settle()
+    assert frange.min_dr == pytest.approx(before)
+    assert frange.rmax == pytest.approx(4000.0)
+
+
+def test_four_zoom_outs_from_the_band_reach_nyquist(browser, band_reset):
+    """A route out that does not go through the new key, so that rebinding
+    Ctrl+Shift+V later cannot strand a reader inside a band."""
+    browser.set_spectrogram_band(2000.0)
+    settle()
+    for _ in range(4):
+        browser.apply_ranges("zoom_out", "f")
+        settle()
+    assert freq_view(browser) == pytest.approx((0.0, 4000.0))
+
+
+# ---- what a lane opens at, with no window involved ------------------------
+
+
+def test_set_limits_opens_a_range_at_its_band_and_clips_it_to_its_limit():
+    """The core of the feature, on a bare `PlotRange`.
+
+    This is where "opens at" actually lives, and asserting it here rather
+    than through a second browser is what keeps this file to the windows it
+    already had.  `set_limits` is the same call `DataBrowser.open` makes.
+    """
+    from audian.plotranges import PlotRange
+
+    class FakeAxis:
+        def range(self, axspec):
+            return 0, 4000.0, None
+
+        def setLimits(self, **kwargs):
+            self.limits = kwargs
+
+        def setYRange(self, r0, r1):
+            self.yrange = (r0, r1)
+
+    r = PlotRange("f", 1)
+    r.add_yaxis(FakeAxis(), 0)
+
+    r.set_limits()
+    assert (r.r0[0], r.r1[0]) == pytest.approx((0.0, 4000.0))
+
+    r.set_default_max(2000.0)
+    r.set_limits()
+    assert (r.r0[0], r.r1[0]) == pytest.approx((0.0, 2000.0))
+    assert r.rmax == pytest.approx(4000.0), "the band must not become the limit"
+
+    # and `reset` is still the whole axis, which is the way back out
+    r.reset(do_set=False)
+    assert (r.r0[0], r.r1[0]) == pytest.approx((0.0, 4000.0))
+    r.default_view(do_set=False)
+    assert (r.r0[0], r.r1[0]) == pytest.approx((0.0, 2000.0))
+
+
+def test_a_band_larger_than_nyquist_is_clamped_not_obeyed():
+    """A preference outlives the recording it was written beside."""
+    from audian.plotranges import PlotRange
+
+    class FakeAxis:
+        def range(self, axspec):
+            return 0, 4000.0, None
+
+        def setLimits(self, **kwargs):
+            pass
+
+        def setYRange(self, r0, r1):
+            pass
+
+    r = PlotRange("f", 1)
+    r.add_yaxis(FakeAxis(), 0)
+    r.set_default_max(96000.0)
+    assert r.default_max() == pytest.approx(4000.0)
+
+
+# ---- the setting ----------------------------------------------------------
+
+
+def test_the_band_is_a_default_and_ships_off(browser):
+    """Inert until a reader asks for it, so every existing range test stays
+    green for a reason rather than by luck."""
+    assert browser.plot_ranges["f"].rdefault is None
+    assert browser.plot_ranges["f"].default_max() == pytest.approx(4000.0)
+
+
+def test_a_band_that_does_not_fit_the_recording_is_clamped(browser):
+    """Clamped twice on purpose -- in `spectrogram_band` and again in
+    `PlotRange.default_max` -- so the answer stays right if either moves."""
+    try:
+        write_raw_band(
+            {"version": DataBrowser.SPEC_BAND_SETTING_VERSION, "max_hz": 96000.0}
+        )
+        assert browser.spectrogram_band() == pytest.approx(4000.0)
+    finally:
+        clear_raw_band()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"version": 0, "max_hz": 2000.0},
+        {"version": 2, "max_hz": 2000.0},
+        {"max_hz": 2000.0},
+        "2000",
+        {"version": 1, "max_hz": "2 kHz"},
+        {"version": 1, "max_hz": float("nan")},
+        {"version": 1, "max_hz": 0},
+        {"version": 1, "max_hz": -1},
+        {"version": 1, "max_hz": None},
+    ],
+    ids=[
+        "older-version",
+        "newer-version",
+        "no-version",
+        "not-a-dict",
+        "unparseable",
+        "nan",
+        "zero",
+        "negative",
+        "explicit-null",
+    ],
+)
+def test_a_band_that_cannot_be_believed_is_ignored(browser, value):
+    """A settings file is a file a reader may edit by hand, so a wrong shape
+    is dropped rather than guessed at -- `restore_panel_split`'s ladder."""
+    try:
+        write_raw_band(value)
+        assert browser.spectrogram_band() is None
+    finally:
+        clear_raw_band()
+
+
+def test_a_band_at_nyquist_is_written_as_null(browser, band_reset):
+    """An 8 kHz recording writing 4000 would cap every 96 kHz recording
+    opened afterwards, from a preference nobody typed."""
+    try:
+        browser.set_spectrogram_band(2000.0)
+        settle()
+        assert stored_band() == {"version": 1, "max_hz": 2000.0}
+
+        browser.set_spectrogram_band(4000.0)
+        settle()
+        assert stored_band() == {"version": 1, "max_hz": None}
+    finally:
+        clear_raw_band()
+
+
+def test_applying_a_band_without_saving_moves_the_lane_and_writes_nothing(
+    browser, band_reset
+):
+    """`save=False` is what the window passes to every tab but the one the
+    reader typed in.
+
+    The clamp is per recording, so letting each tab write would make the
+    stored value depend on the order of `Audian.browsers`: 4000 typed into
+    an 8 kHz tab is "show everything" and stores null, while a 96 kHz tab
+    beside it reads the same 4000 as a real band and stores it.
+    """
+    try:
+        clear_raw_band()
+        browser.set_spectrogram_band(2000.0, save=False)
+        settle()
+        assert freq_view(browser) == pytest.approx((0.0, 2000.0))
+        assert stored_band() is None
+
+        # the guard is not poisoned: a real gesture afterwards still writes
+        browser.set_spectrogram_band(1000.0)
+        settle()
+        assert stored_band() == {"version": 1, "max_hz": 1000.0}
+    finally:
+        clear_raw_band()
+
+
+def test_changing_the_band_leaves_the_amplitude_fit_alone(browser, band_reset):
+    """Red for the naive fix as well as for no fix at all.
+
+    Re-applying the band with `plot_ranges.set_limits()` would re-run the
+    `# ranges:` block for *every* letter and put the amplitude back to
+    (-1.0, 1.0), destroying the fit `auto_fit_y` made at open.
+    """
+    trace = panel(browser, "trace").axs[0].getViewBox()
+    browser.apply_ranges("default_view", "f")
+    settle()
+    before = trace.viewRange()[1]
+
+    browser.set_spectrogram_band(2000.0)
+    settle()
+
+    assert freq_view(browser) == pytest.approx((0.0, 2000.0))
+    assert trace.viewRange()[1] == pytest.approx(before)
+    assert trace.viewRange()[1] != pytest.approx((-1.0, 1.0))
+
+
+def test_the_band_reaches_both_frequency_letters(browser, band_reset):
+    """`Panels.add_spectrogram` hands a second spectrogram y='w'.
+
+    Asserted on `rdefault` and not on a view range: 'w' is `is_used() ==
+    False` on the default stack, so every mutating `PlotRange` method
+    early-returns and no range would move.
+    """
+    browser.set_spectrogram_band(2000.0)
+    settle()
+    assert browser.plot_ranges["f"].rdefault == pytest.approx(2000.0)
+    assert browser.plot_ranges["w"].rdefault == pytest.approx(2000.0)
+
+
+# ---- the field ------------------------------------------------------------
+
+
+def test_the_field_shows_what_this_recording_actually_opens_at(browser, band_reset):
+    """`default_max()` and not the raw preference, so the number in the box
+    is the number on the axis."""
+    browser.set_spectrogram_band(2000.0)
+    settle()
+    browser.set_band_widget(2000.0)
+    assert browser.fmaxw.value() == pytest.approx(2000.0)
+
+
+def test_the_field_names_the_way_back_out(browser):
+    """A reader who has just typed 2 kHz is told, at the control they typed
+    it into, that the rest of the axis is one key away."""
+    assert "Ctrl+Shift+V" in browser.fmaxw.toolTip()
+    assert "4 kHz" in browser.fmaxw.toolTip()
+
+
+def test_the_opens_at_row_costs_the_bar_no_width(browser):
+    """`todo.md` asked for the group's `minimumSizeHint` before and after,
+    because `21169f6` records that this bar is the binding constraint on a
+    14" laptop -- and the Spectrogram group is already the widest page.
+
+    Measured, before and after this commit: the group is 535 px both times,
+    the bar 551 (= 535 + 2 * S8) and the window floor 734.  The row is paid
+    for in height instead: the bar goes 154 -> 168 and every group's frame
+    116 -> 130, because this group was tied-tallest at three rows.
+    """
+    groups = {g.title: g.minimumSizeHint().width() for g in browser.param_groups}
+    assert groups["Spectrogram"] == 535
+    assert browser.parambar.minimumSizeHint().width() == 535 + 2 * theme.S8
+    assert browser.window().minimumSizeHint().width() == 734

@@ -236,8 +236,13 @@ class TimePlot(RangePlot):
         the way a QSplitter handle behaves* -- and it is not the same call on
         both axes, because the two do not open the same way.
 
-        A **frequency** axis opens at its full range, so this is
-        `PlotRange.reset`: 0 Hz to Nyquist.
+        A **frequency** axis opens at the band the Spectrogram group's
+        *Opens at* field names, so this is `PlotRange.default_view` rather
+        than `PlotRange.reset`.  With no band configured the two are the
+        same call -- `default_max()` answers `rmax` -- and the gesture still
+        measures 0 to 4000 Hz on an 8 kHz recording, which is what it did
+        before the field existed.  With a 2 kHz band it measures 0 to 2000,
+        and `Ctrl+Shift+V` is the way out to the whole axis.
 
         An **amplitude** axis opens *fitted to the data*, which is what
         `auto_fit_y` does on load and what `v` does on demand.  `reset` there
@@ -284,9 +289,9 @@ class TimePlot(RangePlot):
             else:
                 self.browser.auto_ampl()
         elif gui is not None:
-            gui.apply_ranges("reset", self.y())
+            gui.apply_ranges("default_view", self.y())
         else:
-            self.browser.apply_ranges("reset", self.y())
+            self.browser.apply_ranges("default_view", self.y())
 
     def update_axis_label(self) -> None:
         """Put the amplitude unit on the left axis.

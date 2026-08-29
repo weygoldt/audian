@@ -1061,6 +1061,29 @@ class DataBrowser(QWidget):
     #: warning rather than guessed at, the rule this setting already had.
     PANEL_SPLIT_SETTING_VERSION = 3
 
+    #: Preferred top of the frequency band a spectrogram *opens* at, in
+    #: absolute Hz.  Not a limit: with a 2000 Hz band in force the axis
+    #: still zooms, pans and `end`s to Nyquist -- measured, `end` reached
+    #: (3000.0, 4000.0), a hand `setYRange(3000, 4000)` stuck, and the
+    #: deepest zoom `min_dr` stayed 0.06103515625.  `Ctrl+Shift+V` is the
+    #: key that goes all the way out, and it is in the Frequency menu and
+    #: on the cheat sheet so that it is not folklore.
+    SPEC_BAND_SETTING = "spectrogram-band"
+    #: 1: absolute Hz, ``{"version": 1, "max_hz": float | None}``.
+    #:
+    #: Absolute and *not* a fraction of Nyquist, which is the deliberate
+    #: inverse of the lesson `PANEL_SPLIT_SETTING_VERSION` 1 records.  A
+    #: split is a statement about a window, so a dimensionless one did not
+    #: travel; 0-2 kHz is a statement about the fish, so a dimensionless
+    #: one would open a 96 kHz recording at 0-24 kHz from the very
+    #: preference that meant 2 kHz on an 8 kHz file.
+    #:
+    #: null means no band, and that is what this ships as: every lane opens
+    #: at Nyquist until a reader types a number, which keeps the feature
+    #: provably inert rather than silently changing what every already
+    #: recorded file opens at.
+    SPEC_BAND_SETTING_VERSION = 1
+
     # y-range policies of the trace panels:
     y_shared = 0
     y_per_channel = 1
@@ -1236,6 +1259,10 @@ class DataBrowser(QWidget):
         self.ofracw = None
         self.ofraclabelw = None
         self.cmapw = None
+        self.fmaxw = None
+        #: last band written to the settings file, so that restoring one
+        #: never counts as a gesture and rewrites it
+        self._spec_band_saved = None
         self.ymodew = None
         self.hpfw = None
         self.lpfw = None
@@ -1546,6 +1573,19 @@ class DataBrowser(QWidget):
         # ranges:
         self.plot_ranges.setup(self.data.channels)
 
+        # The band a spectrogram opens at, set before `set_limits()` below
+        # reads it: its `# ranges:` block is what turns `default_max()` into
+        # the opening span.  Both letters of `Panel.frequencies` and never a
+        # hardcoded 'f' -- `Panels.add_spectrogram` hands a second
+        # spectrogram y='w'.  Inert on the default stack, where 'w' measures
+        # `is_used() == False` and every mutating `PlotRange` method
+        # early-returns on that.
+        band = self.spectrogram_band()
+        self._spec_band_saved = band
+        for s in Panel.frequencies:
+            if s in self.plot_ranges:
+                self.plot_ranges[s].set_default_max(band)
+
         # requested filtering:
         if "filtered" in self.data:
             filtered = self.data["filtered"]
@@ -1817,6 +1857,13 @@ class DataBrowser(QWidget):
             self.acts.zoom_ffrequency_out.setEnabled(False)
             self.acts.zoom_ffrequency_in.setVisible(False)
             self.acts.zoom_ffrequency_out.setVisible(False)
+            # Gated on frequencies[0] and not [1]: both of these span the
+            # whole letter class, so they are useful as soon as any
+            # spectrogram exists.
+            self.acts.default_view_frequency.setEnabled(False)
+            self.acts.reset_frequency.setEnabled(False)
+            self.acts.default_view_frequency.setVisible(False)
+            self.acts.reset_frequency.setVisible(False)
         if not self.plot_ranges[Panel.frequencies[1]].is_used():
             self.acts.zoom_wfrequency_in.setEnabled(False)
             self.acts.zoom_wfrequency_out.setEnabled(False)
@@ -2146,12 +2193,52 @@ class DataBrowser(QWidget):
             self.cmapw.setCurrentIndex(self.color_map)
             self.cmapw.currentIndexChanged.connect(lambda i: self.set_color_map(i))
             group.add_row("Colormap", "⇧C", self.cmapw)
+
+            # The band a spectrogram opens at.  Appended after Colormap
+            # rather than squeezed beside the Window combo box: `add_row`
+            # places at `self.rows` and there is no insert API, and the
+            # group then reads as how the picture is computed (Window,
+            # Overlap) and then how it is shown (Colormap, Opens at).
+            #
+            # The initial value is `default_max()` and not the raw
+            # preference, so the field always shows what THIS recording
+            # actually opens at once the clamp has been applied.
+            #
+            # The shortcut column is left empty on purpose.  Measured,
+            # "OPENS AT  CTRL+V" is 121 px against a 112 px caption column,
+            # and this group is already the widest page in the bar -- so the
+            # key in the caption would widen the group, the bar, and the
+            # window's own minimum with it.  The keys are in the tool tip,
+            # the Frequency menu and the cheat sheet instead.
+            frange = self.plot_ranges[Panel.frequencies[0]]
+            self.fmaxw = pg.SpinBox(
+                self,
+                frange.default_max(),
+                bounds=(frange.min_dr, nyquist),
+                suffix="Hz",
+                siPrefix=True,
+                step=0.5,
+                dec=True,
+                decimals=3,
+                minStep=10 ** floor(log10(0.01 * nyquist)),
+            )
+            self.style_parameter_spinbox(self.fmaxw)
+            self.fmaxw.tooltip = (
+                "Frequency band a spectrogram opens at, and the band "
+                "Ctrl+V goes back to"
+            )
+            self.fmaxw.setToolTip(self.spec_band_tooltip(nyquist))
+            self.fmaxw.sigValueChanged.connect(
+                lambda sb: self.dispatch_spectrogram_band(sb.value())
+            )
+            group.add_row("Opens at", "", self.fmaxw)
             groups.append(group)
         else:
             self.nfftw = None
             self.ofracw = None
             self.ofraclabelw = None
             self.cmapw = None
+            self.fmaxw = None
 
         # envelope:
         if "envelope" in self.data:
@@ -2318,6 +2405,116 @@ class DataBrowser(QWidget):
         """
         theme.style_spinbox(spin)
         spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+
+    @staticmethod
+    def hz_label(hz: float) -> str:
+        """Render a frequency the way `nfft_label` renders a duration.
+
+        Explicit branches rather than `pg.siFormat`, which nothing else in
+        this file uses: one formatting convention per file.
+        """
+        if hz >= 1000:
+            return f"{0.001 * hz:.3g} kHz"
+        return f"{hz:.3g} Hz"
+
+    def spec_band_tooltip(self, nyquist: float) -> str:
+        """The Opens-at tool tip, which has to name the way back out.
+
+        The field sets a default view and not a limit, and a reader who has
+        just typed 2 kHz needs to be told, at the control they typed it
+        into, that the rest of the axis is one key away.
+        """
+        return (
+            f"{self.fmaxw.tooltip}; Ctrl+Shift+V still shows the whole "
+            f"band up to {self.hz_label(nyquist)}"
+        )
+
+    def dispatch_spectrogram_band(self, max_hz) -> None:
+        """Send a band typed here to every open recording, then store it.
+
+        Through the window when there is one, so that a preference typed in
+        one tab reaches the others -- and by an explicit loop rather than
+        the `link_ranges` fan-out, because linking mirrors *absolute* Hz
+        between tabs.  That is right for a range the reader dragged and
+        wrong for a preference: each recording has to clamp the same number
+        against its own Nyquist, so that an 8 kHz and a 96 kHz file both
+        open at 0-2 kHz instead of one dragging the other to its ceiling.
+
+        The `gui`-or-`self` shape is `TimePlot.reset_y_range`'s.
+        """
+        gui = getattr(self, "gui", None)
+        if gui is not None and hasattr(gui, "set_spectrogram_band"):
+            gui.set_spectrogram_band(max_hz)
+        else:
+            self.set_spectrogram_band(max_hz)
+
+    def set_spectrogram_band(self, max_hz, save: bool = True) -> None:
+        """Set the band a spectrogram opens at, and go there now.
+
+        The membership check happens *before* the guard flag is taken, for
+        the reason `set_resolution` gives: an early return that leaves
+        `self.setting` set freezes every later scroll and zoom for the rest
+        of the session.
+
+        Applied to **every** channel and not `range_channels()`: this field
+        restates the value `set_limits` uses at open, and that touches all
+        channels unconditionally.  The gestures -- `Ctrl+V` and the double
+        click -- go through `apply_ranges` and keep the selection scope, the
+        way every other range command does.
+
+        It must never re-apply the band by calling
+        `plot_ranges.set_limits()`: that re-runs the `# ranges:` block for
+        *every* letter, which would put the amplitude range back to
+        (-1.0, 1.0) and destroy the fit `auto_fit_y` made at open.
+
+        A band at or above Nyquist is stored as None rather than as this
+        recording's ceiling; see `save_spectrogram_band`.
+
+        `save` is False for every browser but the one whose field was
+        typed in.  The clamp is per recording, so letting each tab write
+        would make the stored value depend on the order of
+        `Audian.browsers`: 4000 typed into an 8 kHz tab is "show
+        everything" and stores null, while the 96 kHz tab beside it reads
+        the same 4000 as a real band and stores it.  The reader typed the
+        number in one tab, so that tab's reading of it is the preference.
+        """
+        if self.setting:
+            return
+        if not self.spectrogram or self.spectrogram not in self.data:
+            return
+        nyquist = 0.5 * self.data.rate
+        band = None if max_hz is None or max_hz >= nyquist else float(max_hz)
+        with self.updating():
+            for axspec in Panel.frequencies:
+                if axspec in self.plot_ranges:
+                    self.plot_ranges[axspec].set_default_max(band)
+            self.plot_ranges.default_view(
+                Panel.frequencies,
+                list(range(self.data.channels)),
+                self.isVisible(),
+            )
+        if self.fmaxw is not None:
+            self.fmaxw.setToolTip(self.spec_band_tooltip(nyquist))
+        # `_spec_band_saved` is deliberately NOT updated when `save` is
+        # False.  It is the "what is on disk" guard, and setting it from a
+        # write that did not happen would make the next gesture in *this*
+        # tab compare equal and skip its own write.  Leaving it stale can
+        # only cost one redundant rewrite of the same value.
+        if save:
+            self.save_spectrogram_band(band)
+
+    def set_band_widget(self, max_hz) -> None:
+        """Show a band another tab set, without echoing it back.
+
+        `blockSignals` for the reason `set_resolution` blocks `ofracw`:
+        without it the fan-out re-enters through `sigValueChanged`.
+        """
+        if self.fmaxw is None:
+            return
+        nyquist = 0.5 * self.data.rate
+        self.fmaxw.blockSignals(True)
+        self.fmaxw.setValue(nyquist if max_hz is None else max_hz)
+        self.fmaxw.blockSignals(False)
 
     def nfft_label(self, nfft: int) -> str:
         """Label a Fourier window by its length *and* its duration."""
@@ -6290,6 +6487,75 @@ class DataBrowser(QWidget):
         # be is positive and finite, so that a file edited by hand cannot put
         # a zero or a negative height into a row.
         self.spec_scale = min(max(scale, 0.01), 100.0)
+
+    def spectrogram_band(self):
+        """The preferred top of the opening frequency band, or None.
+
+        Clamped to this recording's Nyquist: a preference outlives the
+        recording it was written beside, and a 2 kHz band asked of a
+        recording whose Nyquist is 1 kHz would otherwise name a band that
+        does not exist.  `PlotRange.default_max` clamps again, and that
+        second clamp is deliberate rather than redundant -- it is what keeps
+        the answer right if this one is ever moved or bypassed.
+
+        The guard ladder is `restore_panel_split`'s, in the same order: a
+        settings file is a file a reader may edit by hand, so a wrong shape
+        is dropped rather than trusted, and only a wrong *version* is worth
+        a warning.
+
+        Imported here and not at the top of the file: `audian.py` imports
+        this module, so a module level import would be a cycle.
+        """
+        from .audian import settings
+
+        saved = settings().get(DataBrowser.SPEC_BAND_SETTING)
+        if not isinstance(saved, dict):
+            return None
+        version = saved.get("version")
+        if version != DataBrowser.SPEC_BAND_SETTING_VERSION:
+            log.warning(
+                "ignoring %s settings written in version %r; this audian "
+                "writes version %d",
+                DataBrowser.SPEC_BAND_SETTING,
+                version,
+                DataBrowser.SPEC_BAND_SETTING_VERSION,
+            )
+            return None
+        max_hz = saved.get("max_hz")
+        if max_hz is None:
+            return None
+        try:
+            max_hz = float(max_hz)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(max_hz) or max_hz <= 0:
+            return None
+        return min(max_hz, 0.5 * self.data.rate)
+
+    def save_spectrogram_band(self, max_hz) -> None:
+        """Write the band.  Once per gesture, never at construction.
+
+        `save_setting` reads, updates and rewrites the whole settings file,
+        so a browser that wrote its own default at build time would
+        overwrite the choice made in the window beside it -- the rule
+        `save_panel_split` already carries.
+
+        A band still sitting at Nyquist is written as **null**, not as this
+        recording's number: an 8 kHz recording writing 4000 would cap every
+        96 kHz recording opened afterwards, from a preference nobody typed.
+        """
+        if max_hz == self._spec_band_saved:
+            return
+        self._spec_band_saved = max_hz
+        from .audian import save_setting
+
+        save_setting(
+            DataBrowser.SPEC_BAND_SETTING,
+            {
+                "version": DataBrowser.SPEC_BAND_SETTING_VERSION,
+                "max_hz": None if max_hz is None else float(max_hz),
+            },
+        )
 
     def save_panel_split(self) -> None:
         """Write the split.  Once per gesture, never per mouse move.

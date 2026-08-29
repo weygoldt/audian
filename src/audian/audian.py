@@ -1257,6 +1257,8 @@ class CheatSheet(QDialog):
                 "time_zoom_out_centered",
                 "auto_zoom_amplitude",
                 "reset_amplitude",
+                "default_view_frequency",
+                "reset_frequency",
                 "center_amplitude",
                 "zoom_back",
                 "zoom_forward",
@@ -3292,6 +3294,31 @@ class Audian(QMainWindow):
                     if b is not self.browser():
                         b.apply_ranges(amplitudefunc, s)
 
+    def set_spectrogram_band(self, max_hz):
+        """Push the preferred opening band to every open recording.
+
+        An explicit loop and not the `link_ranges` fan-out: linking mirrors
+        *absolute* Hz between tabs, which is right for a range the reader
+        dragged and wrong for a preference -- each browser has to clamp the
+        same number against its own Nyquist, so an 8 kHz and a 96 kHz
+        recording both open at 0-2 kHz rather than one dragging the other.
+
+        Every other browser's field is refreshed under `blockSignals`, the
+        way `set_resolution` syncs the overlap slider; without that the loop
+        re-enters through `sigValueChanged`.
+
+        Exactly one browser writes the settings file: the clamp is per
+        recording, so letting each tab write would make the stored value
+        depend on the order of this list.
+        """
+        current = self.browser()
+        for b in self.browsers:
+            if not isinstance(b, DataBrowser) or b.data is None:
+                continue
+            b.set_spectrogram_band(max_hz, save=b is current)
+            if b is not current:
+                b.set_band_widget(max_hz)
+
     def dispatch_ranges(self, axspec, arange):
         for s in range(2):
             if axspec[s] in Panel.times:
@@ -3387,6 +3414,12 @@ class Audian(QMainWindow):
             lambda x: self.apply_ranges("reset", Panel.amplitudes)
         )
 
+        # No Ctrl+C twin for the frequency axis, for two separate reasons.
+        # Ctrl+C is already the cross hair; and `PlotRange.center` sets
+        # (-r, +r) for r = max(|r0|, |r1|), which on a range whose rmin is 0
+        # can only ever grow -- measured on 'f', both (1200, 2400) and
+        # (3000, 3500) came back (0.0, 4000.0).  On a frequency axis that is
+        # a zoom-out wearing a centre's name.
         self.acts.center_amplitude = QAction("&Center", self)
         self.acts.center_amplitude.setShortcut("C")
         self.acts.center_amplitude.triggered.connect(
@@ -3481,6 +3514,43 @@ class Audian(QMainWindow):
             lambda x: self.apply_ranges("end", Panel.frequencies[0])
         )
 
+        # The frequency axis had no fit and no reset key at all -- only the
+        # arrows and Ctrl+wheel -- while the amplitude axis had both.  That
+        # asymmetry is the whole of "v resets the trace and the double click
+        # resets the spectrogram": each axis had half the vocabulary.
+        #
+        # `Panel.frequencies` and not `pointer_axes("frequency")`, which is
+        # what the two zoom actions above take: zoom is pointer directed
+        # because a zoom is aimed, and the fit/reset family takes the whole
+        # letter class -- `reset_amplitude` and `center_amplitude` both pass
+        # a hardcoded `Panel.amplitudes`.  It matters most for the reset: a
+        # key advertised as the way back to Nyquist must not depend on where
+        # the pointer happens to be resting, and `pointer_axes` can answer
+        # "" when it is over no plot at all.
+        self.acts.default_view_frequency = QAction("&Fit", self)
+        self.acts.default_view_frequency.setShortcut("Ctrl+V")
+        self.acts.default_view_frequency.setToolTip(
+            "Back to the frequency band the spectrogram opens at  (Ctrl+V)"
+        )
+        self.acts.default_view_frequency.triggered.connect(
+            lambda x: self.apply_ranges("default_view", Panel.frequencies)
+        )
+
+        # Not "&Fit Y": Y names the amplitude axis everywhere else in this
+        # UI -- the tool bar's "Fit Y" button, the "Y: fixed +-1" readout --
+        # so "Fit Y" inside a Frequency menu would be wrong twice.  The
+        # command palette renders these as "Fit  View > Frequency" beside
+        # "Fit Y  View > Amplitude", which is the same way the two pairs of
+        # zoom entries are already told apart.
+        self.acts.reset_frequency = QAction("&Reset", self)
+        self.acts.reset_frequency.setShortcut("Ctrl+Shift+V")
+        self.acts.reset_frequency.setToolTip(
+            "Show the whole band, 0 Hz to Nyquist  (Ctrl+Shift+V)"
+        )
+        self.acts.reset_frequency.triggered.connect(
+            lambda x: self.apply_ranges("reset", Panel.frequencies)
+        )
+
         freq_menu = menu.addMenu("Frequenc&y")
         freq_menu.addAction(self.acts.link_frequency)
         freq_menu.addAction(self.acts.zoom_frequency_in)
@@ -3494,6 +3564,13 @@ class Audian(QMainWindow):
         freq_menu.addAction(self.acts.frequency_down)
         freq_menu.addAction(self.acts.frequency_home)
         freq_menu.addAction(self.acts.frequency_end)
+        # The discoverable route to 0 Hz - Nyquist, which a reader who has
+        # set a narrow band needs and must not have to learn by folklore.
+        # The separator mirrors the amplitude menu's, which fences the zoom
+        # entries off from fit/reset/center.
+        freq_menu.addSeparator()
+        freq_menu.addAction(self.acts.default_view_frequency)
+        freq_menu.addAction(self.acts.reset_frequency)
 
         self.data_menus.append(freq_menu)
 

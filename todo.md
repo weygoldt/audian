@@ -20,7 +20,51 @@
 - [x] Toggling spec should not toggle through different spec vs trace panel scalings. That scaling can now be done continuously by dragging, so it should just enable or diable spec, nothing more. (F3 is on/off. `show_specs` was doing two jobs -- whether there is a spectrogram and how tall it is -- so every reader had to know which one it meant and the dragged split was stored four times over under a key nobody could see. One split now, and it survives the spectrogram being toggled off and back on, which it did not before. `PANEL_SPLIT_SETTING_VERSION` goes to 3: a version 2 file holds up to four splits and nothing says which one the reader wanted, so it is dropped with a logged warning.)
 - [x] double clicking the y axis (on spec and trace) should reset it. (Both axes of every lane, and it is not the same call on the two: a frequency axis opens at its full range, an amplitude axis opens *fitted to the data*. `reset` on an amplitude is what Shift+V does and goes to the format's full scale -- measured, a trace sitting in -0.117..0.129 goes to -1.000..1.000 -- which on recordings that peak at a few percent of full scale is a flat line, not a reset. So amplitude refits and frequency resets: both mean "the way the lane opened", which is what the same gesture already means on the panel splitter.)
 - [ ] The rest of "double-clicking any movable thing should reset it": the highpass and lowpass cutoff handles on the spectrogram and their two sliders, the envelope cutoff slider, the overlap slider, the navigator's window region, and the colour bar. Left out of the pass that did the axes because those have no existing reset to point the gesture at -- an axis had `PlotRange.reset` and `auto_fit_y` already, and "reset a highpass" has to be decided (0 Hz, i.e. the filter off, is the obvious answer and is still a decision).
-- [ ] A y axis limit field next to the nfft in the spec group of the bottom bar. This is the same want as "constrain default frequency axis" above and should be done once, as one control. Read `21169f6` before adding a widget to that bar: its width is the binding constraint on the 14 inch laptop, so measure the group's `minimumSizeHint` before and after.
+- [x] A y axis limit field next to the nfft in the spec group of the bottom bar. This is the same want as "constrain default frequency axis" above and should be done once, as one control. (One control, the Spectrogram tab's *Opens at*. It sets `PlotRange.rdefault`, which is read by `set_limits`' `# ranges:` block and by the new `default_view` operation and by nothing else -- deliberately **not** `rmax`, which is what `set_ranges` clips to and what `setLimits` hands pyqtgraph, so a band written there would take Nyquist away rather than merely open below it. Measured with a 2 kHz band: the lane opens 0-2000, `yLimits` is still `[0, 4000]`, a hand `setYRange(3000, 4000)` sticks, `end` reaches (2000, 4000), and `min_dr` stays 0.06103515625. The width budget `21169f6` asked about: the Spectrogram group is 535 px before and **535 px after** -- the row costs no width at all, the bar stays 551 and the window floor stays 734 -- and the price is 14 px of bar height, 154 to 168, because this group was tied-tallest at three rows. Ships with no band set. Absolute Hz, not a fraction of Nyquist: 0-2 kHz is a statement about the fish, and a dimensionless preference would open a 96 kHz recording at 0-24 kHz.)
+- [x] `v`/`Ctrl+V` and the double click now mean the same thing on both lanes. The frequency axis had the gesture and no key at all -- `setup_frequency_actions` defined link, two zooms, up, down, home and end and neither a fit nor a reset -- while the amplitude axis had `v` and `Shift+V` as well. `Ctrl+V` was bound to nothing anywhere in the tree. So: `Ctrl+V` is Fit on the frequency axis and `Ctrl+Shift+V` is Reset, the `Ctrl` pairing `+`/`-` vs `Ctrl++`/`Ctrl+-` already uses, and the double click calls whatever that lane's bare key calls. The amplitude branch of `reset_y_range` was NOT folded in with it: `10b8832` measured that a `reset` there gives (-1.0, 1.0) on a trace sitting in -0.117..0.129, which is a flat line and not a reset, and the `y_fixed` guard is what keeps the gesture from breaking a reader out of a mode the tool bar goes on claiming.
+- [ ] **`theme.collect_orphan_widgets` can segfault the test suite.** It
+  walks a snapshot of `QApplication.topLevelWidgets()` and calls
+  `setParent(holder)` inside that same loop, so a reparent can make Qt
+  destroy a widget a later iteration then dereferences -- and a dangling
+  wrapper is a segmentation fault, not a `RuntimeError`. Measured while
+  adding the band tests: pristine master runs the full suite 747 passed with
+  no crash; the same branch with the band tests in a module of their own,
+  which cost two more windows in the process, segfaulted in two runs out of
+  four, both times at `widget.parentWidget()` (theme.py, the
+  `if widget.parentWidget() is not None or widget.isVisible():` line), once
+  while building `test_parameterbar`'s fixture and once while building the
+  band module's own. The same three modules run alone pass, 165 of them, so
+  it is the whole suite's accumulated widget state and not any one module.
+  Worked around rather than fixed -- the band tests reuse a fixture that
+  already exists, so the suite builds no more windows than before -- because
+  the fix is a two-pass rewrite of that function (read, then reparent, with
+  a validity check before each touch) and it deserves its own commit and its
+  own measurement. It will bite again the next time anyone adds a test
+  module that opens a browser.
+- [ ] The colour ramp is fitted over the **whole** frequency axis, not over
+  the band on screen: `visible_block` crops in time only
+  (`spectrogramplot.py`), and `estimate_noiselevels` takes its floor from
+  `db[:, -nf:]`, the top 1/16 of the full axis
+  (`bufferedspectrogram.py`). So a 96 kHz recording opened at 0-2 kHz by
+  the new *Opens at* field is coloured by statistics dominated by 94 kHz
+  the reader cannot see. This is the thing most likely to be reported as
+  "the new setting broke the spectrogram", and it should be settled before
+  a narrow band is recommended for wideband files. Not measured -- the test
+  fixture is 8 kHz and the effect needs a wideband recording.
+- [ ] `hover_panel` is never cleared once the pointer leaves the stack: it
+  is set to None only inside `mouse_moved` (databrowser.py), which does not
+  fire on a Leave. So `Ctrl++`/`Ctrl+-`, which go through
+  `pointer_axes`, already act on the last lane the pointer visited after a
+  move onto the parameter bar. Pre-existing; found while deciding that the
+  new frequency fit/reset keys should take `Panel.frequencies` rather than
+  `pointer_axes`, which is why they do.
+<!-- Not a todo: measured, decided, and recorded so it is not rediscovered
+     as a bug.  `Ctrl+Shift+V` reaches the window action while focus is in a
+     text field (measured: `Ctrl+V` fires it 0 times, so paste survives;
+     `Ctrl+Shift+V` fires it once).  The only visible editable field in the
+     main window is `ChannelRailRow`'s electrode label, and the owner does
+     not rename channels -- numbers are enough -- so this is accepted rather
+     than fixed.  Revisit only if electrode labels start being used. -->
 - [ ] **The array panel should take the MAX over channels, not the mean.** The
   complaint is right and the fix first proposed is not: a signal that only ever
   sits on one or two electrodes -- a weakly electric fish moving over the grid --

@@ -19,6 +19,20 @@ class PlotRange(object):
         self.rmax = None
         self.rstep = None
         self.min_dr = None
+        #: Upper end this range *opens* at, when that is not `rmax`.
+        #:
+        #: `rmax` is the hard ceiling: `set_ranges` clips to it and
+        #: `set_limits` hands it to `setLimits`, so a range can never be
+        #: panned or zoomed past it.  That makes it the wrong place to put
+        #: a preference like "show 0-2 kHz of a 24 kHz spectrogram" -- the
+        #: reader would lose Nyquist rather than merely start below it.
+        #:
+        #: So the opening span is kept apart from the limit, which is a
+        #: distinction this class already draws for time: a recording an
+        #: hour long is clipped to an hour and opens at ten seconds (see
+        #: `set_limits`).  This is the same idea for frequency, and None
+        #: means "open at the limit", which is what every range did before.
+        self.rdefault = None
         # set as soon as the user zooms this range by hand.  An automatic
         # fit must never fight a deliberate zoom:
         self.user_locked = False
@@ -103,6 +117,27 @@ class PlotRange(object):
     def is_power(self):
         return self.axspec in Panel.powers
 
+    def default_max(self):
+        """The upper end this range opens at, which is not always its limit.
+
+        `rdefault` when one was set and it is below the limit, `rmax`
+        otherwise.  Clamped rather than trusted: a preference file outlives
+        the recording it was written beside, and a 2 kHz ceiling asked of a
+        recording whose Nyquist is 1 kHz would otherwise open the lane on a
+        band that does not exist.
+        """
+        if self.rmax is None:
+            return self.rmax
+        if self.rdefault is None or not np.isfinite(self.rdefault):
+            return self.rmax
+        if not np.isfinite(self.rmax):
+            return self.rdefault
+        return min(self.rdefault, self.rmax)
+
+    def set_default_max(self, rdefault):
+        """Set the upper end this range opens at.  None restores the limit."""
+        self.rdefault = rdefault
+
     def set_starttime(self, mode):
         for axx in self.axxs:
             for ax in axx:
@@ -143,12 +178,19 @@ class PlotRange(object):
                 if np.isfinite(self.rmin) and np.isfinite(self.rmax):
                     ax.setLimits(minYRange=self.min_dr, maxYRange=self.rmax - self.rmin)
         # ranges:
+        #
+        # What the range OPENS at, which the loop above has just established
+        # is not the same question as what it is clipped to.  Time has always
+        # opened at ten seconds of a recording clipped to its whole length;
+        # `default_max` lets a frequency range open at a band of a
+        # spectrogram clipped to Nyquist, and answers `rmax` for every range
+        # that was given no preference.
         for c in range(len(self.r0)):
             self.r0[c] = self.rmin
             if self.is_time():
                 self.r1[c] = 10
             else:
-                self.r1[c] = self.rmax
+                self.r1[c] = self.default_max()
             if not np.isfinite(self.r0[c]):
                 self.r0[c] = -1
             if not np.isfinite(self.r1[c]):
@@ -489,6 +531,28 @@ class PlotRange(object):
             rmax = +1
         self.set_ranges(rmin, rmax, None, channels, do_set)
 
+    def default_view(self, channels=None, do_set=True):
+        """Back to the span this range opened at.
+
+        `reset` goes all the way out to the limit; this goes back to
+        `default_max`, which is the same thing for every range that was
+        given no preference and is the preferred band for one that was.
+
+        The two are kept apart rather than folded together because the
+        reader needs both: a spectrogram that opens at 0-2 kHz has to have
+        a way back to Nyquist, and that way is `reset`.
+        """
+        if not self.is_used():
+            return
+        self.user_locked = False
+        rmin = self.rmin
+        if rmin is None or not np.isfinite(rmin):
+            rmin = -1
+        rmax = self.default_max()
+        if rmax is None or not np.isfinite(rmax):
+            rmax = +1
+        self.set_ranges(rmin, rmax, None, channels, do_set)
+
     def center(self, channels=None, do_set=True):
         if not self.is_used() or self.is_time():
             return
@@ -595,6 +659,7 @@ class PlotRanges(dict):
             "snap",
             "auto",
             "reset",
+            "default_view",
             "center",
         ]:
             setattr(self, m, partial(PlotRanges._apply, self, m))

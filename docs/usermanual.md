@@ -258,6 +258,55 @@ selected channels instead, which is what selecting a range of lanes with
 shift-click is for.
 
 
+## The frequency axis, and the band a spectrogram opens at
+
+The two y axes now have the same vocabulary. `v` fits the **amplitude** axis
+and `Shift+V` takes it out to the recording format's full scale; `Ctrl+V`
+puts the **frequency** axis back to the band the spectrogram opened at and
+`Ctrl+Shift+V` takes it out to the whole band, 0 Hz to Nyquist. That is the
+`Ctrl` pairing the zoom keys already use — `+`/`-` for amplitude,
+`Ctrl++`/`Ctrl+-` for frequency.
+
+**Double clicking a y axis does whatever that lane's bare key does.** On a
+trace it fits, the way `v` does. On a spectrogram it returns to the opening
+band, the way `Ctrl+V` does. There is one exception and it is deliberate: in
+*Y: fixed ±1* the lane opened at ±1, so the gesture goes back to ±1 rather
+than refitting and quietly dropping you out of a mode the tool bar is still
+claiming.
+
+There is no `Ctrl+C` to centre a frequency axis. `Ctrl+C` is the cross hair,
+and centring a range whose floor is 0 Hz can only widen it — measured, both
+1200–2400 Hz and 3000–3500 Hz "centre" to 0–4000.
+
+### Opens at
+
+Most recordings are opened to look at one band and no other. The
+**Spectrogram** tab's *Opens at* field says which: set it to 2 kHz and every
+spectrogram lane opens showing 0–2 kHz instead of 0–Nyquist, in this window
+and in every window afterwards. It is remembered in `settings.json`, so it
+is typed once.
+
+**It is a default view and not a limit.** The axis still zooms, pans and
+`Ctrl+→`s all the way to Nyquist, the deepest zoom is unchanged, and
+`Ctrl+Shift+V` shows the whole band in one key — which the field's own tool
+tip says, because a preference that hid part of a recording with no visible
+way back would be a trap rather than a convenience.
+
+The number is absolute hertz, not a fraction of Nyquist. 0–2 kHz is a
+statement about the fish, so it should mean the same 2 kHz on an 8 kHz
+recording and on a 96 kHz one. A band larger than the recording's Nyquist is
+clamped to it rather than refused, because a preference outlives the
+recording it was written beside.
+
+Audian ships with no band set, so nothing changes until you type a number.
+
+> **One caveat for wideband recordings.** The colour ramp is still fitted
+> over the *whole* frequency axis, not over the band you are looking at, so
+> a 96 kHz recording opened at 0–2 kHz is coloured by statistics dominated
+> by the 94 kHz you cannot see. Narrow bands on wideband files may want the
+> colour bar dragged by hand until that is settled.
+
+
 ## Annotations from a session bundle
 
 A **session bundle** is what a fakefish run writes beside its recording: a
