@@ -1,11 +1,29 @@
 # Low hanging fruit
 
-- [ ] `set_channels` raises `IndexError` when the channels left showing hold
-  none of the selected ones: `show_selected_channels[-1]` on an empty list
-  (databrowser.py, the "current channel must be in shown and selected
-  channels" block).  Hit while writing the label-editing tests -- select only
-  channel 2, then hide it.  Pre-existing; the test works around it by
-  selecting channel 0 first.
+- [x] `set_channels` falls back to the shown channels when the channels left
+  showing hold none of the selected ones, instead of asking an empty list for
+  its last element.  The clamp is the one that block already ran -- the
+  nearest candidate at or after the current channel, else the highest -- with
+  the candidates widened from shown-and-selected to merely shown when the
+  intersection comes out empty.  Two ordinary gestures produced it: clicking
+  lane 2 makes `[2]` the whole selection, and hiding lane 2 leaves the two
+  sets disjoint.
+
+  Not "leave the current channel where it was", which is what the guard at
+  `select_next_channel` does and was the obvious answer: `stepped_channel`
+  reads `show_channels.index(self.current_channel)`, so a current channel
+  left on a lane that has just gone is a `ValueError` on the reader's next
+  arrow key, and an `IndexError` traded for a `ValueError` two gestures later
+  is not a fix.  `set_channels` is the only place that invariant is enforced,
+  which is exactly what lets `select_next_channel` and
+  `select_previous_channel` go on leaving their own anchor alone.  With
+  nothing shown at all it does stay where it was: `current_channel` is an
+  index -- the borders, the focused spectrogram lane and the tool bar's `%d`
+  all take it -- and there is no "no channel" value to reach for.
+
+  The workaround in `test_hiding_the_lane_the_grips_are_on_drops_the_selection`
+  is gone with it, and a regression test in the same file takes both gestures
+  and then presses the arrow key the `ValueError` would have been waiting on.
 
 - [ ] StartupPage is the last floor at 734 px: three fixed columns capped at
   1100. It is what stops the window going below 734, so it is next if audian

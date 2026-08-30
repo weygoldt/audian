@@ -8752,19 +8752,40 @@ class DataBrowser(QWidget):
                 ]
             if current_channel is not None:
                 self.current_channel = current_channel
-            # current channel must be in shown and selected channels:
+            # The current channel must be one that is both shown and
+            # selected -- and when nothing is both, one that is at least
+            # shown.  Nothing is both after two ordinary gestures: clicking
+            # lane 2 makes `[2]` the whole selection (`rail_clicked`), and
+            # hiding lane 2 leaves the two sets disjoint, which used to ask
+            # an empty list for its last element a few lines below.
+            #
+            # Falling back to the shown channels rather than leaving the
+            # current one where it stood, because `stepped_channel` reads
+            # `show_channels.index(self.current_channel)`: a current channel
+            # on a lane that has gone is a `ValueError` on the next arrow
+            # key.  This method is the only place that invariant is
+            # enforced, which is what lets `select_next_channel` and
+            # `select_previous_channel` leave their own anchor alone when
+            # their intersection is empty.  With nothing shown at all it
+            # stays where it was: `current_channel` is an index -- the
+            # borders and the focused spectrogram lane are chosen with it,
+            # the tool bar prints it with `%d` -- so there is no "no
+            # channel" value to reach for.
             show_selected_channels = [
                 c
                 for c in range(self.data.channels)
                 if c in self.show_channels and c in self.selected_channels
             ]
-            if self.current_channel not in show_selected_channels:
-                for c in show_selected_channels:
+            candidates = show_selected_channels or [
+                c for c in range(self.data.channels) if c in self.show_channels
+            ]
+            if candidates and self.current_channel not in candidates:
+                for c in candidates:
                     if c >= self.current_channel:
                         self.current_channel = c
                         break
-                if self.current_channel not in show_selected_channels:
-                    self.current_channel = show_selected_channels[-1]
+                if self.current_channel not in candidates:
+                    self.current_channel = candidates[-1]
             # `show_channels` narrows what the mean averages, the same way
             # solo and mute do - see `apply_channel_visibility`:
             self.apply_mean_spectrogram()

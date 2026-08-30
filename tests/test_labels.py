@@ -1918,17 +1918,53 @@ def test_hiding_the_lane_the_grips_are_on_drops_the_selection(labelling):
     picked = list(browser.selected_channels)
     current = browser.current_channel
     try:
-        # `set_channels` raises IndexError on `show_selected_channels[-1]`
-        # when the shown set ends up holding none of the selected ones.  That
-        # is a pre-existing crash and not this test's subject, so leave 0
-        # selected and current before taking lane 2 away.
-        browser.set_channels(selected_channels=[0], current_channel=0)
-        settle()
         browser.set_channels(show_channels=[c for c in shown if c != 2])
         settle()
         assert browser.selected_label is None
         assert all(o.editor is None for o in browser.label_overlays)
         assert "editing" not in browser.label_status_text()
+    finally:
+        browser.set_channels(show_channels=shown)
+        browser.set_channels(selected_channels=picked, current_channel=current)
+        settle()
+
+
+def test_hiding_the_only_selected_channel_moves_the_current_one(labelling):
+    """Two gestures a reader makes without thinking, and it used to crash.
+
+    Clicking a lane makes that channel the whole selection -- `rail_clicked`
+    assigns `selected_channels = [channel]` -- so selecting lane 2 and then
+    hiding lane 2 leaves the shown set and the selected set disjoint, and
+    `set_channels` asked an empty list for its last element.  That is the
+    `IndexError` the test above used to select channel 0 to walk around.
+
+    The current channel has to come to rest on a channel that is *shown*
+    rather than stay where it was: `stepped_channel` reads
+    `show_channels.index(self.current_channel)`, so a current channel that
+    is no longer on screen is a `ValueError` on the reader's next arrow key
+    -- one crash traded for a later one.  Hence the arrow key here rather
+    than an assertion that stops at the invariant.
+    """
+    browser = labelling
+    shown = list(browser.show_channels)
+    picked = list(browser.selected_channels)
+    current = browser.current_channel
+    try:
+        browser.set_channels(selected_channels=[2], current_channel=2)
+        settle()
+        assert browser.current_channel == 2
+        assert browser.selected_channels == [2]
+
+        browser.set_channels(show_channels=[c for c in shown if c != 2])
+        settle()
+        assert 2 not in browser.show_channels
+        assert browser.current_channel in browser.show_channels
+        # the nearest shown channel at or after the one that went, which is
+        # the rule the shown-and-selected case has always followed
+        assert browser.current_channel == 3
+
+        browser.next_channel()
+        settle()
     finally:
         browser.set_channels(show_channels=shown)
         browser.set_channels(selected_channels=picked, current_channel=current)
