@@ -1,5 +1,16 @@
 # Recon: threading-audit
 
+> **Stale in four places, and the threading work is done.**  Read
+> `../02-status.md` first.  Measured against the tree today: the refilter is
+> 513 ms before chunking and 407 ms after, not ~1.5 s; `estimate_noiselevels`
+> over the whole 16-channel buffer is 24.5 ms, not the 424 ms section 1.6
+> implies; `setImage` is 0.1 ms, not ~22 ms per channel, because pyqtgraph
+> defers everything to `render()`; and section 5.1's pool sized to cores is the
+> wrong shape -- the kernels are DRAM-bandwidth-bound at 16 channels and four
+> threads measure 1.44x / 1.07x / 0.92x.  Section 5.3's `RawReady(gen, buf)` is
+> also a torn read: `_recycle_buffer` shifts the loader's array in place.  What
+> shipped is one worker thread and a serial pipeline; see `src/audian/tasks/`.
+
 # Concurrency & responsiveness audit — audian @ `/home/weygoldt/wrk/tools/claudian/.claude/worktrees/qt6-migration`
 
 ## 0. Executive finding

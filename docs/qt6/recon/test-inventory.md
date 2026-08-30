@@ -1,5 +1,12 @@
 # Recon: test-inventory
 
+> **This file is not a test inventory.**  Its body is `dependency-graph.md`
+> with a different first line -- an intra-package import and layering audit.
+> There is no test inventory in `docs/qt6/`.  To see what gates your work, read
+> `tests/` directly: `test_shutdown.py` covers the exit path,
+> `test_thread_boundary.py` the data/GUI split, `test_responsiveness.py` the
+> event loop under load, and `test_panelsplitter.py` the lane layout.
+
 # audian intra-package dependency graph & layering audit
 
 Package root: `/home/weygoldt/wrk/tools/claudian/.claude/worktrees/qt6-migration/src/audian/` — 35 modules, 32,364 LOC.

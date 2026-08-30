@@ -1,23 +1,41 @@
 # Where the migration is, and what to do next
 
-Written to be picked up cold.  Last updated after the clean-shutdown
-work, the first of the three items below.
+Written to be picked up cold.  Last updated after all three of the items
+below landed on `master`.
 
-## State: Stage A is done, Stage B and C have not started
+## State: Stage A is done, Stage B is most of the way
 
-Branch `qt6-migration`, worktree `.claude/worktrees/qt6-migration`, cut from
-`master` at `10c5004`.  **`master` is untouched and is still the tested PyQt5
-build.**  18 commits, 34 files, +2145/-146.
+**Everything described here is on `master`.**  The port landed first, then
+the three items below as three branches merged in the order clean shutdown ->
+threading -> scoped enums.  There is no separate migration branch to chase:
+`qt6-migration` is a stale pointer at the pre-Stage-B commit and `master` is
+the tested build.  The three items together are 23 commits, 42 files,
++2537/-782.
 
-The application runs on PySide6 6.11.2 / Qt 6.11.2.  What has *not* happened
-is everything the brief calls architectural modernisation: no threading, no
-god-object split, no plugin boundaries, no model/view.  About nine of the 25
-definition-of-done criteria are met; the list is in the section below.
+The application runs on PySide6 6.11.2 / Qt 6.11.2.  Since the port:
+
+- **Shutdown is one path.**  `Audian.closeEvent` exists and the window
+  manager's button, `Ctrl+Q` and the last tab all run the same teardown.
+- **The DSP runs off the GUI thread.**  There is a `src/audian/tasks/`
+  package with a task manager and one compute worker; a refilter no longer
+  freezes the event loop, and a test holds that to a number.
+- **The enums are scoped.**  All 528 code references, and the suite runs
+  under `PYSIDE6_OPTION_PYTHON_ENUM=16` by default so the pass cannot rot.
+
+What still has *not* happened is the rest of the brief's architectural
+modernisation: no god-object split, no plugin boundaries, no model/view.
+`databrowser.py` is 385 KB and `audian.py` 214 KB, both larger than before.
+Roughly fifteen of the 25 definition-of-done criteria are met and several
+more are partly met; the honest scoring is under "What is still missing".
 
 Two environments, deliberately separate:
 
-    .venv        PyQt5 5.15.11   -- the recorded baseline, nothing else
+    .venv        PyQt5 5.15.14   -- the recorded baseline, nothing else
     .venv-qt6    PySide6 6.11.2  -- audian installed editable; the real one
+
+Both live *inside a worktree*, not in the main checkout, and each worktree
+needs its own -- see the hazards section.  (5.15.14, not the 5.15.11 this
+document used to say.)
 
 `pyproject.toml` and `uv.lock` both name PySide6 and neither mentions PyQt5.
 `.venv` is stale on purpose: it is what the baseline numbers were measured
@@ -40,11 +58,18 @@ matrices disagree about a directory listing.
 
 | gate | PyQt5 baseline @ `10c5004` | PySide6 now |
 | --- | --- | --- |
-| `pytest tests/` | 791 passed, 1 failed, 197 s | **798 passed, 1 failed, 289 s** |
+| `pytest tests/` | 791 passed, 1 failed, 197 s | **837 passed, 1 failed, 276 s** |
 | action inventory | 124 actions, 102 bound | same, one key added (below) |
 | action trigger sweep | 115 fire clean | 115 fire clean |
 | `smoke_test --interact --census` | 56/56, 31 top-level, 0 parentless | **identical** |
 | matrix | 8 configs green | 8 configs green |
+| `import audian` under `PYSIDE6_OPTION_PYTHON_ENUM=16` | n/a | **OK** |
+
+Measured on merged `master` at `4e35927`.  837 is 791 plus the four
+shutdown tests that used to be `xfail`, plus the 39 the threading work added
+(`test_thread_boundary`, `test_chunked_dsp`, `test_tasks`,
+`test_responsiveness`), plus the port's own additions.  There is no `xfail`
+column any more and no ERROR row: both are gone with the `close` shadows.
 
 The one failure is `test_theme_module_is_lint_clean`, and it is decided by
 your environment rather than by the tree.  It shells out to a bare `ruff`
@@ -87,10 +112,18 @@ the startup screen draws the recent-files column and therefore the capturing
 worktree's own path.  Anything else above 0.00% on a Qt6-to-Qt6 comparison is
 a real regression, not rasteriser noise.
 
-## Do this next
+## The three items, and what they turned into
 
-Three items, chosen by the owner, independent enough to run in parallel
-worktrees.
+Chosen by the owner and done in three parallel worktrees, then merged in the
+order below.  The order mattered: clean shutdown is the only one that clears
+the suite's ERROR, so until it landed neither of the others could tell a
+regression from the baseline, and it renames methods the threading work would
+otherwise have called wrongly.  Enums went last because a rename is the
+easiest thing to replay over someone else's edits -- and because its gate can
+simply be re-run afterwards to catch anything the other two introduced.
+
+The merge was clean: no textual conflicts, and every enum reference the
+threading work added was already scoped.
 
 ### 1. Clean shutdown -- DONE
 
@@ -167,67 +200,198 @@ firing into a closed `DataLoader` and recommends deleting that timer outright
 
 Criteria 12, 19, 20.
 
-### 2. Threading -- large, and the biggest user-visible win
+### 2. Threading -- PARTLY DONE
 
-**There is currently exactly one thread.**  `grep -rn "QThread|QRunnable|QThreadPool"`
-over `src/` returns one hit and it is a comment (`buffereddata.py:243`).
-Everything -- decoding, filtering, FFT, envelope, pyramid build, label IO,
-region export, analyzer plugins -- runs on the GUI thread.  Refiltering and
-re-spectrogramming 16 channels costs ~1.5 s, and the only concession today is
-a wait cursor and a debounce timer.
+The compute path is off the GUI thread and gated.  The I/O, playback and
+region paths are not; they are the largest single thing still owed, and they
+are itemised under "What is still missing".
 
-`docs/qt6/recon/threading-audit.md` proposes a concrete architecture and is
-worth reading in full: `QThreadPool`/`QRunnable` for the stateless jobs that
-work from an immutable snapshot, and a worker `QObject` on a `QThread` for
-the three things that own a handle -- the `DataLoader` (stateful, not
-reentrant, exactly one thread may touch it), persistence, and playback.
+There is now a `src/audian/tasks/` package: `tokens.py` (a `CancelToken`
+wrapping a `threading.Event`, deliberately not a Qt object so it still works
+with no event loop running), `manager.py` (`TaskManager` -- epoch counter,
+cancel token, in-flight count, bounded join, shutdown) and `compute.py`
+(`ComputeWorker` on one `QThread`).  `plan_chain()` decides on the GUI thread
+what a recompute would do, `run_job()` executes it on the worker into **fresh
+arrays**, and the GUI swaps them in with one assignment each.
 
-Design cancellation, shutdown and stale-result handling explicitly; the brief
-is specific about that.  Criteria 10, 11, 12, 16.
+Three decisions are load-bearing and should not be undone casually.
 
-**Shutdown is now item 1's, and the two meet in one method.**  Whatever pool
-or worker thread this adds has to be joined from the `Audian.closeEvent` that
-already exists, as an edit to it rather than a second teardown path -- git
-will not report a conflict between two methods of the same class, and the
-result is a process that accepts the close event and exits with a filter still
-running against a buffer whose owner is being torn down.  Order inside
-`closeEvent`: discard in-flight results, drop queued runnables, wait with a
-bounded timeout, quit and wait each worker thread, and only then the existing
-`teardown()`.  `tests/test_shutdown.py` is the natural home for an assertion
-that nothing is still running afterwards; it already has the window fixture.
+- **One worker thread and a serial pipeline, not a pool sized to cores.**
+  The kernels do release the GIL, but at 16 channels each buffer is 34-68 MB
+  and they are DRAM-bandwidth-bound: four threads measured **1.44x** for
+  `sosfilt`, **1.07x** for `spectrogram` and **0.92x** for `decibel` on this
+  four-core box.  What threading buys here is event-loop availability, not
+  throughput.  `recon/threading-audit.md` §5.1 recommends
+  `setMaxThreadCount(max(2, cpu_count()//2))`; that recommendation is wrong
+  for this workload and was not followed.
+- **The worker allocates its own output, never filling a live buffer.**  The
+  GUI paints from those buffers for the whole time the worker runs.  The
+  recon's proposed `RawReady(gen, buf)`, which hands the loader's own buffer
+  to a worker, is a torn read: `_recycle_buffer` shifts that array *in place*.
+- **The GUI joins before it touches shared memory.**  `cancel_and_wait()`
+  runs before every buffer move and every parameter change, and
+  `TaskManager.shutdown()` is the **first** statement of `Audian.teardown()`,
+  before any browser lets go of the recording the worker is reading.
 
-Also unowned and on this path: `buffereddata.py`'s `request_update` timer,
-described under item 1.
+Chunking landed before any thread existed, which is what made the rest safe:
+`sosfilt` chunked at 1 MB carrying `zi`, the spectrogram at 128 hop-aligned
+columns with an `(nfft-hop)` carry-back.  Both are bit-identical to the
+whole-buffer call (`array_equal`, three chunk sizes each) and both are
+*faster* -- `sosfilt` -24%, spectrogram -19.5%, the whole chain 513 -> 407 ms.
+Cancellation granularity is 1.4 ms / 10.6 ms instead of a whole 27 s buffer.
+The envelope is the exception: `sosfiltfilt` is one call, so its granularity
+is 247 ms, which is stated in the code rather than hidden.
 
-### 3. Scoped enums -- mechanical, but not a `sed`
+Criteria 10, 11 and 16 are met; 12 is met for the workers that exist.
 
-194 `Qt.*` references in `src/audian/` alone, 317 across `src`, `tests` and
-`scripts`.  They all *work*: PySide6 6.11 ships forgiving-enum mode by
-default.  The brief asks for scoped enums anyway, and the point is that the
-tree should stop reading as a PyQt5 application that imports PySide6.
+### 3. Scoped enums -- DONE
 
-Three traps:
+**528 code references across 23 files, over 20 owner classes.**  Rewritten by
+an AST-only tool that touches `ast.Attribute` nodes and therefore cannot see
+comments or strings; the 19 prose lines were done by hand in a separate
+commit.  The resolver now reports zero unscoped names in the tree.
 
-- **`Qt.*` is not the job, it is about 58% of it.**  Ten other classes own
-  unscoped enum members here, 141 more references in `src/audian` alone:
-  QSizePolicy 40, QPalette 30, QKeySequence 20, QIcon 13, QDialogButtonBox
-  12, QPainter 8, QEvent 7, QToolButton 4, QMessageBox 4, QAbstractItemView
-  3.  An agent scoped to `Qt.*` will not touch `labeloverlay.py:813`'s
-  `QIcon.Normal`, and under `PYSIDE6_OPTION_PYTHON_ENUM=16` that is one of
-  the first things the import hits -- at which point the gate looks
-  unachievable rather than half-done.  Enumerate the owners, do not take a
-  number from this document.
-- **19 of the references are inside comments and docstrings.**  Two of them
-  (`theme.py:1936`, `timeplot.py:106`) are warnings *not* to set a flag.
-  Rewriting those changes documentation into something false.
-- The dangerous direction is not the rename, it is int-ness (below).
+`tests/conftest.py` sets `PYSIDE6_OPTION_PYTHON_ENUM=16` for the whole suite,
+so the pass cannot rot silently.  audian itself never sets it: production
+behaviour is identical either way, and this is a lint, not a runtime
+requirement.
 
-Verify with `PYSIDE6_OPTION_PYTHON_ENUM=16`, which turns forgiving mode off.
-Today `import audian` fails immediately under it.  When it does not, the pass
-is complete, and that env var is worth putting in CI -- there is no CI gate
-at all right now (`.github/workflows/uploaddocs.yml` builds docs only).
+Three things this turned up that the section it replaces got wrong.
+
+- **`Qt.*` was about 56% of the job, not the job.**  297 of the 528 are
+  rooted at `Qt.`; the rest belong to QEvent, QSizePolicy, QSettings,
+  QPalette, QKeySequence, QIcon, QDialogButtonBox, QPainter and twelve more.
+  The first thing the import hit under the flag was `QIcon.Normal`.
+- **The two "do not set" warnings are at `theme.py:1966` and
+  `timeplot.py:103`**, not the 1936 and 106 this document used to give -- and
+  they drift in *opposite* directions, so no uniform correction finds them.
+  Both are `QGraphicsItem.` references, and both were deliberately left
+  unscoped: they warn against setting a flag, and scoping them would turn
+  documentation into a claim about code that does not exist.
+- **The gate cannot be trusted to have taken effect just because the
+  environment variable is set.**  Shiboken writes its *own* resolved value
+  into `PYSIDE6_OPTION_PYTHON_ENUM` as it loads -- the string `"True"` for
+  the default mode -- after which `setdefault` does nothing while the
+  variable looks deliberately set.  Only "was PySide6 already imported" can
+  tell a developer's choice from shiboken's stamp, which is why `conftest.py`
+  checks that and raises rather than passing vacuously.
 
 Criterion 6.
+
+## What is still missing
+
+Against `qt6migration.md`'s 25 criteria.  Fifteen are met, five partly, five
+not at all.
+
+| # | criterion | state |
+| --- | --- | --- |
+| 1-5 | runs on PySide6/Qt6, PyQt5 gone, workflows and science preserved, shims removed | met |
+| 6 | Qt6 enum conventions | met -- 528 references, gated under the strict flag |
+| 7 | UI/domain coupling reviewed | **partly** -- the data layer lost its plot items; the widgets still own the domain |
+| 8 | main window not a god object | **no** -- `audian.py` 214 KB, `databrowser.py` 385 KB, both grew |
+| 9 | model/view where appropriate | **no** |
+| 10 | deliberate threading/task architecture | met for compute; I/O and playback still synchronous |
+| 11 | GUI objects only touched from the GUI thread | met, and enforced by `tests/test_thread_boundary.py` |
+| 12 | worker cancellation/shutdown safe | met for the workers that exist |
+| 13 | explicit plugin API boundaries | **no** |
+| 14 | visualisation separated from domain | **partly** |
+| 15 | large data not copied unnecessarily | **partly** -- swap-don't-fill costs one spare buffer per trace |
+| 16 | core interactions responsive | met, and held to a number |
+| 17-18 | representative tests, compared against baseline | met |
+| 19-21 | lifecycle clean, shutdown clean, dead Qt5 code gone | met |
+| 22 | understandable package boundaries | **partly** -- `tasks/` is new and clean; the two big modules are not |
+| 23 | decisions documented | met -- commit bodies and this file |
+| 24 | more maintainable and testable | **partly** |
+| 25 | feels like professional desktop software | **partly** -- see the playback freeze below |
+
+The detail, in rough order of how much a user would feel it.
+
+### Still on the GUI thread
+
+- **Playback.**  The largest single item.  `PlayAudio.play()` calls `stop()`
+  whenever a stream exists, and `stop()` is a Python fade loop plus
+  `sounddevice.sleep(200)` plus a spin on the caller's thread -- so pressing
+  play twice is an unconditional **~200 ms freeze**, the only fixed-length one
+  left.  `mark_audio` also guesses the cursor position from a 50 ms `QTimer`
+  instead of reading `PlayAudio.index`.  This was skipped deliberately rather
+  than for lack of a plan: **neither gate can see audio behaviour** -- both
+  run offscreen with no device -- so a regression here would ship unnoticed.
+  Anyone taking it on should write the observability first.
+- **Decoding on scroll.**  Crossing a buffer boundary still decodes on the GUI
+  thread (22-43 ms on the two-channel file, more at 16).  The torn-read hazard
+  is currently handled by *joining* the workers before every buffer move,
+  which is correct but means the scroll is synchronous and now also pays a
+  bounded ~11 ms join when a refilter happens to be in flight.  The recon's
+  `IoWorker` owning the `DataLoader` is the intended fix.
+- **Region read and export.**  `analyze_region`, `save_region` and
+  `play_region` still slice through `BufferedArray.__getitem__` on the GUI
+  thread under a wait cursor, with no progress and no cancel.  These are the
+  only operations whose cost is **unbounded by design** -- a region can be
+  arbitrarily long.
+- **The decibel half of the spectrogram upload** (~15.8 ms per channel, ~240
+  ms for 16) is worker-safe and still runs on the GUI thread.  Moving it means
+  splitting `SpecItem`'s upload into a worker-side decibel and a GUI-side
+  `setImage`; the render half cannot move at all, because `render()` runs
+  inside `paint()`.
+
+### Polling that should be a signal
+
+`overview_timer` still `waitpid()`s every compression child every 250 ms, and
+`FullTracePlot._timer` still self-rearms on a backoff -- both while the
+navigator may be hidden.  Nothing here is a measured freeze, which is why it
+was the first thing dropped.
+
+### Not started at all
+
+The brief's remaining architecture: the god-object split (criterion 8),
+model/view for the important collections (9), explicit plugin boundaries (13),
+and the package-boundary work (22).  `databrowser.py` grew from 373 KB to
+385 KB and `audian.py` from 207 KB to 214 KB over this work -- the threading
+made them *more* capable, not smaller.  `01-plan.md`'s Stage C is untouched:
+no `LaneLayoutSolver`, no `LabelController`, no `RecordingSession`.
+
+### Known-flaky tests
+
+Two, and they are different in kind.
+
+- `tests/test_panelsplitter.py::test_every_gesture_...[resize]` is
+  **pre-existing** and load-sensitive: a window resize behind a 100 ms
+  debounce with only `pump(0.3)` of margin.  It failed once for each of three
+  independent agents under concurrent load and passed standalone every time
+  (150 passed).  The real fix is the layout-solver extraction that makes the
+  arithmetic testable without a GUI.
+- `tests/test_responsiveness.py` was **introduced by the threading work** and
+  is now fixed.  Its guard asserted the synthetic chain took longer than
+  `MIN_JOB_MS`, calibrated at 120 ms from a *standalone* run.  Inside the full
+  suite the same chain takes 119 ms -- faster, because scipy's caches are
+  already warm -- so the guard fired on a 1 ms margin.  The floor is now four
+  tick intervals with the chain sized to leave real headroom.  Worth
+  remembering as a shape: a threshold measured cold does not hold warm.
+
+### Loose ends worth an hour each
+
+- **`tests/test_theme.py` shells out to a bare `ruff`.**  It is on no `PATH`
+  this repo controls, so the same test reports `FileNotFoundError`, or 18
+  findings, or a pass, depending on whose shell runs it.  `sys.executable -m
+  ruff` and a pinned version would make it a gate instead of a coin flip.
+- **`PYSIDE6_OPTION_PYTHON_ENUM=16` is a hazardous CI gate.**  Under it,
+  PySide6 6.11.2 **aborts the interpreter** (SIGABRT, exit 134, no traceback)
+  when a QtWidgets call gets a wrong argument type, instead of raising
+  `TypeError` -- shiboken builds its own error path by reading unscoped names.
+  Nothing takes that path today (the suite has no `pytest.raises(TypeError)`),
+  and `conftest.py` says so where someone adding one would see it.  There is
+  still no CI at all: `.github/workflows/uploaddocs.yml` builds docs only.
+- **Peak RSS is not gated.**  Swapping result buffers instead of filling them
+  in place raises peak memory by one buffer per derived trace (34 MB filtered,
+  68 MB spectrogram at 16 channels).  That is stated in a docstring and
+  measured by nothing.
+- **`recon/threading-audit.md` now contradicts the tree** in four places: the
+  1.5 s refilter, the 424 ms decibel, the `setImage` cost and the pool-sizing
+  recommendation.  The corrections are in the commit bodies and in the new
+  modules' docstrings, but that report still reads as authoritative.
+  `recon/test-inventory.md` is worse: it is a copy of
+  `recon/dependency-graph.md` with a different first line, so the one document
+  named for the test suite hands you an import graph.
 
 ## What Qt6 actually broke, and what it did not
 
@@ -287,7 +451,35 @@ without a GUI.
 ## Claims that were checked and did NOT hold
 
 The reports in `docs/qt6/recon/` state some of these.  Do not re-adopt them.
+Several were stated in *this* file, which is why it now carries the
+corrections rather than the claims.
 
+- **`PYSIDE6_OPTION_PYTHON_ENUM=16` has nothing to do with int-ness.**  This
+  is the one most worth reading twice, because this document used to put the
+  flag and the int-ness warning in the same breath and they are unrelated.
+  The flag removes the bare aliases from the owning class namespace and
+  changes nothing else; int-ness semantics are byte-identical with and
+  without it.  So the flag cannot surface a single int-ness bug, and every
+  int-ness bug the port could still have is already live at default settings.
+- **"Enums are no longer int-like" is false as a blanket rule.**  Ten of the
+  fifty enum types audian touches still are.  The blanket version is worse
+  than the truth: it makes the safe cases look unsafe and hides that the
+  asymmetry is per-enum.  For the record, the shape that caused 29 of 45
+  failures during the port -- `(button() & Qt.LeftButton) > 0` -- has **zero**
+  survivors, and the tree applies no `int()`, arithmetic or int-comparison to
+  any Qt enum.
+- **A pool sized to cores is the wrong shape for this DSP.**  The kernels do
+  release the GIL, but at 16 channels the buffers are 34-68 MB and the work is
+  DRAM-bandwidth-bound: four threads measured 1.44x / 1.07x / 0.92x.
+  `recon/threading-audit.md` §5.1 recommends sizing to cores; that buys
+  jitter, memory and lock contention for nothing.
+- **The refilter does not cost ~1.5 s.**  It was 513 ms before the chunking
+  and 407 ms after, on the 16-channel/20 kHz/27 s buffer this document's own
+  number was supposed to describe.  The *shape* of the finding held -- a
+  total, blocking freeze -- and the number did not.  Two in-tree comments are
+  wrong the same way and in the same direction: `buffereddata.py`'s "424 ms of
+  decibel" is 24.5 ms measured, and `specitem.py`'s "~22 ms of `setImage` per
+  channel" is 0.1 ms, because pyqtgraph defers everything to `render()`.
 - **A PySide6 finaliser calling into a destroyed C++ object does not
   raise.**  Both `DataBrowser.close` and `FullTracePlot.close` were called on
   invalidated wrappers and neither raised; run against a real window, neither
@@ -348,6 +540,24 @@ The reports in `docs/qt6/recon/` state some of these.  Do not re-adopt them.
   that wrong offscreen costs a wedged process rather than an error: the
   failure path in `load_data` raises a modal `QMessageBox.critical`, and
   there is no window manager to close it.
+- **A duration threshold measured standalone does not hold in the suite.**
+  `test_responsiveness.py` asserted its synthetic chain took longer than
+  120 ms, measured at 163 ms on its own.  In the full suite the same chain
+  takes 119 ms -- *faster*, because scipy's caches are already warm -- and the
+  guard fired on a 1 ms margin.  Calibrate any such floor against the warm
+  process, and leave the margin in the work rather than in the constant.
+- **Verify the `recon/` reports before acting on them.**  They are dense and
+  genuinely useful and they are also where most of the disproved claims in
+  this file came from.  Across this round about twenty-five stated claims
+  were checked and did not hold -- including several in *this* document and
+  several in the instructions handed to the agents.  Their line numbers have
+  drifted non-uniformly (+30 in `theme.py`'s back half, -3 in `timeplot.py`),
+  and at least one citation points at a different statement than the one it
+  describes.  Re-locate everything by symbol.
+- **Three agents in three worktrees worked, and the cap is the machine.**
+  Concurrency is `min(16, cpus - 2)`, so a four-core box runs two at a time
+  whatever you ask for -- and that contention is what surfaces the
+  `[resize]` flake above.
 
 ## Standing constraints
 
