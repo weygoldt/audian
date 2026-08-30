@@ -4605,6 +4605,9 @@ class Audian(QMainWindow):
         if not isinstance(browser, DataBrowser) or browser.parambar is None:
             return
         browser.set_side_panel(shown)
+        # One keystroke is one gesture, which is the whole debounce: the
+        # write is here and never on the splitter's per-move signal.
+        browser.save_side_panel()
 
     def sync_side_panel(self, browser) -> None:
         """Point the View menu's tick at what this browser's panel is doing.

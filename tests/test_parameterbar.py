@@ -678,6 +678,141 @@ def test_showing_the_panel_does_not_steal_the_keyboard(browser):
         pump(0.2)
 
 
+def test_the_panel_width_is_remembered(browser):
+    """Written at the end of the gesture, and never during it.
+
+    `save_setting` reads, updates and rewrites the whole settings file, and
+    one drag of the handle is a hundred mouse moves -- measured,
+    `splitterMoved` fires once per mouse move and not at all on release, so
+    the write hangs off the handle's release the way `finish_panel_split`
+    does and not off the signal.
+
+    And the width is kept while the panel is shut: closing it is how a
+    reader parks it, and reopening on the default rather than on the width
+    they chose would make the toggle lossy.
+    """
+    from audian.databrowser import DataBrowser
+
+    view = browser
+    before = view.side_panel_width
+    try:
+        # what a drag ends with: the splitter at a new size, then release
+        view.side_split.setSizes([view.width() - 300, 300])
+        settle()
+        view.finish_side_panel_drag()
+        settle()
+        assert view.side_panel_width == 300
+        saved = view.side_panel_settings()
+        assert saved.get("width") == 300
+        assert saved.get("open") is True
+        assert saved.get("version") == DataBrowser.SIDE_PANEL_SETTING_VERSION
+
+        # shut it: the state is written, the width is not forgotten
+        view.set_side_panel(False)
+        view.save_side_panel()
+        settle()
+        saved = view.side_panel_settings()
+        assert saved.get("open") is False
+        assert saved.get("width") == 300
+
+        # and it comes back at the width the reader left, not the default
+        view.set_side_panel(True)
+        settle()
+        pump(0.3)
+        assert view.side_split.sizes()[1] == 300
+    finally:
+        view.set_side_panel(True)
+        view.side_split.setSizes([view.width() - before, before])
+        settle()
+        view.finish_side_panel_drag()
+        settle()
+        pump(0.2)
+
+
+def test_a_hand_edited_panel_width_is_clamped(browser):
+    """A settings file is a file a reader may edit by hand.
+
+    The ladder is `restore_panel_split`'s: a wrong shape is dropped rather
+    than trusted, only a wrong *version* is worth a warning, and the number
+    is clamped before it reaches a splitter -- a 5 would open a panel too
+    narrow to grab and a 99999 would push the channel stack off the screen.
+    """
+    import audian.audian as audian_app
+    from audian.databrowser import DataBrowser
+
+    view = browser
+    keep_width, keep_saved = view.side_panel_width, view._side_panel_saved
+    key = DataBrowser.SIDE_PANEL_SETTING
+    version = DataBrowser.SIDE_PANEL_SETTING_VERSION
+
+    def restore_from(value):
+        audian_app.save_setting(key, value)
+        return view.restore_side_panel()
+
+    try:
+        # too narrow to grab, and too wide to leave the lanes anything
+        restore_from({"version": version, "width": 5, "open": True})
+        assert view.side_panel_width == DataBrowser.SIDE_PANEL_WIDTH_MIN
+        restore_from({"version": version, "width": 99999, "open": True})
+        assert view.side_panel_width == DataBrowser.SIDE_PANEL_WIDTH_MAX
+
+        # a shape that is not a dict, and a value that is not a number:
+        # dropped for the default rather than raising
+        for junk in ("not a dict", 17, [], None):
+            assert restore_from(junk) is True
+            assert view.side_panel_width == DataBrowser.SIDE_PANEL_WIDTH
+        assert restore_from({"version": version, "width": "wide"}) is True
+        assert view.side_panel_width == DataBrowser.SIDE_PANEL_WIDTH
+
+        # a version this build does not write is dropped whole, warning and
+        # all -- never half-read
+        assert restore_from({"version": 99, "width": 300, "open": False}) is True
+        assert view.side_panel_width == DataBrowser.SIDE_PANEL_WIDTH
+        assert view.side_panel_settings() == {}
+
+        # and a value this build did write comes back untouched
+        assert restore_from({"version": version, "width": 300, "open": False}) is False
+        assert view.side_panel_width == 300
+    finally:
+        audian_app.save_setting(
+            key, {"version": version, "width": keep_width, "open": True}
+        )
+        view.side_panel_width = keep_width
+        view._side_panel_saved = keep_saved
+
+
+def test_restoring_the_panel_writes_nothing(browser):
+    """The single-writer rule, which this codebase states three times.
+
+    A browser that wrote its own state at construction would overwrite the
+    choice made in the window beside it, so `restore_side_panel` primes the
+    memo and `save_side_panel` compares against it.  Two browsers open on
+    one settings file is the case, and it is why `save_parameter_tab` and
+    `save_spectrogram_band` both carry the same memo.
+    """
+    import audian.audian as audian_app
+    from audian.databrowser import DataBrowser
+
+    view = browser
+    keep_width, keep_saved = view.side_panel_width, view._side_panel_saved
+    key = DataBrowser.SIDE_PANEL_SETTING
+    version = DataBrowser.SIDE_PANEL_SETTING_VERSION
+    try:
+        audian_app.save_setting(key, {"version": version, "width": 300, "open": True})
+        view.restore_side_panel()
+        # the window beside this one now changes its mind
+        audian_app.save_setting(key, {"version": version, "width": 500, "open": True})
+        # ... and a restore-shaped save from this one must not undo it
+        view.save_side_panel()
+        assert view.side_panel_settings().get("width") == 500
+    finally:
+        audian_app.save_setting(
+            key, {"version": version, "width": keep_width, "open": True}
+        )
+        view.side_panel_width = keep_width
+        view._side_panel_saved = keep_saved
+
+
 # ------------------------------------------------------------------ content
 
 

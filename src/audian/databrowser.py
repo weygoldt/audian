@@ -1412,7 +1412,7 @@ class DataBrowser(QWidget):
     #: saved "Labels" no longer resolves to anything.
     PARAM_TAB_SETTING_VERSION = 2
 
-    #: How wide the side panel opens, in pixels.
+    #: How wide the side panel opens, in pixels, before anybody drags it.
     #:
     #: Not the 320 the design asked for, and the 40 px is bought by one
     #: measurement.  The annotation pointer readout is the widest line in
@@ -1427,6 +1427,45 @@ class DataBrowser(QWidget):
     #: 172 px with its captions stacked, against `SidePanel.MIN_WIDTH` of
     #: 220 -- so this number is set by the one thing that does not.
     SIDE_PANEL_WIDTH = 360
+
+    #: Key the side panel is saved under: how wide the reader dragged it,
+    #: and whether it is open at all.
+    #:
+    #: Two values in one key rather than two keys, because they are one
+    #: gesture's worth of state: dragging the handle to the edge both closes
+    #: the panel and is the last width worth remembering.  So the width is
+    #: kept *while the panel is shut* -- closing it is how a reader parks
+    #: it, and reopening on 360 rather than on the width they chose would
+    #: make the toggle lossy.  Which is why `open` is a field of its own and
+    #: not a width of zero.
+    #:
+    #: Not per recording, for the reason the parameter tab is not: a width
+    #: is a statement about the window and knows nothing about the file, so
+    #: a reader walking the file spine of one session is doing one job and a
+    #: panel that resized as they stepped would be a control moving under
+    #: them.
+    #:
+    #: Deliberately NOT in version 1, and this is a decision rather than an
+    #: oversight: which plugin tab was open, and where the built-in region
+    #: ends and the plugin region begins.  Neither exists yet in a shape
+    #: worth freezing -- a plugin tab's name is only meaningful while the
+    #: plugin that registered it is still on the path, and
+    #: `restore_parameter_tab` already records what it costs to store a
+    #: choice by a name that may not resolve.  Both are a version 2 when
+    #: there is something to be right about.
+    SIDE_PANEL_SETTING = "side-panel"
+    #: Bumped when the shape of that value changes.  Version 1 is
+    #: ``{"version": 1, "width": <px int>, "open": <bool>}``.
+    SIDE_PANEL_SETTING_VERSION = 1
+    #: What a stored width is clamped to before it reaches a splitter.
+    #:
+    #: A settings file is a file a reader may edit by hand.  The floor is a
+    #: little under `SidePanel.MIN_WIDTH` so a hand-edited 5 lands on a
+    #: panel the splitter can still show rather than on one that opens
+    #: invisible; the ceiling is what stops a hand-edited 99999 pushing the
+    #: channel stack off its own minimum.
+    SIDE_PANEL_WIDTH_MIN = 160
+    SIDE_PANEL_WIDTH_MAX = 800
 
     #: Key the trace / spectrogram split is saved under.  One key holding
     #: one number, for the same reason as above.
@@ -1700,6 +1739,9 @@ class DataBrowser(QWidget):
         #: is how a reader parks it, and reopening on the default rather
         #: than on the width they chose would make the toggle lossy.
         self.side_panel_width = DataBrowser.SIDE_PANEL_WIDTH
+        #: the (width, open) last written to the settings file, so a restore
+        #: and a rebuild do not rewrite it
+        self._side_panel_saved = ()
         # panel and channel the pointer is currently over, for the
         # axis-agnostic zoom gestures (see axis_under_pointer):
         self.hover_panel = None
@@ -2452,8 +2494,15 @@ class DataBrowser(QWidget):
         self.setup_parameter_bar()
         self.side_split.addWidget(self.parambar)
         self.side_split.setStretchFactor(1, 0)
+        opened = self.restore_side_panel()
         width = self.side_panel_width
         self.side_split.setSizes([max(1, self.width() - width), width])
+        if not opened:
+            # Straight to `setVisible`, not through `set_side_panel`: there
+            # is no focus to hand back from a panel nobody has been in yet,
+            # and `restore_side_panel` has already primed the memo so this
+            # cannot be mistaken for a gesture and written back.
+            self.parambar.setVisible(False)
         # The menu's tick is told here and not left to `adapt_menu`.  A tab
         # change fires that while the browser is still being built -- the
         # panel does not exist until this line -- so the tick would read
@@ -3449,7 +3498,7 @@ class DataBrowser(QWidget):
         return self.parambar is not None and not self.parambar.isHidden()
 
     def finish_side_panel_drag(self) -> None:
-        """End of the gesture: read the width off the splitter, once.
+        """End of the gesture: read the width off the splitter, one write.
 
         Called from the handle's release and from nowhere else.  The width
         is read here rather than tracked per move because `splitterMoved`
@@ -3467,8 +3516,99 @@ class DataBrowser(QWidget):
         if sizes[1] <= 0:
             self.set_side_panel(False)
             self.sync_side_panel()
+            self.save_side_panel()
             return
-        self.side_panel_width = sizes[1]
+        self.side_panel_width = min(
+            max(sizes[1], DataBrowser.SIDE_PANEL_WIDTH_MIN),
+            DataBrowser.SIDE_PANEL_WIDTH_MAX,
+        )
+        self.save_side_panel()
+
+    def side_panel_settings(self) -> dict:
+        """The saved panel state, or {} when it is from another build.
+
+        Imported here and not at the top of the file: `audian.py` imports
+        this module, so a module level import would be a cycle.
+        """
+        from .audian import settings
+
+        saved = settings().get(DataBrowser.SIDE_PANEL_SETTING)
+        if not isinstance(saved, dict):
+            return {}
+        version = saved.get("version")
+        if version != DataBrowser.SIDE_PANEL_SETTING_VERSION:
+            log.warning(
+                "ignoring %s settings written in version %r; this audian "
+                "writes version %d",
+                DataBrowser.SIDE_PANEL_SETTING,
+                version,
+                DataBrowser.SIDE_PANEL_SETTING_VERSION,
+            )
+            return {}
+        return saved
+
+    def restore_side_panel(self) -> None:
+        """Open the panel the way this reader last left it.
+
+        The guard ladder is `restore_panel_split`'s, in the same order and
+        for the same reason: a settings file is a file a reader may edit by
+        hand, so a wrong shape is dropped rather than trusted, only a wrong
+        *version* is worth a warning, and the number is clamped before it
+        reaches a splitter -- a hand-edited 5 would open a panel too narrow
+        to grab and a hand-edited 99999 would push the channel stack off
+        the screen.
+
+        Reads and does not write.  `_side_panel_saved` is primed here so
+        that restoring is never mistaken for a gesture, which is the rule
+        `save_parameter_tab` and `save_spectrogram_band` both carry: a
+        browser that wrote its own state at construction would overwrite
+        the choice made in the window beside it.
+        """
+        width = DataBrowser.SIDE_PANEL_WIDTH
+        opened = True
+        saved = self.side_panel_settings()
+        if saved:
+            try:
+                width = int(round(float(saved.get("width"))))
+                opened = bool(saved.get("open"))
+            except (TypeError, ValueError):
+                width = DataBrowser.SIDE_PANEL_WIDTH
+                opened = True
+        self.side_panel_width = min(
+            max(width, DataBrowser.SIDE_PANEL_WIDTH_MIN),
+            DataBrowser.SIDE_PANEL_WIDTH_MAX,
+        )
+        self._side_panel_saved = (self.side_panel_width, opened)
+        return opened
+
+    def save_side_panel(self) -> None:
+        """Write the panel's width and state.  Once per gesture.
+
+        `save_setting` reads, updates and rewrites the whole settings file,
+        and one drag of the handle is a hundred mouse moves -- measured,
+        `splitterMoved` fires once per move and not at all on release, so
+        this is called from the handle's release the way
+        `finish_panel_split` is called from `PanelSplitter`'s, and never
+        from the move.
+
+        The memo is the other half of that rule.  `restore_side_panel`
+        primes it, so a browser being built writes nothing and cannot
+        overwrite the choice made in the window beside it.
+        """
+        state = (int(self.side_panel_width), bool(self.side_panel_shown()))
+        if state == self._side_panel_saved:
+            return
+        self._side_panel_saved = state
+        from .audian import save_setting
+
+        save_setting(
+            DataBrowser.SIDE_PANEL_SETTING,
+            {
+                "version": DataBrowser.SIDE_PANEL_SETTING_VERSION,
+                "width": state[0],
+                "open": state[1],
+            },
+        )
 
     def sync_side_panel(self) -> None:
         """Tell the window's menu what this browser's panel is doing.
