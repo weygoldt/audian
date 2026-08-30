@@ -36,13 +36,22 @@ from audian.tasks.manager import TaskManager
 
 RATE = 20000.0
 CHANNELS = 8
-NFRAMES = 400000
+NFRAMES = 600000
 
 #: how often the timer under test wants to fire
 TICK_MS = 16
 
-#: the refilter has to be long enough for the question to mean anything
-MIN_JOB_MS = 120
+#: The refilter has to be long enough for the question to mean anything.
+#:
+#: Sized against the *warm* process, not the cold one.  Run on its own this
+#: chain took 163 ms, but inside the full suite -- where scipy's caches are
+#: already populated by every test before it -- the same chain took 119 ms,
+#: which failed a guard set at 120 from a standalone measurement.  So the
+#: floor is set well under the warm number rather than just below the cold
+#: one, and `NFRAMES` carries the rest of the margin.  Four tick intervals is
+#: still far more than enough for the event loop to show itself if it is
+#: running at all, which is the only thing this guard is protecting.
+MIN_JOB_MS = 4 * TICK_MS
 
 
 class FakeSource:
