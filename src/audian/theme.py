@@ -1642,10 +1642,18 @@ def restyle_tree(root: Any) -> int:
                 spec = widget.property(BAND_PROPERTY)
                 if spec:
                     edges, _, ground = str(spec).partition("|")
+                    # Sliced, not indexed.  `edges[0]` raises `IndexError` on
+                    # a spec shorter than two characters, and the only
+                    # `except` in this loop catches `RuntimeError` -- so one
+                    # short property would abort the walk where it stood and
+                    # leave every widget after it painted in the palette the
+                    # reader just left.  A slice cannot raise: a missing edge
+                    # reads as an absent one, which is the same answer the
+                    # widget would have got had nobody recorded it.
                     band(
                         widget,
-                        top=edges[0] == "1",
-                        bottom=edges[1] == "1",
+                        top=edges[0:1] == "1",
+                        bottom=edges[1:2] == "1",
                         ground=ground or "bg.surface",
                     )
                     count += 1

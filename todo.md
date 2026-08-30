@@ -33,13 +33,18 @@
   always meant to.  Two tests in `test_panelsplitter.py`, both of which read
   the browser itself as the focus widget before the fix.
 
-- [ ] `theme.restyle_tree` can raise out of its own handler.  It reads the
-  band spec with `edges[0]` and `edges[1]` (`theme.py:1644-1650`) but
-  catches only `RuntimeError`, so a property that is short -- a hand-set
-  one, or a spec written by a build that recorded fewer edges -- raises
-  `IndexError` and aborts the walk mid-tree, leaving every widget after it
-  on the old palette.  Slices (`edges[0:1] == "1"`) cost nothing and cannot.
-  Not reachable today, because the only writer is `band()` itself.
+- [x] `theme.restyle_tree` reads the band spec with `edges[0:1]` and
+  `edges[1:2]` now.  A slice cannot raise, and a missing edge reads as an
+  absent one -- the same answer the widget would have got had nobody
+  recorded that edge.  Defence rather than a repair: the only writer is
+  still `band()`, which always writes both digits, so nothing reachable
+  today produces a short spec.  Worth the two characters anyway, because the
+  cost of being wrong is a theme switch that stops half way through the
+  window and leaves the rest of it on the palette the reader just left.
+
+  The test asserts what happens to the widgets *after* the short one, which
+  is the actual claim -- a test that only said "does not raise" would go
+  green on a walk that restyled nothing at all.
 
 - [ ] A dead assertion in `tests/test_annotationpanel.py`.  The last line of
   `test_the_span_counts_never_ask_the_parameter_bar_for_more_width` is

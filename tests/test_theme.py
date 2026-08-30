@@ -511,6 +511,53 @@ def test_a_chrome_band_is_tall_enough_for_its_own_padding():
     assert theme.TOOLBAR_HEIGHT == theme.TOOLBAR_BUTTON_BOX + 2 * theme.BAND_PAD_V
 
 
+def test_a_short_band_spec_does_not_stop_the_walk():
+    """The claim is what happens to the widgets *after* the bad one.
+
+    `restyle_tree` catches `RuntimeError` and nothing else, so a band spec
+    of fewer than two characters read with `edges[0]` raised `IndexError`
+    straight out of the loop -- and a theme switch that stops half way is
+    the worst outcome available, because the half the reader can see may be
+    the half that changed.  A test that only asserted "does not raise" would
+    go green on a walk that quietly restyled nothing at all.
+
+    Not reachable through `band()` itself, which always writes two digits.
+    This sets the property by hand, which is exactly the case the slices
+    exist for.
+    """
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    app = QApplication.instance() or QApplication([])
+    theme.set_theme(theme.THEME_DARK)
+    root = QWidget()
+    try:
+        first = theme.band(QWidget(root), top=True, bottom=True)
+        # one edge recorded where two are read: the shape a hand-set
+        # property, or a build that wrote fewer edges, would leave behind
+        short = QWidget(root)
+        short.setProperty(theme.BAND_PROPERTY, "1")
+        last = theme.band(QWidget(root), top=True, bottom=True)
+
+        dark = theme.token("bg.surface")
+        assert dark in last.styleSheet()
+
+        theme.set_theme(theme.THEME_LIGHT)
+        light = theme.token("bg.surface")
+        assert light != dark, "the two themes must differ or nothing is measured"
+
+        count = theme.restyle_tree(root)
+
+        assert light in last.styleSheet(), "the walk went past the short spec"
+        assert light in first.styleSheet()
+        assert light in short.styleSheet(), "and restyled the short one too"
+        assert count == 3
+    finally:
+        theme.set_theme(theme.THEME_DARK)
+        root.deleteLater()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 def test_the_status_bar_leaves_the_same_room_as_the_tool_bar():
     """Both bands are chrome, so both breathe by the same number.
 
