@@ -370,10 +370,19 @@ Two, and they are different in kind.
 
 ### Loose ends worth an hour each
 
-- **`tests/test_theme.py` shells out to a bare `ruff`.**  It is on no `PATH`
-  this repo controls, so the same test reports `FileNotFoundError`, or 18
-  findings, or a pass, depending on whose shell runs it.  `sys.executable -m
-  ruff` and a pinned version would make it a gate instead of a coin flip.
+- ~~**`tests/test_theme.py` shells out to a bare `ruff`.**~~  Done.  It looks
+  beside `sys.executable` first, falls back to `PATH`, and skips naming both
+  places if neither has one -- a missing developer tool is not a defect in
+  `theme.py`.  The rule set is pinned to `E4,E7,E9,F` rather than left to the
+  installed ruff's default, which is the other half of the coin flip: ruff
+  0.16.5 enables 413 rules by default and finds **18** house-style opinions in
+  `theme.py` and **209** across `src/audian`, none of them pyflakes.  Under
+  `E4,E7,E9,F` every module in `src/audian` passes today.  What the 18 are
+  worth is still the open question this bullet used to describe -- `RUF022`
+  wants `__all__` sorted, which would flatten the eight comment-headed groups
+  it is written in, and `BLE001` wants the two deliberate `except Exception`
+  guards narrowed -- and it is a decision about `theme.py`'s house style, not
+  about whether the test can find its linter.
 - **`PYSIDE6_OPTION_PYTHON_ENUM=16` is a hazardous CI gate.**  Under it,
   PySide6 6.11.2 **aborts the interpreter** (SIGABRT, exit 134, no traceback)
   when a QtWidgets call gets a wrong argument type, instead of raising
