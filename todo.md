@@ -1,10 +1,40 @@
 # Low hanging fruit
 
-- [ ] For spectrograms, keep the powerspec and the colorbar off by default. Nobody ever looks at this anyways
+- [x] For spectrograms, keep the powerspec and the colorbar off by default.
+  `show_powers` was already off; only `show_cbars` had to flip.  Doing it
+  surfaced a real bug and its fix: the *first* time a colour bar is shown,
+  its `pg.ColorBarItem` has never been laid out and publishes no width, so
+  the one deferred pass `schedule_axis_alignment` made measured a lane
+  59.5 px too wide and the shared time axis sat past the panel.  It never showed
+  before because the bar was on at start-up, so there was no first time.
+  The pass now repeats while it is still moving the margins.
 
-- [ ] Add a drop down menu for spectrogram smoothing (None, gausisan, Bicubic, etc)
+- [x] Add a drop down menu for spectrogram smoothing.  `smoothing.py` holds
+  the menu; the row is in the Spectrogram page under Colormap; the choice
+  persists in the `spectrogram` settings block by key (not by position, so
+  a newer audian's entry cannot re-point an older one's preference).
+  **Bicubic is not on it, and that is measured rather than skipped.**  On
+  the reference block -- 129x3000, one 1500 px lane at nfft 256, against
+  the 8.19 ms `decibel()` already spends on it -- a Gaussian costs 5.03 ms
+  and 80 ms across sixteen lanes, which a hysteresis-gated re-upload can
+  afford.  `zoom(order=3)` costs 76.58 ms and 1.2 s across sixteen, and a
+  3x3 median 58.85 ms and 941 ms.  Neither is affordable, and Qt has no
+  bicubic to borrow -- `QPainter` offers fast and smooth, and smooth is
+  bilinear.  So the menu answers bicubic with Bilinear and median with Box.
 
-- [ ] Do some research on spectrogram denoising or smoothing. We could even try to add some features like synchrosqueezing from squeezepy and a way to play with the parameters to make the spectrogram representation more tunable
+- [ ] Spectrogram denoising and synchrosqueezing, and a way to play with the
+  parameters.  Deliberately left: the smoothing above is a *display* filter
+  -- cheap, local, and reversible by picking None -- and these are not.
+  ssqueezepy is not a dependency and would be the first one added for a
+  single feature.  Two things the smoothing work settled that this should
+  reuse rather than rediscover: a filter that changes the drawn numbers has
+  to be fitted by `SpectrogramPlot._level_range` too, or the panel dims
+  instead of sharpening (the loudest bin drops 5 dB under a Gaussian of one
+  bin and 15 dB under two); and `SpecItem.get_power` has to read the drawn
+  pixel rather than the raw bin, because the two are a median of 3.0 dB and
+  up to 50.7 dB apart, the worst of it at the chirp onsets a reader points
+  at.  A sigma slider is the small end of this and would fit beside the
+  dropdown; `smoothing.METHODS` is where a new entry goes.
 
 - [ ] StartupPage is the last floor at 734 px: three fixed columns capped at
   1100. It is what stops the window going below 734, so it is next if audian

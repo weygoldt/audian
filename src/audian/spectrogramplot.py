@@ -6,7 +6,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QTimer, Signal
 from thunderlab.powerspectrum import decibel
 
-from . import theme
+from . import smoothing, theme
 from .bufferedspectrogram import channel_power
 from .panels import Panel, resolve_colormap
 from .rangeplot import RangePlot
@@ -195,6 +195,11 @@ class SpectrogramPlot(TimePlot):
         self.cbar.setMenuEnabled(False)
         theme.strip_pg_menus(self.cbar)
 
+        # how the images are smoothed on their way to the screen; the
+        # browser pushes its own choice down through `set_smoothing` once
+        # the items exist -- see `DataBrowser.set_spec_smoothing`:
+        self.smoothing = smoothing.DEFAULT
+
         # power spectrum:
         self.spec_data = None
         self.powerax = PowerPlot(self.z() + self.y(), channel, browser)
@@ -338,6 +343,37 @@ class SpectrogramPlot(TimePlot):
                 item.set_mean_channels(channels)
         self._levels_fitted = False
         self._update_caption()
+        return True
+
+    def set_smoothing(self, key) -> bool:
+        """Push a smoothing choice on to every `SpecItem`; see `smoothing`.
+
+        The level fit is re-armed whenever the choice changed, because a
+        filter moves the top of the ramp and nothing else.  Measured on
+        ``data/Gryllus_campestris.wav``, 10 s of channel 0 at nfft 256: the
+        floor does not move at all -- the median shifts at most 1.2 dB and
+        the 5 dB snap in `_level_range` swallows it -- while the loudest bin
+        drops 5 dB under a Gaussian of one bin and 15 dB under two.  Left
+        unfitted, a strongly smoothed panel is drawn against a ramp whose
+        top nothing in the image reaches, and the top quarter of the colour
+        map goes unused: the picture dims rather than smooths.
+
+        The refit goes through the same zero-delay timer `setVisible()` uses
+        and not through `_refit_pending`, which is a flag for *reacting to
+        somebody else's* write and is read only inside `setZRange`.  Nothing
+        writes the mapping when a dropdown changes, so a flag armed here
+        would sit armed until something unrelated came along.
+        """
+        key = smoothing.resolve(key)
+        if key == self.smoothing:
+            return False
+        self.smoothing = key
+        for item in self.data_items:
+            if isinstance(item, SpecItem):
+                item.set_smoothing(key)
+        self._levels_fitted = False
+        if self.fits_levels():
+            self._refit_timer.start(0)
         return True
 
     def _place_caption(self) -> None:
@@ -525,13 +561,49 @@ class SpectrogramPlot(TimePlot):
         return True
 
     def _level_range(self, block) -> tuple[float, float] | None:
-        """Level range fitted to *block*, snapped to 5 dB, or None if too small."""
+        """Level range fitted to *block*, snapped to 5 dB, or None if too small.
+
+        Fitted to the numbers that are **drawn**, which under a filtering
+        smoothing are not the numbers that were measured: the loudest bin of
+        the Gryllus block drops 5 dB under a Gaussian of one bin and 15 dB
+        under two, so a ramp fitted to the raw block tops out above anything
+        in the image and the panel dims instead of smoothing.  The floor is
+        indifferent -- the median moves at most 1.2 dB and the 5 dB snap
+        below swallows it -- but the top is not.
+
+        Two costs and one subtlety keep the plain path exactly as it was
+        when nothing is filtering.  The costs: `decibel` has to run over the
+        whole block rather than over the strided fifth of it this samples,
+        and then the filter runs too -- about 13 ms together on a 1500 px
+        lane, on the one panel that `fits_levels`.  The subtlety: `smoothing`
+        pulls the non-finite bins to `smoothing.FLOOR_DB` so that one dead
+        electrode cannot smear a ``-inf`` across its neighbours, and those
+        bins would then survive the `isfinite` filter below and drag the
+        median to the floor.  So the mask is taken from the *raw* dB, which
+        selects exactly the bins the plain path selects.
+
+        Transposed to `(frequency, time)` before filtering, which is the
+        orientation `SpecItem` uploads in.  Every filter on offer today is
+        isotropic and would not notice, but one that is not would otherwise
+        be fitted along one axis and drawn along the other.
+        """
+        if smoothing.changes_values(self.smoothing):
+            with np.errstate(all="ignore"):
+                raw = decibel(np.asarray(block, dtype=float)).T
+            values = smoothing.smooth(raw, self.smoothing)[np.isfinite(raw)]
+            if values.size > self.LEVEL_FIT_SAMPLES:
+                values = values[:: 1 + values.size // self.LEVEL_FIT_SAMPLES]
+            return self._fit_levels_to(values)
         values = np.asarray(block, dtype=float).reshape(-1)
         if values.size > self.LEVEL_FIT_SAMPLES:
             values = values[:: 1 + values.size // self.LEVEL_FIT_SAMPLES]
         with np.errstate(all="ignore"):
             values = decibel(values)
         values = values[np.isfinite(values)]
+        return self._fit_levels_to(values)
+
+    def _fit_levels_to(self, values) -> tuple[float, float] | None:
+        """The fit itself, over dB values that are already sampled and clean."""
         if values.size < 64:
             return None
         floor = float(np.median(values)) + self.LEVEL_FLOOR_MARGIN_DB

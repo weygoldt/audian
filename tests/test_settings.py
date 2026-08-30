@@ -30,7 +30,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from audian import theme  # noqa: E402
+from audian import smoothing, theme  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -320,6 +320,80 @@ def test_a_hand_edited_file_never_raises(store, app, junk):
     store.save_setting(DataBrowser.SPECTROGRAM_SETTING, junk)
     index = DataBrowser.read_color_map_setting()
     assert 0 <= index < len(theme.spectrogram_maps())
+    assert DataBrowser.read_smoothing_setting() in smoothing.keys()
+
+
+# --- the smoothing ---------------------------------------------------------
+
+
+def test_nothing_stored_opens_unsmoothed(store, app):
+    from audian.databrowser import DataBrowser
+
+    assert DataBrowser.read_smoothing_setting() == smoothing.DEFAULT
+    assert not smoothing.changes_values(DataBrowser.read_smoothing_setting())
+
+
+@pytest.mark.parametrize("key", smoothing.keys())
+def test_every_offered_smoothing_survives_the_round_trip(store, app, key):
+    from audian.databrowser import DataBrowser
+
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {"version": DataBrowser.SPECTROGRAM_SETTING_VERSION, "smoothing": key},
+    )
+    assert DataBrowser.read_smoothing_setting() == key
+
+
+def test_a_smoothing_this_audian_does_not_offer_falls_back(store, app):
+    """Stored by key rather than by position, so a newer audian's entry is
+    a name this one does not know -- and an unknown name is the default.
+
+    An index would have been read as *some* filter, and the further apart
+    the two versions the less related to the one that was chosen.
+    """
+    from audian.databrowser import DataBrowser
+
+    for junk in ("synchrosqueezed", "", 2, None, []):
+        store.save_setting(
+            DataBrowser.SPECTROGRAM_SETTING,
+            {"version": DataBrowser.SPECTROGRAM_SETTING_VERSION, "smoothing": junk},
+        )
+        assert DataBrowser.read_smoothing_setting() == smoothing.DEFAULT
+
+
+def test_the_smoothing_rides_in_the_same_block_as_the_map(store, app):
+    """One key, one version, so a colormap written beside it is not lost.
+
+    `SPECTROGRAM_SETTING_VERSION` is deliberately *not* bumped for the new
+    field: `spectrogram_settings` drops the whole block on a version it does
+    not recognise, so a bump would take every reader's colormap away to add
+    a preference they have not set yet.  A key an older audian does not know
+    is simply ignored by it, which is the compatible direction.
+    """
+    from audian.databrowser import DataBrowser
+
+    theme.set_theme(theme.THEME_DARK)
+    name = theme.spectrogram_maps()[2]
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {
+            "version": DataBrowser.SPECTROGRAM_SETTING_VERSION,
+            "colormap": {theme.THEME_DARK: name},
+            "smoothing": "gaussian",
+        },
+    )
+    assert DataBrowser.read_color_map_setting() == 2
+    assert DataBrowser.read_smoothing_setting() == "gaussian"
+    # a block written by an audian that predates smoothing still reads
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {
+            "version": DataBrowser.SPECTROGRAM_SETTING_VERSION,
+            "colormap": {theme.THEME_DARK: name},
+        },
+    )
+    assert DataBrowser.read_color_map_setting() == 2
+    assert DataBrowser.read_smoothing_setting() == smoothing.DEFAULT
 
 
 # --- the write itself ------------------------------------------------------

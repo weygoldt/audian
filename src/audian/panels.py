@@ -178,6 +178,21 @@ class Panel(object):
         for ax in self.axcs:
             ax.setColorMap(color_map)
 
+    def set_smoothing(self, key) -> bool:
+        """Set how every spectrogram of this panel is smoothed.
+
+        Asked of each plot with `hasattr` rather than of the panel's own
+        `is_spectrogram()`, for the reason `has_visible_traces` records: a
+        panel answers about its axis letters, and what can be smoothed is a
+        property of the plot.  Returns whether anything changed, so the
+        caller can redraw only when it has to.
+        """
+        changed = False
+        for ax in self.axs:
+            if hasattr(ax, "set_smoothing") and ax.set_smoothing(key):
+                changed = True
+        return changed
+
     def add_item(self, plot_item, channel=-1, is_data=False):
         if channel >= 0:
             self.axs[channel].add_item(plot_item, is_data)

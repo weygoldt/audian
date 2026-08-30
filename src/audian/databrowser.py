@@ -40,7 +40,7 @@ from audioio import update_starttime
 from audioio import bext_history_str, add_history
 from thunderlab.datawriter import available_formats, write_data
 
-from . import theme
+from . import smoothing, theme
 from .data import Data
 from .panels import Panel, Panels
 from .panelsplitter import PanelSplitter
@@ -1672,6 +1672,7 @@ class DataBrowser(QWidget):
     sigFilenameChanged = Signal(object, str)
     sigResolutionChanged = Signal()
     sigColorMapChanged = Signal()
+    sigSmoothingChanged = Signal()
     sigFilterChanged = Signal()
     sigEnvelopeChanged = Signal()
     sigTraceChanged = Signal(object, object, object)
@@ -1990,6 +1991,13 @@ class DataBrowser(QWidget):
 
         # plots:
         self.color_map = self.read_color_map_setting()
+        #: how the spectrogram images are smoothed; see `smoothing`
+        self.spec_smoothing = self.read_smoothing_setting()
+        #: the dropdown that shows it, once `setup_parameter_bar` has built
+        #: one.  Named here as well, because `dispatch_smoothing` reaches
+        #: every tab and a tab whose file is still loading has been
+        #: constructed but not opened.
+        self.smoothw = None
         #: window and overlap the reader has asked for this run, or None
         #: while both are still whatever the recording opened on.  Only a
         #: number that came from a gesture is ever written.
@@ -2095,6 +2103,19 @@ class DataBrowser(QWidget):
         if name not in maps:
             return theme.DEFAULT_SPECTROGRAM_MAP
         return maps.index(name)
+
+    @staticmethod
+    def read_smoothing_setting() -> str:
+        """Spectrogram smoothing the reader last chose, or the default.
+
+        Stored as the method's key and not as its position, so that adding
+        an entry to `smoothing.METHODS` cannot silently re-point an existing
+        preference at a different filter.  `smoothing.resolve` answers for
+        anything this audian does not recognise, which is what a settings
+        file written by a newer one looks like.
+        """
+        saved = DataBrowser.spectrogram_settings().get("smoothing")
+        return smoothing.resolve(saved if isinstance(saved, str) else None)
 
     @contextmanager
     def updating(self):
@@ -2569,6 +2590,12 @@ class DataBrowser(QWidget):
         if self.spectrogram:
             self.spectrogram_power = self.panels[self.data[self.spectrogram].panel].z()
         self.setup_parameter_bar()
+        # The stored smoothing reaches the images here rather than in
+        # `__init__`: the panels do not exist that early, and the combo box
+        # that has to agree with them is built by the line above.  Neither
+        # dispatched nor saved -- a browser being built is not a reader
+        # choosing, which is the rule `set_color_map` states.
+        self.set_spec_smoothing(dispatch=False, save=False)
         self.side_split.addWidget(self.parambar)
         self.side_split.setStretchFactor(1, 0)
         opened = self.restore_side_panel()
@@ -3065,11 +3092,40 @@ class DataBrowser(QWidget):
             self.cmapw.currentIndexChanged.connect(lambda i: self.set_color_map(i))
             group.add_row("Colormap", "⇧C", self.cmapw)
 
-            # The band a spectrogram opens at.  Appended after Colormap
-            # rather than squeezed beside the Window combo box: `add_row`
-            # only ever appends and there is no insert API, and the
-            # group then reads as how the picture is computed (Window,
-            # Overlap) and then how it is shown (Colormap, Opens at).
+            # Smoothing sits beside Colormap because the two answer the same
+            # question -- what the picture looks like -- where Window and
+            # Overlap above answer what it is a picture of.  Each entry
+            # carries its own tool tip, because "Box" and "Gaussian" name
+            # filters rather than describing them, and the difference that
+            # matters to a reader is whether the numbers move: see
+            # `smoothing`.  The shortcut column is empty for the reason
+            # "Opens at" records below -- this group already sets the width
+            # of the side panel.
+            self.smoothw = QComboBox(self)
+            self.smoothw.tooltip = "How a spectrogram is smoothed before it is drawn"
+            self.smoothw.setToolTip(self.smoothw.tooltip)
+            self.smoothw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+            for method in smoothing.METHODS:
+                self.smoothw.addItem(method.label, method.key)
+                self.smoothw.setItemData(
+                    self.smoothw.count() - 1,
+                    method.tip,
+                    Qt.ItemDataRole.ToolTipRole,
+                )
+            self.smoothw.setEditable(False)
+            narrow_combo(self.smoothw)
+            self.smoothw.setCurrentIndex(smoothing.index(self.spec_smoothing))
+            self.smoothw.currentIndexChanged.connect(
+                lambda i: self.set_spec_smoothing(self.smoothw.itemData(i))
+            )
+            group.add_row("Smoothing", "", self.smoothw)
+
+            # The band a spectrogram opens at.  Appended after the two
+            # appearance rows rather than squeezed beside the Window combo
+            # box: `add_row` only ever appends and there is no insert API,
+            # and the group then reads as how the picture is computed
+            # (Window, Overlap) and then how it is shown (Colormap,
+            # Smoothing, Opens at).
             #
             # The initial value is `default_max()` and not the raw
             # preference, so the field always shows what THIS recording
@@ -3135,6 +3191,7 @@ class DataBrowser(QWidget):
             self.ofracw = None
             self.ofraclabelw = None
             self.cmapw = None
+            self.smoothw = None
             self.fmaxw = None
             self.fminw = None
 
@@ -7890,6 +7947,14 @@ class DataBrowser(QWidget):
                     if self.overlap_pref is None
                     else self.overlap_pref
                 ),
+                # Written unconditionally, unlike the window and the
+                # overlap: those two open at whatever the recording asks
+                # for, so a session that never touched them has no opinion
+                # to record.  Smoothing opens at `smoothing.DEFAULT`
+                # whatever the recording is, so the value in hand is always
+                # a preference -- either the one that was read back at
+                # start-up or the one just chosen.
+                "smoothing": self.spec_smoothing,
             },
         )
 
@@ -8504,6 +8569,39 @@ class DataBrowser(QWidget):
 
     def color_map_cycler(self) -> None:
         self.set_color_map((self.color_map + 1) % len(theme.spectrogram_maps()))
+
+    def set_spec_smoothing(
+        self, key=None, dispatch: bool = True, save: bool = True
+    ) -> None:
+        """Choose how the spectrogram images are smoothed; see `smoothing`.
+
+        The same shape as `set_color_map`, and *save* is off on the same
+        path for the same reason: a browser being built must not write its
+        own default over the choice made in the window beside it.
+
+        The redraw is unconditional once anything changed, because
+        `SpecItem.set_smoothing` has already thrown its uploaded crop away
+        and the hysteresis in `update_plot` would otherwise leave the old
+        pixels on screen until the reader panned far enough to invalidate
+        them by accident.
+        """
+        if key is not None:
+            self.spec_smoothing = smoothing.resolve(key)
+        changed = False
+        for panel in self.panels.values():
+            if panel.is_spectrogram() and panel.set_smoothing(self.spec_smoothing):
+                changed = True
+        index = smoothing.index(self.spec_smoothing)
+        if self.smoothw is not None and self.smoothw.currentIndex() != index:
+            blocked = self.smoothw.blockSignals(True)
+            self.smoothw.setCurrentIndex(index)
+            self.smoothw.blockSignals(blocked)
+        if changed:
+            self.panels.update_plots()
+        if save:
+            self.schedule_spectrogram_save()
+        if dispatch:
+            self.sigSmoothingChanged.emit()
 
     def update_filter(self, highpass_cutoff=None, lowpass_cutoff=None):
         """Called when filter cutoffs were changed by key shortcuts or handles

@@ -4,8 +4,10 @@ import numpy as np
 import pyqtgraph as pg
 
 from math import floor
+from PySide6.QtGui import QPainter
 from thunderlab.powerspectrum import decibel
 
+from . import smoothing
 from .bufferedspectrogram import channel_power
 from .dataitem import VisibleChannelMirror
 
@@ -45,6 +47,8 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
         self._view_range = None
         # index range and stride of what is currently uploaded
         self._image_range = None
+        # how the image is smoothed on its way to the screen; see `smoothing`
+        self.smoothing = smoothing.DEFAULT
 
         self.mirror_visibility()
 
@@ -76,6 +80,49 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
         self._image_range = None
         return True
 
+    def set_smoothing(self, key) -> bool:
+        """Choose how the image is smoothed; see `smoothing`.
+
+        Returns True when the choice actually changed, and throws the
+        uploaded crop away when it did -- for the same reason
+        `set_mean_channels` does.  `update_plot`'s hysteresis keys off the
+        time range, the stride and the buffer's own change flag, and none of
+        those knows what filter the pixels were computed *through*.  A
+        method that only interpolates has no crop to throw away, but the
+        reset costs one re-upload and buys not having a second rule.
+        """
+        key = smoothing.resolve(key)
+        if key == self.smoothing:
+            return False
+        self.smoothing = key
+        self._image_range = None
+        return True
+
+    def paint(self, painter, *args):
+        """Draw, asking Qt to interpolate between bins when it was asked for.
+
+        pyqtgraph 0.14's `ImageItem.paint` sets no transform hint at all, so
+        an image is scaled nearest-neighbour and one bin reads as a block.
+        The hint is set here rather than on the view, because the view
+        carries every other item too -- the traces, the handles, the
+        overlays -- and this is a statement about one image.
+
+        Put back afterwards.  `QGraphicsScene` hands one painter to every
+        item it draws and makes no promise about restoring render hints
+        between them, so leaving it set would quietly re-render whatever is
+        painted next.
+        """
+        want = smoothing.interpolates(self.smoothing)
+        hint = QPainter.RenderHint.SmoothPixmapTransform
+        was = painter.testRenderHint(hint)
+        if want == was:
+            return super().paint(painter, *args)
+        painter.setRenderHint(hint, want)
+        try:
+            return super().paint(painter, *args)
+        finally:
+            painter.setRenderHint(hint, was)
+
     def power_block(self, rows):
         """Reduce `rows` -- a (time, channel, freq) slice -- to (time, freq).
 
@@ -99,12 +146,48 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
             return self.data.estimate_noiselevels(self.channel)
         return self.data.estimate_noiselevels(self.mean_channels)
 
+    def drawn_power(self, t, f):
+        """The dB value of the uploaded pixel at `(t, f)`, or None.
+
+        None whenever the answer would be a guess: nothing uploaded yet, or
+        a position outside the crop that is.  `update_plot` uploads a padded
+        crop, so the pointer is inside it whenever the pointer is on screen,
+        and the fallback is for the moment between a pan and its re-upload.
+
+        The image is `(frequency, time)` -- `update_plot` uploads
+        `block.T` and the item is `row-major` -- strided in time by
+        whatever the widget's width asked for and not strided at all in
+        frequency.
+        """
+        image = self.image
+        if image is None or self._image_range is None or image.ndim != 2:
+            return None
+        i0, _i1, stride = self._image_range
+        col = (int(floor(t * self.data.rate)) - self.data.offset - i0) // stride
+        row = int(floor(f / self.data.fresolution))
+        if not (0 <= row < image.shape[0] and 0 <= col < image.shape[1]):
+            return None
+        return float(image[row, col])
+
     def get_power(self, t, f):
         """Get power next to cursor position.
 
         Averaged over the same channels the image is, so the readout cannot
         disagree with the pixel it is standing on.
+
+        A *filtering* smoothing breaks that agreement at the source -- the
+        drawn number is a weighted mean of its neighbours, measured a median
+        of 3.0 dB and up to 50.7 dB from the raw bin, the worst of it at the
+        chirp onsets a reader points at -- so with one on, the pixel is what
+        is read.  `smoothing.changes_values` is the question, not "is
+        smoothing on": an interpolate-only method leaves every bin exactly
+        where it was, keeps the exact path below, and returns bit for bit
+        what this returned before smoothing existed.
         """
+        if smoothing.changes_values(self.smoothing):
+            drawn = self.drawn_power(t, f)
+            if drawn is not None:
+                return drawn
         ti = int(floor(t * self.data.rate))
         fi = int(floor(f / self.data.fresolution))
         if ti >= self.data.shape[0] or fi >= self.data.shape[2]:
@@ -161,7 +244,12 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
         self._image_range = (i0, i1, stride)
         block = self.power_block(self.data.buffer[i0:i1:stride])
         with np.errstate(all="ignore"):
-            self.setImage(decibel(block.T), autoLevels=False)
+            image = decibel(block.T)
+        # Filtered here and not in the buffer: this is the one array that is
+        # already cropped to what is on screen and already decimated to the
+        # widget's own width, so the filter runs over the pixels it is going
+        # to affect and over nothing else.
+        self.setImage(smoothing.smooth(image, self.smoothing), autoLevels=False)
         # rect covers the CROPPED extent, not data.spec_rect:
         rate = self.data.rate
         self.setRect(

@@ -45,6 +45,7 @@ from test_panelsplitter import (  # noqa: E402
     spec_image,
 )
 
+from audian import smoothing  # noqa: E402
 from audian.spectrogramplot import (  # noqa: E402
     MAX_CHANNEL_LABEL_CHARS,
     channel_range_label,
@@ -235,6 +236,136 @@ def test_the_pointer_readout_agrees_with_the_picture(stack, mean_off):
             f"the picture says {want:.3f} dB"
         )
         assert abs(got - one) > 1e-6, "the readout is still channel 0's"
+
+
+@pytest.fixture
+def plain_again(stack):
+    """Put the smoothing back, whatever a test did to it.
+
+    The `stack` fixture is module-scoped, so a test that left a filter on
+    would hand every test after it a different picture -- and the two that
+    measure the colour ramp fit to what is drawn, which is exactly what a
+    filter changes.
+    """
+    yield
+    stack.set_spec_smoothing(smoothing.DEFAULT, dispatch=False, save=False)
+    settle()
+    pump(0.4)
+
+
+def probe_points(item):
+    """A few (buffer index, frequency) pairs inside what is uploaded."""
+    i0, i1, _stride = item._image_range
+    span = i1 - i0
+    for frac, freq in ((0.1, 900.0), (0.5, 300.0), (0.9, 1800.0)):
+        yield min(i1 - 1, i0 + int(frac * span)), freq
+
+
+def test_an_interpolating_smoothing_leaves_the_readout_exact(
+    stack, mean_off, plain_again
+):
+    """Bilinear is a statement about pixels, so the numbers do not move.
+
+    The distinction `smoothing.changes_values` draws, made visible: Qt
+    interpolating between bin centres cannot change what the bin says, so
+    `SpecItem.get_power` keeps its exact path and returns what it returned
+    before smoothing existed.
+    """
+    lane = enter_mean(stack)
+    item = spec_item(stack, lane)
+    data = item.data
+    before = {
+        (ti, freq): item.get_power((data.offset + ti) / data.rate, freq)
+        for ti, freq in probe_points(item)
+    }
+    stack.set_spec_smoothing("bilinear")
+    settle()
+    pump(0.4)
+    assert item.smoothing == "bilinear"
+    for (ti, freq), want in before.items():
+        got = item.get_power((data.offset + ti) / data.rate, freq)
+        assert got == pytest.approx(want, abs=1e-12), (
+            f"bilinear moved the readout at f={freq} from {want} to {got}"
+        )
+
+
+def test_a_filtering_smoothing_moves_the_readout_on_to_the_pixel(
+    stack, mean_off, plain_again
+):
+    """With a filter on, the readout is the pixel and not the raw bin.
+
+    The invariant the test above this one states, kept under a filter that
+    would otherwise break it: the drawn number is a weighted mean of its
+    neighbours, so a readout that still went to the buffer would disagree
+    with the pixel the cursor is standing on -- measured elsewhere at a
+    median of 3.0 dB and up to 50.7 dB, which is a chirp onset.
+
+    Both halves are asserted.  That the readout equals the image cell is
+    the claim; that it has actually *moved* is what stops the test passing
+    on a build where the filter silently did nothing.
+    """
+    lane = enter_mean(stack)
+    item = spec_item(stack, lane)
+    data = item.data
+    raw = {
+        (ti, freq): item.get_power((data.offset + ti) / data.rate, freq)
+        for ti, freq in probe_points(item)
+    }
+    stack.set_spec_smoothing("gaussian")
+    settle()
+    pump(0.4)
+    assert item.smoothing == "gaussian"
+    i0, _i1, stride = item._image_range
+    moved = 0
+    for (ti, freq), before in raw.items():
+        t = (data.offset + ti) / data.rate
+        got = item.get_power(t, freq)
+        cell = item.image[int(np.floor(freq / data.fresolution)), (ti - i0) // stride]
+        assert got == pytest.approx(float(cell), abs=1e-9), (
+            f"readout at f={freq} says {got:.3f} dB and the pixel {cell:.3f} dB"
+        )
+        if abs(got - before) > 1e-6:
+            moved += 1
+    assert moved, "the filter changed no readout at all, so it drew nothing"
+
+
+def test_the_smoothing_reaches_every_lane(stack, mean_off, plain_again):
+    """One dropdown, every spectrogram -- and the images are rebuilt.
+
+    `SpecItem.set_smoothing` throws the uploaded crop away, and nothing
+    else would: the hysteresis in `update_plot` keys off the time range,
+    the stride and the buffer's change flag, none of which knows what
+    filter the pixels were computed through.
+
+    The unsmoothed image really does hold ``-inf`` -- the buffer's trailing
+    zeros are `decibel(0)` -- so this is also where `smoothing.FLOOR_DB`
+    earns itself on real pixels rather than on a constructed array: the
+    filtered image has to come back finite everywhere.
+    """
+    stack.set_panels(traces=False, specs=1)
+    settle()
+    pump(0.4)
+    items = [spec_item(stack, c) for c in stack.visible_channels()]
+    assert items, "no lane is showing a spectrogram"
+    assert all(item.smoothing == smoothing.DEFAULT for item in items)
+    before = [np.array(item.image, copy=True) for item in items]
+
+    stack.set_spec_smoothing("gaussian-strong")
+    settle()
+    pump(0.6)
+    assert stack.spec_smoothing == "gaussian-strong"
+    for item, was in zip(items, before):
+        assert item.smoothing == "gaussian-strong"
+        assert item.image is not None
+        assert item.image.shape == was.shape
+        assert np.isfinite(item.image).all(), (
+            f"lane {item.channel} kept a non-finite bin through the filter"
+        )
+        live = np.isfinite(was)
+        assert not np.allclose(item.image[live], was[live]), (
+            f"lane {item.channel} is still showing the unsmoothed pixels"
+        )
+        assert np.std(item.image[live]) < np.std(was[live])
 
 
 # ------------------------------------------------------------- the colour ramp

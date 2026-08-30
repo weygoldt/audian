@@ -3974,6 +3974,17 @@ class Audian(QMainWindow):
             if b is not self.browser():
                 b.set_color_map(cm, False)
 
+    def dispatch_smoothing(self):
+        """Every tab draws its spectrograms the same way.
+
+        `save=False` on the receiving tabs: one gesture is one preference,
+        and the tab the reader used has already queued the write.
+        """
+        key = self.browser().spec_smoothing
+        for b in self.browsers:
+            if b is not self.browser():
+                b.set_spec_smoothing(key, dispatch=False, save=False)
+
     def toggle_link_power(self):
         for s in Panel.powers:
             self.link_ranges[s] = not self.link_ranges[s]
@@ -5237,6 +5248,7 @@ class Audian(QMainWindow):
             browser.sigFilenameChanged.connect(self.set_tab_title)
             browser.sigResolutionChanged.connect(self.dispatch_resolution)
             browser.sigColorMapChanged.connect(self.dispatch_colormap)
+            browser.sigSmoothingChanged.connect(self.dispatch_smoothing)
             browser.sigFilterChanged.connect(self.dispatch_filter)
             browser.sigEnvelopeChanged.connect(self.dispatch_envelope)
             browser.sigTraceChanged.connect(self.dispatch_trace)
