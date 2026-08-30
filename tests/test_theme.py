@@ -450,6 +450,35 @@ def test_stacked_rail_row_fits_a_dense_lane():
     assert budget <= theme.CHANNEL_DENSE_HEIGHT, budget
 
 
+def test_a_chrome_band_is_tall_enough_for_its_own_padding():
+    """The tool bar must fit its buttons plus the room it says it leaves.
+
+    It did not.  TOOLBAR_HEIGHT was 36, which is 3 px short of a 30 px
+    button with S4 above and below, so the layout paid for the shortfall
+    out of the margins: measured, 32 px buttons in a 37 px strip with 2 px
+    above and 3 px below, and the 3 px below included the band's own
+    hairline -- so a button's bottom border sat two pixels off the rule and
+    read as touching it.
+
+    Stated as an equality rather than a `>=` because the band is pinned to
+    exactly this height: anything left over would not become padding, it
+    would become a gap the buttons are centred in and the numbers would
+    stop describing the picture.
+    """
+    assert theme.TOOLBAR_HEIGHT == theme.TOOLBAR_BUTTON_BOX + 2 * theme.BAND_PAD_V
+
+
+def test_the_status_bar_leaves_the_same_room_as_the_tool_bar():
+    """Both bands are chrome, so both breathe by the same number.
+
+    The status bar had no minimum at all and shrink-wrapped its tallest
+    readout, which put its text 2 px off the rule above it.
+    """
+    qss = theme.stylesheet()
+    wanted = theme.CHIP_HEIGHT + 2 * theme.BAND_PAD_V
+    assert f"min-height: {wanted}px" in qss, wanted
+
+
 def test_rail_toggles_have_room_for_their_glyph():
     """An 18x14 button with the generic S4/S8 padding renders empty."""
     qss = theme.stylesheet()

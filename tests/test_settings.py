@@ -45,12 +45,9 @@ def keep_the_theme():
     later.  Measured, not hypothesised -- that is how this fixture came to
     exist.
     """
-    name, variant = theme.current_theme(), theme.current_variant()
+    name = theme.current_theme()
     yield
-    if variant == theme.THEME_NATIVE:
-        theme.set_native_theme()
-    else:
-        theme.set_theme(name)
+    theme.set_theme(name)
 
 
 @pytest.fixture

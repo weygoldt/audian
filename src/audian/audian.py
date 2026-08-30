@@ -952,18 +952,15 @@ def settings() -> dict:
 def apply_theme_preference(app, preference: str) -> str:
     """Load the token table *preference* asks for, and push it into *app*.
 
-    ``'system'`` means the desktop's own colours, font and icon pack, not
-    merely its light-or-dark bit: `set_native_theme` derives a table from
-    the platform palette, and `theme.apply` then leaves the style, the
-    palette and the application stylesheet alone rather than overruling
-    them.  Pinning dark or light loads audian's own designed table instead.
+    ``'system'`` takes the desktop's light-or-dark choice and nothing else:
+    it loads audian's own dark or daylight table accordingly.  The colours
+    stay ours deliberately -- deriving them from the platform palette was
+    tried and reverted, because the two tables are designed, contrast-gated
+    and separated for colour vision deficiency, and a desktop palette is
+    none of those things.  What the desktop gets to decide is which of the
+    two the reader is looking at.
     """
-    if preference == theme.THEME_SYSTEM:
-        theme.refresh_system(app)
-        theme.set_native_theme()
-    else:
-        theme.set_theme(theme.resolve_theme(preference))
-    theme.apply(app)
+    theme.apply(app, theme.resolve_theme(preference))
     return theme.current_theme()
 
 
@@ -2631,14 +2628,24 @@ class Audian(QMainWindow):
         # The height is fixed only once the bar is populated, otherwise the
         # toolbar layout raises the minimum height from its contents.  The
         # bottom hairline is a QSS border and Qt adds it to the box, so the
-        # widget is one hairline taller than the 36px content band.
+        # widget is one hairline taller than the content band.
         layout = tb.layout()
-        layout.setContentsMargins(0, 0, 0, 0)
+        # The margins the bar asked for when it was built, restated here
+        # because this line used to zero them.  With the band 3 px shorter
+        # than its own contents needed there was nothing to see either way;
+        # now that TOOLBAR_HEIGHT is derived from the button box there is.
+        layout.setContentsMargins(
+            theme.S8, theme.BAND_PAD_V, theme.S8, theme.BAND_PAD_V
+        )
         layout.setSpacing(theme.S4)
         for i in range(layout.count()):
             widget = layout.itemAt(i).widget()
             if widget is not None:
-                widget.setMaximumHeight(theme.TOOLBAR_HEIGHT - theme.S4)
+                # the button box, not the whole band: capping at the band
+                # let every control stretch past the height it was pinned
+                # to -- measured, 30 px buttons came out 32 -- and took the
+                # padding out of the margins to pay for it
+                widget.setMaximumHeight(theme.TOOLBAR_BUTTON_BOX)
         tb.setFixedHeight(theme.TOOLBAR_HEIGHT + theme.HAIRLINE)
         self.toolbar.setEnabled(False)
 
@@ -5339,9 +5346,6 @@ def audian_cli(cargs=[], plugins=None):
     # --theme is not written back: it says how to open this run, not what to
     # remember, which is the rule it has always followed.
     preference = theme_preference(args.theme or settings().get("theme"))
-    # before anything of ours is pushed onto the application, while its
-    # palette and font are still the desktop's
-    theme.capture_system(app)
     # tell the platform before the first widget is built, so the title bar
     # and any native dialog come up in the scheme we are about to paint
     theme.push_color_scheme(preference)
