@@ -29,9 +29,47 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# Qt6 spells every enum member inside its enum class -- Qt.AlignmentFlag.AlignLeft
+# rather than Qt.AlignLeft.  PySide6 still mirrors the bare names into the owning
+# class as a porting courtesy, so the old spelling keeps working and nothing warns.
+# 16 turns that mirror off, which is the only way a test run can tell the two
+# apart.  audian itself never sets this: production behaviour is identical either
+# way, and this is a lint, not a runtime requirement.
+#
+# It must be set before anything imports PySide6, and the failure when it is not
+# is invisible: shiboken writes its OWN resolved value into this same variable as
+# it loads -- the string "True" for the default mode -- after which setdefault
+# does nothing and the gate is off while the variable looks deliberately set.
+# So "was it already in the environment" cannot tell a developer's choice from
+# shiboken's stamp; only "was PySide6 already imported" can.  Hence the two
+# lines below and the check further down.
+#
+# One consequence to know before putting this in CI: under 16, PySide6 6.11.2
+# ABORTS the interpreter (SIGABRT, exit 134, no traceback) when a QtWidgets call
+# gets a wrong argument type, instead of raising TypeError.  Shiboken builds the
+# signature map for its own error path by reading unscoped names, and one of them,
+# QListWidgetItem.Type, is gone in this mode.  Nothing here takes that path -- the
+# suite has no pytest.raises(TypeError) -- but a test that adds one will die
+# rather than fail.
+_qt_preloaded = any(m == "PySide6" or m.startswith("PySide6.") for m in sys.modules)
+_enum_mode_chosen = None if _qt_preloaded else os.environ.get("PYSIDE6_OPTION_PYTHON_ENUM")
+os.environ.setdefault("PYSIDE6_OPTION_PYTHON_ENUM", "16")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import pyqtgraph as pg  # noqa: E402
+
+if _enum_mode_chosen is None:
+    from PySide6.QtCore import Qt as _Qt
+
+    if hasattr(_Qt, "AlignLeft"):
+        raise RuntimeError(
+            "scoped-enum gate is off: PySide6 was imported before this conftest "
+            "ran, so PYSIDE6_OPTION_PYTHON_ENUM=16 never took effect and the "
+            "unscoped enum names it exists to catch would pass unnoticed.  "
+            "Set PYSIDE6_OPTION_PYTHON_ENUM explicitly to choose a mode on "
+            "purpose."
+        )
 
 # --- synthetic drags -------------------------------------------------------
 #
