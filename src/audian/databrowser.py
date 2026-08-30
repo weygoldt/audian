@@ -1766,8 +1766,17 @@ class DataBrowser(QWidget):
         self.grids = 0
         self.show_traces = True
         self.show_specs = 0
+        # Both off, and both still one keystroke away -- F4 and F5.  The
+        # colour bar and the power spectrum answer questions a reader asks
+        # occasionally and the stack pays for them continuously: the power
+        # panel takes a tenth of every lane's width (`adjust_layout`) and
+        # the bar takes `theme.COLORBAR_WIDTH` plus its tick numbers, both
+        # out of the axis the signal is drawn on.  The spectrogram itself
+        # already carries the level mapping -- `fit_levels` puts the noise
+        # floor at the dark end by construction -- so the bar is a legend
+        # for a scale the reader is not reading off numbers anyway.
         self.show_powers = False
-        self.show_cbars = True
+        self.show_cbars = False
         self.show_fulldata = True
         # One full-height spectrogram of the mean power over the array,
         # instead of one stripe per electrode.  Lives inside the traces-off
@@ -8092,7 +8101,7 @@ class DataBrowser(QWidget):
         for ax in revealed:
             ax.update_plot()
 
-    def schedule_axis_alignment(self) -> None:
+    def schedule_axis_alignment(self, passes: int = 3) -> None:
         """Line the axis up again once Qt has finished moving the lanes.
 
         `align_time_axis` measures a lane's view box, and a lane's view box
@@ -8108,13 +8117,38 @@ class DataBrowser(QWidget):
         so the ticks under a full-screen spectrogram were 136 px short of
         it and stayed that way until the window was resized.
 
-        One turn of the event loop is enough, and the call is idempotent:
-        `align_time_axis` only writes the margins when they changed.
-        """
-        QTimer.singleShot(0, self.align_time_axis)
+        One turn of the event loop is usually enough, and it is not always.
+        The first time a colour bar is shown its `pg.ColorBarItem` has never
+        been laid out and so publishes no width, the grid hands the lane the
+        bar's column as well, and the measurement taken one turn later is of
+        a lane wider than the one that gets painted.  Measured on the mean
+        panel at 1200x900, pressing F5 from the state the browser now opens
+        in -- see `show_cbars`: the axis lands 59.5 px past the panel and one
+        further pass puts it within 0.5.  Every later F5 is right on the
+        first pass, because by then the bar has a size hint to publish; that
+        is why this only started mattering when the bar stopped being on at
+        start-up.
 
-    def align_time_axis(self) -> None:
+        So a pass that moved the margins books another, at most `passes` of
+        them.  That converges rather than guessing at a longer delay:
+        `align_time_axis` writes only when the measurement changed, and the
+        axis strip's own margins are not an input to any lane's view box, so
+        the first pass that agrees with the one before it is the last.
+        """
+        if passes < 1:
+            return
+        QTimer.singleShot(0, lambda: self._settle_axis_alignment(passes))
+
+    def _settle_axis_alignment(self, passes: int) -> None:
+        """One deferred alignment pass, and another if this one moved."""
+        if self.align_time_axis() and passes > 1:
+            self.schedule_axis_alignment(passes - 1)
+
+    def align_time_axis(self) -> bool:
         """Line the shared time axis up with the lanes above it.
+
+        Returns whether the margins actually moved, which is what lets
+        `schedule_axis_alignment` stop repeating.
 
         The axis lives in its own widget, so it has to be told where the
         lane view boxes start and end.  Measuring the reference lane is
@@ -8123,13 +8157,13 @@ class DataBrowser(QWidget):
         finished number instead of feeding into the number it is reading.
         """
         if self.taxis_fig is None:
-            return
+            return False
         channels = self.visible_channels()
         if not channels:
-            return
+            return False
         plot = self.time_plot(channels[0])
         if plot is None:
-            return
+            return False
         view = plot.getViewBox()
         rect = view.mapRectToScene(view.boundingRect())
         fig = self.figs[channels[0]]
@@ -8144,7 +8178,8 @@ class DataBrowser(QWidget):
             int(round(axis_origin + self.taxis_fig.width() - origin - rect.right())),
         )
         layout = self.taxis_fig.ci.layout
-        if (left, right) != self.taxis_margins:
+        moved = (left, right) != self.taxis_margins
+        if moved:
             self.taxis_margins = (left, right)
             layout.setContentsMargins(left, 0, right, 0)
         # One measurement, two consumers.  The control panel is built with the
@@ -8153,6 +8188,7 @@ class DataBrowser(QWidget):
         # would be a second thing to keep in step with the lanes.
         if self.control_panel is not None:
             self.control_panel.set_margins(left, right)
+        return moved
 
     def size_splitter(self) -> None:
         """Give the navigator its natural height and the stack the rest.

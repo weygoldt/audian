@@ -475,16 +475,23 @@ def test_the_focus_survives_the_round_trip(stack, mean_off):
 
 
 def test_the_time_axis_lines_up_under_the_mean_panel(stack, mean_off):
-    """A full-screen spectrogram has a colour bar, and the shared axis is
-    measured off the lane rather than off the window.
+    """A full-screen spectrogram's shared axis is measured off the lane
+    rather than off the window.
 
     It also has to survive a gesture that changes the lane's width without
     changing the stack's height: with one lane there is no scroll area
     resize to re-align the axis afterwards, so F5 left the ticks 136 px
     short of the panel they belong to and they stayed that way.
+
+    The sweep starts from the state `DataBrowser.show_cbars` opens in, so
+    the first toggle is the *first* time this stack has ever shown a colour
+    bar -- which is its own case, and the one
+    `DataBrowser.schedule_axis_alignment` repeats a pass for: a
+    `pg.ColorBarItem` that has not been laid out publishes no width, and a
+    single deferred measurement caught the lane 59.5 px too wide.
     """
     lane = enter_mean(stack)
-    for gesture in ("none", "colorbars off", "colorbars on"):
+    for gesture in ("none", "colorbars on", "colorbars off"):
         if gesture != "none":
             stack.toggle_colorbars()
             settle()

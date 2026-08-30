@@ -944,7 +944,7 @@
   },
   "toggle_cbars": {
     "checkable": true,
-    "checked": true,
+    "checked": false,
     "in_menus": true,
     "keys": [
       "F5"
