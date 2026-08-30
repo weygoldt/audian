@@ -1,9 +1,12 @@
 """Filter data on the fly."""
 
+import numpy as np
+
 from scipy.signal import butter, sosfilt
 
 from . import theme
-from .buffereddata import BufferedData
+from .buffereddata import CHUNK_BYTES, BufferedData, chunk_frames
+from .tasks.tokens import NEVER
 
 
 class BufferedFilter(BufferedData):
@@ -12,6 +15,9 @@ class BufferedFilter(BufferedData):
     # never actually prepended (see BufferedData.load_buffer) but was paid
     # for in raw buffer size.
     warmup_time = 0.5
+
+    #: Source bytes filtered per chunk; see `buffereddata.CHUNK_BYTES`.
+    chunk_bytes = CHUNK_BYTES
 
     def __init__(
         self,
@@ -47,14 +53,44 @@ class BufferedFilter(BufferedData):
         self.sos = None
         self.update()
 
-    def process(self, source, dest, nbefore):
+    def process(self, source, dest, nbefore, cancel=NEVER, progress=None):
+        """Filter `source` into `dest`, in interruptible chunks.
+
+        All channels go through one `sosfilt` call: the per-channel Python
+        loop built 16 temporaries and cost 258.5 ms where `axis=0` costs
+        225.3 ms on the same 16 channel buffer.
+
+        The chunking carries the filter state `zi` across the seams, which
+        is what makes the result **bit-identical** to filtering the whole
+        buffer in one call -- verified to `max abs diff 0.000e+00` at three
+        chunk sizes in `tests/test_chunked_dsp.py`.  Drop the `zi` and every
+        seam grows a fresh filter transient, which looks like data rather
+        than like a bug; that is what the test is there to stop.
+        """
         if self.sos is None:
             dest[:, :] = source[nbefore:, :]
-        else:
-            # Filter all channels in one call: the per-channel Python loop
-            # built 16 temporaries and cost 258.5 ms where axis=0 costs
-            # 225.3 ms on the same 16 channel buffer.
-            dest[:] = sosfilt(self.sos, source, axis=0)[nbefore:]
+            return None
+        nsource = len(source)
+        ndest = len(dest)
+        chunk = chunk_frames(source, self.chunk_bytes)
+        zi = np.zeros((self.sos.shape[0], 2) + source.shape[1:])
+        written = 0
+        i = 0
+        while i < nsource:
+            cancel.check()
+            j = min(nsource, i + chunk)
+            block, zi = sosfilt(self.sos, source[i:j], axis=0, zi=zi)
+            lo = max(i, nbefore)
+            hi = min(j, nbefore + ndest)
+            if hi > lo:
+                dest[lo - nbefore : hi - nbefore] = block[lo - i : hi - i]
+                written = hi - nbefore
+            i = j
+            if progress is not None:
+                progress(i / nsource)
+        if written < ndest:
+            dest[written:] = 0
+        return None
 
     def update(self):
         if (

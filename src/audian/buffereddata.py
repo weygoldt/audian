@@ -10,6 +10,27 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from . import theme
 
 
+#: Source bytes a chunked kernel works on at a time.
+#:
+#: Chunking exists for interruptibility -- the cancel token is polled
+#: between chunks, so a superseded refilter releases the CPU within one
+#: chunk instead of after a whole 27 s buffer.  It is not paid for: the
+#: chunk stays in cache, so it is *faster* than the single call.  Measured
+#: on the 16 channel, 20 kHz, 27 s buffer (70 MB) against 133 ms for one
+#: `sosfilt`: 16 MB +7.4%, 8 MB +5.5%, 4 MB -4.0%, 2 MB -21.9%,
+#: 1 MB -24.0%, 0.5 MB -26.6%, 0.25 MB -28.3%.  1 MB is 1.4 ms of work per
+#: chunk -- far finer than a frame, and most of the speedup.
+CHUNK_BYTES = 1_000_000
+
+
+def chunk_frames(source, chunk_bytes: int = CHUNK_BYTES) -> int:
+    """How many frames of `source` fit in one chunk. At least one."""
+    row = source.itemsize
+    for n in source.shape[1:]:
+        row *= n
+    return max(1, chunk_bytes // max(1, row))
+
+
 class _Notifier(QObject):
     """Signal carrier for `BufferedData`.
 
@@ -177,7 +198,20 @@ class BufferedData(BufferedArray):
         if soffset + snframes > len(self.source.buffer):
             snframes = len(self.source.buffer) - soffset
         source = self.source.buffer[soffset : soffset + snframes]
-        self.process(source, buffer, nbefore)
+        extra = self.process(source, buffer, nbefore)
+        if extra:
+            self.apply_extra(extra)
+
+    def apply_extra(self, extra: dict) -> None:
+        """Adopt the scalars a `process()` derived along with the buffer.
+
+        `process()` returns them rather than assigning them, because it also
+        runs on a worker thread, where writing straight into the live trace
+        would race whatever the GUI is painting from it.  On the synchronous
+        path this is called one statement later and nothing changes.
+        """
+        for key, value in extra.items():
+            setattr(self, key, value)
 
     def recompute(self):
         if len(self.source.buffer) > 0:
