@@ -8807,7 +8807,29 @@ class DataBrowser(QWidget):
                 # if len(self.show_channels) == 1:
                 #    self.acts.channels[self.show_channels[0]].setCheckable(False)
                 self.set_channels()
-        self.setFocus()
+        # The keyboard belongs to the stack after a stack gesture, and this
+        # is where the browser says so.  It used to say `self.setFocus()`,
+        # which is not the no-op a `NoFocus` browser makes it look like:
+        # `QWidget.setFocus` ignores the focus policy -- the policy decides
+        # only what a Tab or a click may focus -- so measured, the focus did
+        # move, onto a `DataBrowser` that has no `keyPressEvent` of its own
+        # and no scroll bar to drive.  Arrow keys and Page Up did nothing
+        # after every channel toggle, and the reader had to click the stack
+        # to get them back.
+        #
+        # There is something to hand back, too: hiding a channel hides its
+        # rail row, and the rail row is `StrongFocus` because it answers S
+        # and M itself, so a reader who clicked one was holding the keyboard
+        # in a widget the toggle then took away.  Measured, Qt's own choice
+        # for where it goes next is the side panel's scroll area.
+        #
+        # So name the scroll area, which is the only focusable widget on this
+        # side and the one `set_side_panel` hands the keyboard back to.  It
+        # is `None` on the branch where the stack does not scroll, and the
+        # fallback there is the browser the old call named, because on that
+        # branch there is nothing better to name.
+        target = self.stack_area if self.stack_area is not None else self
+        target.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def show_channel(self, channel):
         if channel < 0 or channel >= self.data.channels:

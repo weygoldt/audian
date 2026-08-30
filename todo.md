@@ -13,13 +13,25 @@
   since the side panel landed it is the floor with a session bundle loaded
   too -- the parameter bar used to take it to 797 and no longer does.
 
-- [ ] `DataBrowser.setFocus()` is a no-op and one call site believes it is
-  not.  `DataBrowser` is a plain `QWidget` and nothing raises its focus
-  policy off `NoFocus`, so the call at the end of `toggle_channel` does
-  nothing: measured, `app.focusWidget()` is still `None` afterwards.  The
-  only focusable widget on that side is `stack_area` (`StrongFocus`), which
-  is what `set_side_panel` hands the keyboard back to.  Either the browser
-  takes a focus policy or the call should name the scroll area.
+- [x] `toggle_channel` names the scroll area now, and the entry this replaces
+  had the diagnosis backwards.  `DataBrowser.setFocus()` is **not** a no-op:
+  `QWidget.setFocus` ignores the focus policy -- the policy decides only what
+  a Tab or a click may focus -- so the browser took the keyboard every time
+  it was told to, `NoFocus` and all.  The old measurement that said otherwise
+  was made in a window the offscreen platform never activated, where
+  `app.focusWidget()` reads `None` whatever the code does; activated, the
+  focus really does land on the `DataBrowser`, which has no `keyPressEvent`
+  and no scroll bar, so Page Up and the arrows did nothing after every
+  channel toggle until the reader clicked the stack back.
+
+  Not removed, because the call had a job and it is one this file already
+  records for `set_side_panel`: hiding a channel hides its rail row, the rail
+  row is `StrongFocus` because it answers S and M itself, and Qt's own choice
+  for where the keyboard goes when that row is hidden is -- measured -- the
+  side panel's scroll area, across the window from the stack the reader was
+  rearranging.  So it hands it to `stack_area`, unconditionally, the way it
+  always meant to.  Two tests in `test_panelsplitter.py`, both of which read
+  the browser itself as the focus widget before the fix.
 
 - [ ] `theme.restyle_tree` can raise out of its own handler.  It reads the
   band spec with `edges[0]` and `edges[1]` (`theme.py:1644-1650`) but

@@ -2717,3 +2717,96 @@ def test_the_two_band_fields_show_both_ends(browser, band_reset):
     browser.set_band_widget(500.0, 2000.0)
     assert browser.fminw.value() == pytest.approx(500.0)
     assert browser.fmaxw.value() == pytest.approx(2000.0)
+
+
+# ------------------------------------------ the keyboard, when a lane goes
+#
+# Last in the file on purpose: `browser` is module scoped and everything
+# above it measures geometry, so a test that hides a channel runs after
+# them rather than handing them a stack of a different height.
+
+
+@pytest.fixture
+def channels_reset(browser):
+    """Put the channel set back: `browser` is shared with every test above."""
+    before = (
+        list(browser.show_channels),
+        list(browser.selected_channels),
+        browser.current_channel,
+    )
+    yield
+    for c, act in enumerate(browser.acts.channels[: browser.data.channels]):
+        blocked = act.blockSignals(True)
+        act.setChecked(c in before[0])
+        act.blockSignals(blocked)
+    browser.set_channels(*before)
+    settle()
+
+
+def test_hiding_a_channel_hands_the_keyboard_to_the_stack(browser, channels_reset):
+    """A rail row takes the keyboard with it when it goes.
+
+    `ChannelRailRow` is `StrongFocus` -- it answers S and M itself -- so a
+    reader who clicked one is holding the focus in a widget the next channel
+    toggle may hide.  Qt picks where it goes then, and measured its pick is
+    the side panel's scroll area, on the other side of the window from the
+    stack the reader was just rearranging.
+
+    Offscreen, `QApplication.focusWidget()` is None in a window the platform
+    does not consider active, so this activates the window first; without
+    that every assertion below reads None and passes for a reason unrelated
+    to what it claims.
+    """
+    view = browser
+    stack = view.stack_area
+    view.window().activateWindow()
+    settle()
+    assert view.window().isActiveWindow()
+
+    rail = view.rail_rows[3]
+    rail.setFocus(Qt.FocusReason.OtherFocusReason)
+    settle()
+    assert QApplication.focusWidget() is rail
+
+    # the gesture itself: the menu entry is checkable and drives everything
+    view.acts.channels[3].setChecked(False)
+    settle()
+    assert not rail.isVisible()
+    assert QApplication.focusWidget() is stack
+
+
+def test_a_channel_toggle_never_parks_the_keyboard_on_the_browser(
+    browser, channels_reset
+):
+    """The defect the old `self.setFocus()` was, rather than the one it looked.
+
+    `QWidget.setFocus` ignores the focus policy -- the policy decides only
+    what a Tab or a click may focus -- so a `NoFocus` `DataBrowser` takes the
+    focus when it is told to, and this call told it to after every toggle.
+    Measured, the focus really did land on the browser, which has no
+    `keyPressEvent` and no scroll bar, so Page Up and the arrows did nothing
+    until the reader clicked the stack again.
+
+    Asserted from the side panel because that is where the focus is easiest
+    to place on purpose, and because it is the one gesture that moves the
+    keyboard across the window: a toggle is a stack gesture and the keyboard
+    follows it to the stack.
+    """
+    view = browser
+    view.window().activateWindow()
+    settle()
+    inner = view.param_tabs.buttons["Audio"]
+    try:
+        inner.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        inner.setFocus(Qt.FocusReason.OtherFocusReason)
+        settle()
+        assert QApplication.focusWidget() is inner
+
+        view.acts.channels[2].setChecked(False)
+        settle()
+        assert 2 not in view.show_channels, "the toggle did happen"
+        assert QApplication.focusWidget() is not view
+        assert QApplication.focusWidget() is view.stack_area
+    finally:
+        inner.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        settle()
