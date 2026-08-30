@@ -33,22 +33,35 @@ sys.path.insert(0, str(REPO / "src"))
 from audian import theme  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def keep_the_theme():
+    """Put the active theme back after every test in this module.
+
+    Autouse, and not the job of the fixture that redirects the settings
+    file, because the two are independent and the leak this prevents is
+    silent and lands somewhere else entirely: a test here that ends on the
+    daylight table left `test_controlpanel`'s theme-switch test comparing
+    the light colour against itself, in another file, two hundred tests
+    later.  Measured, not hypothesised -- that is how this fixture came to
+    exist.
+    """
+    name, variant = theme.current_theme(), theme.current_variant()
+    yield
+    if variant == theme.THEME_NATIVE:
+        theme.set_native_theme()
+    else:
+        theme.set_theme(name)
+
+
 @pytest.fixture
 def store(tmp_path):
-    """Redirect the settings file, and put the theme back afterwards.
-
-    The theme is module-global state that `read_color_map_setting` reads, so
-    a test that leaves it on the daylight table changes the meaning of every
-    later test in the run.
-    """
+    """Redirect the settings file for one test, and put it back afterwards."""
     import audian.audian as audian_app
 
     original_path = audian_app.settings_path
-    original_theme = theme.current_theme()
     audian_app.settings_path = lambda: tmp_path / "settings.json"
     yield audian_app
     audian_app.settings_path = original_path
-    theme.set_theme(original_theme)
 
 
 @pytest.fixture

@@ -1751,6 +1751,22 @@ def tint(widget: Any, token_name: str = "fg.muted") -> Any:
     time.
     """
     widget.setProperty(FG_PROPERTY, token_name)
+    if current_variant() == THEME_NATIVE:
+        # Standard Qt: the colour of a widget's text is a palette role, not
+        # a stylesheet rule.  A per-widget sheet also detaches the widget
+        # from the style entirely -- Qt stops drawing it natively the moment
+        # one is set -- which is the opposite of what following the desktop
+        # is for.
+        pal = widget.palette()
+        for role in (
+            QPalette.ColorRole.WindowText,
+            QPalette.ColorRole.Text,
+            QPalette.ColorRole.ButtonText,
+        ):
+            pal.setColor(role, qcolor(token_name))
+        widget.setPalette(pal)
+        widget.setStyleSheet("")
+        return widget
     widget.setStyleSheet(f"color: {token(token_name)};")
     return widget
 
@@ -1759,6 +1775,17 @@ def frame(widget: Any) -> Any:
     """Give a container the hairline group frame, re-appliably."""
     widget.setObjectName("audianGroup")
     widget.setProperty(FRAME_PROPERTY, True)
+    if current_variant() == THEME_NATIVE:
+        # Standard Qt: a frame is a QFrame shape the style draws, in the
+        # style's own idea of a group border.  Anything that is not a QFrame
+        # gets no frame rather than a painted-on one.
+        widget.setStyleSheet("")
+        shape = getattr(widget, "setFrameShape", None)
+        if shape is not None:
+            from PySide6.QtWidgets import QFrame
+
+            shape(QFrame.Shape.StyledPanel)
+        return widget
     widget.setStyleSheet(
         "#audianGroup { "
         f"border: {HAIRLINE}px solid {token('border')}; "
@@ -1791,6 +1818,21 @@ def band(
     widget.setProperty(BAND_PROPERTY, f"{int(bool(top))}{int(bool(bottom))}|{ground}")
     name = widget.objectName() or "audianBand"
     widget.setObjectName(name)
+    if current_variant() == THEME_NATIVE:
+        # Standard Qt: a ground is a palette role the style fills, chosen by
+        # `setBackgroundRole`.  The seam rule is dropped with the sheet --
+        # the desktop's own style already separates a tool bar from what is
+        # under it, in whatever way that desktop separates things, and a
+        # hairline of our own on top of that is the painted look this mode
+        # exists to stop.
+        widget.setStyleSheet("")
+        widget.setAutoFillBackground(True)
+        widget.setBackgroundRole(
+            QPalette.ColorRole.Window
+            if ground == "bg.base"
+            else QPalette.ColorRole.Button
+        )
+        return widget
     rules = [f"background-color: {token(ground)}"]
     if top:
         rules.append(f"border-top: {HAIRLINE}px solid {token('edge')}")
