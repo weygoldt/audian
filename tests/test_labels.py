@@ -52,7 +52,8 @@ from PySide6.QtGui import QKeySequence  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from audian.databrowser import DataBrowser  # noqa: E402
+from audian import theme  # noqa: E402
+from audian.databrowser import DataBrowser, SidePanel  # noqa: E402
 from audian.labels import (  # noqa: E402
     COLUMNS,
     DEFAULT_CATEGORIES,
@@ -688,21 +689,38 @@ def test_the_status_line_says_how_to_make_the_first_label(labelling):
     assert text.endswith("saved")
 
 
-def test_the_labels_group_costs_the_lanes_no_height(browser):
-    """Four rows against the annotation group's five.
+def test_the_labels_group_costs_the_lanes_no_width(browser):
+    """The claim moved axis with the bar, and this is the new one.
 
-    `ParameterGroup.equalize` gives every group the tallest one's frame, so
-    a group at or under the annotations' row count is free.  A row of this
-    bar is about 24 px off every lane of a sixteen channel stack, which is
-    why this is asserted rather than assumed.
+    It used to be height.  `ParameterGroup.equalize` gave every group the
+    tallest one's frame, because in a band under the channel stack the
+    tallest page is what every lane pays for -- a row of that bar was about
+    24 px off every lane of a sixteen channel stack.  So the assertion was
+    `len({g.body.height()}) == 1`: proof that equalization had run.
+
+    In a panel beside the lanes that rationale evaporates.  A tab change
+    cannot resize a lane, `equalize` has no caller, and every group is its
+    own natural height -- which is what the reader wants, since padding a
+    three-row group to a five-row one's height buys nothing and puts its
+    controls a long way apart.  `equalize` itself stays, still correct and
+    still unit-tested at `test_eventoverlay.py`, with nothing calling it.
+
+    What costs something now is width, so that is what is asserted: no
+    group may ask for more than the panel is prepared to be.
     """
     titles = [g.title for g in browser.param_groups]
     assert "Editable labels" in titles
     labels_group = browser.param_groups[titles.index("Editable labels")]
     annotations = browser.param_groups[titles.index("Fixed labels")]
     assert labels_group.rows <= annotations.rows
+    # every page fits the panel at its floor, so nothing here scrolls
+    # sideways or clips
+    content = SidePanel.MIN_WIDTH - 2 * theme.S8
+    for group in browser.param_groups:
+        assert group.minimumSizeHint().width() <= content, group.title
+    # and the groups really are their own heights now, not one height
     heights = {g.body.height() for g in browser.param_groups}
-    assert len(heights) == 1
+    assert len(heights) > 1
 
 
 def test_the_chip_strip_asks_for_no_width_of_its_own(browser):
@@ -746,8 +764,14 @@ def test_no_category_is_lost_to_the_fold(browser):
         shown = [n for n in names if not strip.chips[n].isHidden()]
         return shown, [c.name for c in strip.folded]
 
-    # Wide: the page now gets the whole bar rather than a fifth of it, so
-    # twelve categories fit over the strip's two lines and nothing folds.
+    # Wide: driven to a stated width rather than taking whatever the layout
+    # happens to give.  The strip used to get the whole bar -- 1167 px,
+    # measured -- and twelve categories fit over its two lines with nothing
+    # folded.  A side panel is 344 px, where they do not, so the ambient
+    # width is no longer the thing that makes this case wide and the test
+    # has to say what it means by wide.
+    strip.resize(1200, strip.height())
+    settle()
     shown, folded = state()
     assert shown + folded == names
     assert folded == []
@@ -755,7 +779,9 @@ def test_no_category_is_lost_to_the_fold(browser):
 
     # Narrow: the invariant that matters.  Every category is either on the
     # strip or in the +N menu, in order, and the shown set stays a PREFIX so
-    # what the reader sees is in step with the digit keys under it.
+    # what the reader sees is in step with the digit keys under it.  This is
+    # the case the panel is always in, which is why it is the one that
+    # carries the test now.
     strip.resize(240, strip.height())
     settle()
     shown, folded = state()

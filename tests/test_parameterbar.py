@@ -33,6 +33,7 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tests"))
 
 from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtGui import QColor, QIcon  # noqa: E402
 from PySide6.QtWidgets import QLabel, QSizePolicy, QToolButton  # noqa: E402
 
 from audian import theme  # noqa: E402
@@ -40,6 +41,7 @@ from audian.databrowser import (  # noqa: E402
     LogSlider,
     ParameterGroup,
     ParameterTabs,
+    SidePanel,
 )
 from audian.wraprow import WrapRow, pack_row  # noqa: E402
 from test_panelsplitter import app as app  # noqa: E402,F401  -- a fixture
@@ -70,6 +72,26 @@ def group_minimums(view):
 #: in the application and the one the wrapping was written for.
 CHIP_NAMES = ("All", "Volley", "Baseline", "Silence",
               "Resting pulses", "Volley pulses")
+
+
+def danger_pixels(button, checked=False):
+    """How many pixels of the alert token a tab button really paints.
+
+    Rendered rather than inspected: the whole point of the badge is that it
+    is *visible*, and a property, a tool tip and an unpainted suffix are all
+    things an implementation that draws nothing would still set.
+    """
+    icon = button.icon()
+    state = QIcon.State.On if checked else QIcon.State.Off
+    pixmap = icon.pixmap(button.iconSize(), QIcon.Mode.Normal, state)
+    image = pixmap.toImage()
+    want = QColor(theme.token("danger")).rgb()
+    return sum(
+        1
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixel(x, y) == want
+    )
 
 
 def chip_row(parent=None, names=CHIP_NAMES):
@@ -301,12 +323,23 @@ def test_a_narrow_row_still_lets_a_field_ask_for_the_width(app):
 # ------------------------------------------------------------------- width
 
 
-def test_the_bar_asks_for_the_widest_group_and_not_for_all_of_them(browser):
-    """The whole point of the stack.
+def test_the_panel_asks_for_a_width_it_chose(browser):
+    """The claim that replaces "the widest page plus two margins".
 
-    Measured on this fixture: the groups are Filter 288, Spectrogram 535,
-    Audio 274, Annotations 529 and Labels 284, which sum to 1910 and peak at
-    535.  Side by side the bar asked for 1445 px.
+    That identity was the whole point of the `QStackedLayout` while the bar
+    was a band under the stack: its minimum was the widest page's, never the
+    sum, which is what got the window's floor from 2456 px back to 695.
+
+    In a panel the arithmetic is better than that.  A `QScrollArea` with
+    `setWidgetResizable(True)` decouples what the panel asks for from what
+    its widest page needs, so the number is *chosen* -- and an explicit
+    `setMinimumWidth` overrides a larger minimum coming up from the layout
+    rather than being maxed with it, which is the property the whole width
+    budget rests on.
+
+    Measured on this fixture: the groups are Filter 163, Spectrogram 172,
+    Audio 172, Fixed labels 110 and Editable labels 200, summing to 817 and
+    peaking at 200, against a panel that asks for 220 whatever they do.
     """
     view = browser
     minimums = group_minimums(view)
@@ -314,11 +347,17 @@ def test_the_bar_asks_for_the_widest_group_and_not_for_all_of_them(browser):
     widest = max(minimums.values())
     total = sum(minimums.values())
     assert total > widest * 2  # or this test is not measuring anything
-    bar = view.parambar.minimumSizeHint().width()
-    # the widest page plus the bar's own left and right margins, and nothing
-    # else -- in particular, not the sum
-    assert bar == widest + 2 * theme.S8
-    assert bar < total
+
+    panel = view.parambar
+    assert panel.minimumWidth() == SidePanel.MIN_WIDTH
+    # the floor is the panel's own number and not its contents' -- neither
+    # the sum, which is what side-by-side groups cost, nor the widest page,
+    # which is what the bar cost
+    assert panel.minimumWidth() < total
+    assert panel.minimumSizeHint().width() < widest
+    # and every page fits inside it, so the scroll area is there for the
+    # reader's own data rather than for the application's own controls
+    assert widest <= SidePanel.MIN_WIDTH - 2 * theme.S8
 
 
 def test_the_tab_strip_is_not_what_sets_the_floor(browser):
@@ -354,7 +393,7 @@ def test_a_loaded_bundle_does_not_widen_the_window(browser, tmp_path):
     stronger than the one it replaces.
     """
     view = browser
-    before = view.parambar.minimumSizeHint().width()
+    before = view.parambar.minimumWidth()
     before_group = view.annotation_group.minimumSizeHint().width()
     before_window = view.window().minimumSizeHint().width()
     view.annotations.load(simple(tmp_path / "bundle").ref.metadata_path)
@@ -369,7 +408,7 @@ def test_a_loaded_bundle_does_not_widen_the_window(browser, tmp_path):
         assert all(not chip.isHidden() for chip in view.annotation_chips)
         # and none of them cost a pixel of width
         assert view.annotation_group.minimumSizeHint().width() == before_group
-        assert view.parambar.minimumSizeHint().width() == before
+        assert view.parambar.minimumWidth() == before
         assert view.window().minimumSizeHint().width() == before_window
         # the annotations page is not the widest page any more either
         assert before_group < max(group_minimums(view).values())
@@ -411,61 +450,117 @@ def test_a_long_message_does_not_widen_the_window(browser):
 
 
 @pytest.mark.parametrize("fixture", ["browser", "wide_browser"])
-def test_a_tab_change_never_takes_height_from_the_channel_stack(fixture, request):
-    """The bar must not grow into the lanes when a tab is picked.
+def test_a_tab_change_never_takes_width_from_the_channel_stack(fixture, request):
+    """The same claim, on the axis the panel constrains.
 
-    `QStackedLayout` inherits `QLayout.expandingDirections()`, which is both
-    directions, and `QWidgetItem` hands that to its widget -- so without an
-    explicit `Fixed` vertical policy the bar takes every pixel the splitter
-    will give it.  Measured without it: 402 px of bar against a 154 px size
-    hint, and the stack's scroll viewport down to 247 px over 616 px of
-    content.
+    It used to be about height: `QStackedLayout` inherits
+    `QLayout.expandingDirections()`, which is both directions, so without an
+    explicit `Fixed` vertical policy the bar took every pixel the splitter
+    would give it -- measured, 402 px of bar against a 154 px size hint and
+    the stack's viewport down to 247 px over 616 px of content.
 
-    Asserted on the SCROLL AREA and on the bar's own height, not on lane
-    height: the lanes keep their height while the viewport shrinks under
-    them, so a lane-height assertion cannot see this defect at all.
+    Beside the lanes, height is exactly what the panel is *supposed* to
+    take, and the height version of this test would pass while measuring
+    nothing.  What must not move is the width: a tab change picks a page,
+    and a page that asked for more width than the panel has would move the
+    splitter under the reader's hand.
+
+    Asserted on the SCROLL AREA and on the panel's own width, not on lane
+    width: the lanes keep their width while the viewport narrows under
+    them, so a lane-width assertion cannot see this defect at all.
     """
     view = request.getfixturevalue(fixture)
-    bar = view.parambar
-    scroll = view.stack_area.verticalScrollBar()
-    assert bar.height() == bar.sizeHint().height()
-    heights = {bar.height()}
-    scrolls = {scroll.maximum()}
+    panel = view.parambar
+    viewport = view.stack_area.viewport()
+    widths = {panel.width()}
+    canvas = {viewport.width()}
+    floors = {view.window().minimumSizeHint().width()}
     for group in view.param_groups:
         view.param_tabs.buttons[group.title].click()
         settle()
         pump(0.2)
         assert view.param_tabs.current_title() == group.title
-        assert bar.height() == bar.sizeHint().height()
-        heights.add(bar.height())
-        scrolls.add(scroll.maximum())
-    # One height across every tab: the bar itself is inert, which is the
-    # claim.  It holds exactly on Qt6 as it did on Qt5.
-    assert len(heights) == 1
-
-    # The stack's scroll range is allowed a couple of pixels of slack, and
-    # only because Qt6 measured it that way.  On Qt5 this was one value; on
-    # Qt6 the four-channel stack is still one (117) and the sixteen-channel
-    # one moves between 178 and 180 while the bar stays at 168 either way.
-    #
-    # So the bar is not taking height from the stack -- it cannot be, its own
-    # height does not change.  Two pixels on sixteen lanes is the rounding in
-    # `lane_content_height`, which divides a viewport by a channel count and
-    # lands differently once the bar's frame height is computed from Qt6 font
-    # metrics.  Recorded rather than chased because the fix is the layout
-    # solver extraction, where this arithmetic becomes testable without a
-    # GUI; until then a tolerance with a measurement behind it is honest and
-    # `len(scrolls) == 1` would just be re-baselined noise.
-    assert max(scrolls) - min(scrolls) <= 2, (
-        f"the stack's scroll range moved {max(scrolls) - min(scrolls)} px "
-        f"across tabs: {sorted(scrolls)}"
-    )
+        widths.add(panel.width())
+        canvas.add(viewport.width())
+        floors.add(view.window().minimumSizeHint().width())
+    # One width across every tab, on both sides of the handle, and one
+    # window floor: the panel is inert horizontally, which is the claim.
+    assert len(widths) == 1, sorted(widths)
+    assert len(canvas) == 1, sorted(canvas)
+    assert len(floors) == 1, sorted(floors)
 
 
-def test_the_bar_is_fixed_vertically(browser):
-    """The one line the test above exists to protect, stated directly."""
-    for widget in (browser.parambar, browser.param_tabs):
-        assert widget.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
+def test_the_panel_gives_its_height_back_to_the_stack(wide_browser):
+    """The feature, measured on the case it is for.
+
+    The bar was 168 px of the scarce axis -- five lanes at
+    `theme.CHANNEL_DENSE_HEIGHT` -- spent whether or not anybody was looking
+    at it, and there was no action anywhere in audian to hide it.  Measured
+    on the sixteen channel stack: the scroll viewport was 483 px tall with
+    the bar under it and is 651 with the panel beside it, exactly the 168
+    the bar cost, and the range the reader has to scroll through to reach
+    the last lane fell from 196 px to 28.
+    """
+    view = wide_browser
+    settle()
+    pump(0.3)
+    viewport = view.stack_area.viewport()
+    # the bar was 168 px tall, measured, and this is where it went
+    assert viewport.height() >= 483 + 168, viewport.height()
+    # and the lanes it bought are lanes the reader no longer scrolls to
+    assert view.stack_area.verticalScrollBar().maximum() < 196
+
+
+def test_the_panel_is_fixed_on_the_axis_it_constrains(browser):
+    """The one line the test above exists to protect, stated directly.
+
+    The constrained axis inverted with the move.  Under the stack the bar
+    had to be `Fixed` vertically or it ate the lanes; beside them the panel
+    must be free vertically -- that is the whole point -- and must not grow
+    horizontally, which is what its own minimum and the scroll area under
+    it enforce.
+    """
+    panel = browser.parambar
+    assert panel.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
+    assert panel.sizePolicy().horizontalPolicy() != QSizePolicy.Policy.Expanding
+    assert panel.minimumWidth() == SidePanel.MIN_WIDTH
+    # the pages scroll rather than widening the panel to fit
+    assert browser.param_tabs.area is not None
+    assert browser.param_tabs.area.widgetResizable()
+
+
+def test_a_hidden_panel_costs_the_window_no_width(browser):
+    """Hidden means hidden, and that is load-bearing rather than tidy.
+
+    A `QSplitter` child dragged to zero is *visible at width zero*, and Qt
+    still charges its whole minimum to the splitter -- measured in isolation,
+    524 px against the 300 the same splitter reports once the child is
+    genuinely hidden.  So a panel closed by collapsing it would keep the
+    laptop floor charged for a panel the reader believes is gone.
+
+    Measured here: the browser asks for 337 px with the panel shown
+    (110 of canvas + 220 of panel + 7 of handle) and 110 with it hidden,
+    which is exactly what a browser with no panel at all would ask for.
+    """
+    view = browser
+    panel = view.parambar
+    shown = view.minimumSizeHint().width()
+    try:
+        panel.setVisible(False)
+        settle()
+        pump(0.2)
+        hidden = view.minimumSizeHint().width()
+        # the panel and the handle both stop counting
+        assert hidden < shown
+        assert hidden <= shown - SidePanel.MIN_WIDTH
+        # and the canvas is all there is left
+        assert hidden == view.side_split.widget(0).minimumSizeHint().width()
+        assert view.side_split.handle(1).isHidden()
+    finally:
+        panel.setVisible(True)
+        settle()
+        pump(0.2)
+    assert view.minimumSizeHint().width() == shown
 
 
 # ------------------------------------------------------------------ content
@@ -478,6 +573,14 @@ def test_a_page_is_usable_the_first_time_its_tab_is_raised(browser):
     Labels file row and the annotation pointer readout elide to it, and the
     category chip strip folds to it.  Measured on a page that had never been
     raised: 100 px against the 1162 it gets once it is.
+
+    The assertion is on the *width* rather than on an un-elided line, and
+    that is the move's doing.  A 1200 px band could show the whole file row;
+    a 360 px panel cannot, and the row was always allowed to elide -- it is
+    `QSizePolicy.Ignored` on purpose and keeps its full text in the tool
+    tip.  So "not elided" was only ever a proxy for "the page has been given
+    a real width", and now that the two have come apart the real claim is
+    the one worth asserting.
     """
     view = browser
     view.param_tabs.buttons["Filter"].click()
@@ -488,9 +591,17 @@ def test_a_page_is_usable_the_first_time_its_tab_is_raised(browser):
     view.param_tabs.buttons["Editable labels"].click()
     settle()
     pump(0.3)
-    # the file row says its whole line, not a sliver of it
-    assert view.label_statusw.text() == view.label_status_text()
-    assert not view.label_statusw.text().endswith("…")
+    # the page was given the panel's width, not the 100 px of a page that
+    # has never been current
+    content = view.parambar.width() - 2 * theme.S8
+    assert view.label_group.width() == content
+    assert view.label_statusw.width() > 100
+    # the row said what it could of its line, and kept the whole of it
+    assert view.label_statusw.toolTip() == view.label_status_text()
+    assert view.label_statusw.text()
+    assert view.label_status_text().startswith(
+        view.label_statusw.text().rstrip("…")
+    )
     # and the chips are folded against the width the strip really has
     strip = view.label_chipbox
     names = [c.name for c in view.labels.categories]
@@ -503,39 +614,73 @@ def test_a_page_is_usable_the_first_time_its_tab_is_raised(browser):
 def test_every_group_keeps_its_name(browser):
     """The tab carries the name the caption used to.
 
-    `ParameterGroup.title` is the one place it lives now, and the tab
-    button's text is built from it -- so a group cannot end up with a tab
-    that says something else.
+    `ParameterGroup.title` is the one place it lives now, and the tab's tool
+    tip is built from it -- so a group cannot end up with a tab that says
+    something else.
+
+    The tool tip and not the text: the strip is icon-only, because six
+    marks cost 220 px where six words cost 579 and a panel has 344.  Which
+    means the tool tip is the *only* place the name is written, so it is
+    asserted here rather than assumed, and every group must have a mark of
+    its own -- two groups sharing one glyph would be two tabs a reader
+    cannot tell apart.
     """
     view = browser
+    marks = {}
     for group in view.param_groups:
         assert group.title
-        assert (
-            view.param_tabs.buttons[group.title].text().startswith(group.title.upper())
-        )
+        button = view.param_tabs.buttons[group.title]
+        assert not button.text()  # icon-only, so nothing invisible is set
+        assert button.toolTip().startswith(group.title)
+        kind = view.param_tabs.kinds[group.title]
+        assert kind, group.title
+        assert kind not in marks, f"{group.title} and {marks.get(kind)} share {kind}"
+        marks[kind] = group.title
+        assert not button.icon().isNull()
 
 
-def test_a_lone_field_does_not_stretch_across_the_window(browser):
-    """A group gets the whole bar now, not a fifth of it.
+def test_a_lone_field_fills_its_row_but_never_the_window(browser):
+    """The rule inverted with the panel, and the defect behind it did not.
 
     Measured before the spacer column, on a 1449 px window: the Audio Source
     and Speed combo boxes were 1327 px each.  A combo box reading "1" a
-    metre wide is not a control, it is a defect.  The sliders are the
-    exception and say so themselves with `ParameterGroup.expanding`.
+    metre wide is not a control, it is a defect, and `SPACER_COLUMN` is what
+    stopped it -- the leftover goes to a dead column unless a field asks for
+    it by name with `ParameterGroup.expanding`.
+
+    A 344 px panel row has the opposite problem.  A combo box that stops at
+    its 156 px size hint with 188 px of nothing beside it reads as a control
+    that failed to lay out, so a narrow row hands the leftover to its last
+    field.  What has not changed is the thing the spacer column was really
+    defending: the field is as wide as its *row*, and the row is as wide as
+    the panel, which cannot reach across the window however wide the window
+    gets.  That is what is asserted here.
     """
     view = browser
     view.param_tabs.buttons["Audio"].click()
     settle()
     pump(0.3)
     page = view.param_groups[[g.title for g in view.param_groups].index("Audio")]
-    assert page.width() > 600  # the page really does have the whole bar
-    assert view.audiosrcw.width() < page.width() / 2
-    assert view.audiofacw.width() < page.width() / 2
+    # the page gets the panel's whole content width -- the absolute 600 this
+    # used to assert was a bottom-bar number, and a panel narrower than the
+    # window is the entire point
+    content = view.parambar.width() - 2 * theme.S8
+    assert page.width() == content
+    assert page.width() >= SidePanel.MIN_WIDTH - 2 * theme.S8
+    # the lone field fills its row ...
+    assert view.audiosrcw.width() > page.width() / 2
+    assert view.audiofacw.width() > page.width() / 2
+    # ... and the row is the panel, not the window: the 1327 px combo box
+    # is unreachable because the panel is a fraction of the window's width
+    window = view.window().width()
+    assert view.audiosrcw.width() <= content
+    assert view.audiosrcw.width() < window / 2
 
     view.param_tabs.buttons["Filter"].click()
     settle()
     pump(0.3)
-    # ... and the slider, which asked, does get the width
+    # ... and the slider, which asked, still gets the width over its
+    # neighbour rather than sharing it
     assert ParameterGroup.wants_width(view.hpsliderw)
     assert view.hpsliderw.width() > view.hpfw.width()
 
@@ -553,25 +698,49 @@ def test_the_tabs_are_not_in_the_keyboard_focus_chain(browser):
 def test_a_tab_marks_itself_when_its_page_is_saying_something_bad(browser):
     """READ-ONLY and SAVE FAILED are the two states that cost work.
 
-    The mark is a glyph appended to the name and not a colour: the readers
-    the spectrogram's colour map was chosen for would be told nothing by a
-    hue.  The full line is the tab's tool tip.
+    The mark is a shape and not a colour: the readers the spectrogram's
+    colour map was chosen for would be told nothing by a hue.  It used to
+    be a "!" appended to the tab's name; an icon tab has no name to append
+    to, so it is a dot painted into the corner of the glyph -- the same
+    statement in the one channel an icon has.
+
+    The dot goes in the BOTTOM right.  The two label marks are told apart
+    by a tag in their top right, so a badge there would hide which tab it
+    is marking.
+
+    Asserted on the painted pixels and not only on the property, because a
+    property is exactly what an implementation that draws nothing would
+    still set -- which is what keeping the invisible " !" suffix on an
+    icon-only button would have done, measured: same 35 px hint, same ink,
+    and `text()` still returning "EDITABLE LABELS !".
     """
     view = browser
     tabs = view.param_tabs
-    assert tabs.buttons["Editable labels"].text() == "EDITABLE LABELS"
+    button = tabs.buttons["Editable labels"]
+    assert not button.text()
 
     # the tab already carries its group's shortcuts; the alert is added to
     # that rather than replacing it
-    quiet = tabs.buttons["Editable labels"].toolTip()
+    quiet = button.toolTip()
     assert "Show  F9" in quiet
+    assert not button.property("alert")
+    assert danger_pixels(button) == 0
+    width = button.sizeHint().width()
 
     view.labels.blocked = "rec-editable-labels.csv could not be read (boom)"
     view.update_label_status()
     settle()
     try:
-        assert tabs.buttons["Editable labels"].text() == "EDITABLE LABELS !"
-        loud = tabs.buttons["Editable labels"].toolTip()
+        assert button.property("alert") is True
+        # the mark is really drawn, in both states -- an On-state pixmap
+        # without it would make the dot vanish exactly when the tab is the
+        # current one
+        assert danger_pixels(button) >= 10
+        assert danger_pixels(button, checked=True) >= 10
+        # and it costs no width, so a state arriving never reflows the
+        # strip and slides a tab out from under the pointer
+        assert button.sizeHint().width() == width
+        loud = button.toolTip()
         assert "could not be read" in loud
         assert quiet in loud  # the shortcuts are still there
         assert "READ-ONLY" in view.label_status_text()
@@ -579,8 +748,9 @@ def test_a_tab_marks_itself_when_its_page_is_saying_something_bad(browser):
         view.labels.blocked = ""
         view.update_label_status()
         settle()
-    assert tabs.buttons["Editable labels"].text() == "EDITABLE LABELS"
-    assert tabs.buttons["Editable labels"].toolTip() == quiet
+    assert not button.property("alert")
+    assert danger_pixels(button) == 0
+    assert button.toolTip() == quiet
 
 
 def test_label_mode_raises_the_labels_tab(browser):

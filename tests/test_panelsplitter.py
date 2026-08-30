@@ -43,7 +43,7 @@ from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
-from audian.databrowser import DataBrowser  # noqa: E402
+from audian.databrowser import DataBrowser, SidePanel  # noqa: E402
 from audian.panels import Panel  # noqa: E402
 from audian.timeplot import TICK_VALUES_MIN_HEIGHT  # noqa: E402
 
@@ -562,22 +562,35 @@ def test_a_drag_past_a_clamp_and_back_lands_where_it_started(
 def test_the_clamp_always_includes_the_split_the_lane_opens_on(browser, split_reset):
     """The measurement behind `theme.PANEL_SPLIT_MIN_HEIGHT`.
 
-    Four channels in a 1200x900 window is the tightest stack that still
-    shows a spectrogram in every lane: the figure is 154 px, the
-    spectrogram's allowance is 120 of them and the trace opens on the
-    remaining 34 -- which *is* the floor.  So this lane can only be dragged
-    one way, and the position it opens in has to be one of the positions the
-    clamp allows: with a floor of 48 the first pixel of travel would have
-    snapped the boundary 14 px away from the pointer and never let it back.
+    Four channels in a 1200x900 window used to be the tightest stack that
+    still showed a spectrogram in every lane: the figure was 154 px, the
+    spectrogram's allowance 120 of them, and the trace opened on the
+    remaining 34 -- which *is* the floor.  The lane could only be dragged
+    one way, and the position it opened in had to be one the clamp allows:
+    with a floor of 48 the first pixel of travel would have snapped the
+    boundary 14 px away from the pointer and never let it back.
+
+    The side panel took that lane off the floor.  The parameter bar's 168 px
+    went back to the channel stack when it moved to the right edge, so a
+    four channel figure is **162** px and its trace opens on **42** -- eight
+    above the floor, with 94 px of travel where there were 86.  The
+    invariant is unchanged and is what is asserted: wherever the lane opens,
+    the clamp contains it.  The old equality is kept as the *lower bound* it
+    always really was.
     """
     c = spec_channel(browser)
-    assert figure_height(browser, c) == 154
-    assert row_height(browser, "trace", c) == theme.PANEL_SPLIT_MIN_HEIGHT
+    assert figure_height(browser, c) == 162
+    trace = row_height(browser, "trace", c)
+    assert trace >= theme.PANEL_SPLIT_MIN_HEIGHT
     _, room = browser.panel_split_heights(c)
     lo, hi = browser.panel_split_limits(int(room), 1)
     assert lo == theme.PANEL_SPLIT_MIN_HEIGHT
-    assert hi == row_height(browser, "spectrogram", c)
-    assert room - 2 * theme.PANEL_SPLIT_MIN_HEIGHT == 86
+    assert hi == row_height(browser, "spectrogram", c) + (
+        trace - theme.PANEL_SPLIT_MIN_HEIGHT
+    )
+    # the split the lane opens on is one the clamp allows -- the claim
+    assert lo <= trace <= hi
+    assert room - 2 * theme.PANEL_SPLIT_MIN_HEIGHT == 94
 
 
 def test_a_row_at_the_clamp_agrees_with_itself_about_its_chrome(
@@ -2439,11 +2452,26 @@ def test_the_opens_at_row_costs_the_bar_no_width(browser):
     that would stop audian tiling into half a 14" laptop panel; on Qt6 that
     floor is 695.  Nothing was done to earn that and nothing depends on it,
     but it is worth knowing the port did not cost width.
+
+    Re-baselined a second time, for the side panel, and the middle term has
+    changed meaning rather than value.  The group is **172** px, not 501,
+    because its captions are stacked above its fields and its two combo
+    boxes no longer publish their longest item as a minimum.  The panel is
+    **220**, and that is now a number this application *chose* rather than
+    one its widest page dictated -- a `QScrollArea` decouples the two, which
+    is what let the panel be capped at all.  And the window floor is still
+    **695**, `StartupPage`'s, which is the whole point: a panel beside the
+    lanes adds to the window's width where a band under them overlapped it,
+    and it is only because the panel is capped that the sum still clears the
+    1097 px this file exists to defend, by 402 px.
     """
     groups = {g.title: g.minimumSizeHint().width() for g in browser.param_groups}
-    assert groups["Spectrogram"] == 501
-    assert browser.parambar.minimumSizeHint().width() == 501 + 2 * theme.S8
+    assert groups["Spectrogram"] == 172
+    assert browser.parambar.minimumWidth() == SidePanel.MIN_WIDTH == 220
     assert browser.window().minimumSizeHint().width() == 695
+    # the row still costs no width, which is what this test is really for:
+    # the group is not the term that sets anything any more
+    assert groups["Spectrogram"] < browser.parambar.minimumWidth()
 
 
 # ------------------------------------------- a lane the reader zoomed by hand

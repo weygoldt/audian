@@ -285,20 +285,146 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
     elif kind == "fit":
         painter.drawRect(QRectF(m, m + e * 0.2, e, e * 0.6))
         painter.drawLine(int(m + e * 0.5), int(m), int(m + e * 0.5), int(m + e))
+    elif kind == "filter":
+        # The band the two cut-offs leave between them, standing on the
+        # frequency axis they are set against: a flat plateau with steep
+        # shoulders, which is the shape of a pass band and not the bare apex
+        # `power` already draws.  Not a funnel -- that is the database sense
+        # of the word, and this group sets two frequencies.
+        base = m + e * 0.88
+        top = m + e * 0.16
+        painter.drawLine(int(m), int(base), int(m + e), int(base))
+        path.moveTo(m + e * 0.10, base)
+        path.lineTo(m + e * 0.22, top)
+        path.lineTo(m + e * 0.78, top)
+        path.lineTo(m + e * 0.90, base)
+        painter.drawPath(path)
+    elif kind == "envelope":
+        # The two hulls a cut-off smooths around the signal, about the
+        # signal's own axis, with the axis running past both ends.  The
+        # overhang is the whole of it: hulls that meet the axis at its ends
+        # close into a lens, and a lens reads as an eye rather than as an
+        # outline of something.
+        y = size / 2
+        painter.drawLine(int(m), int(y), int(m + e), int(y))
+        for direction in (-1, 1):
+            path.moveTo(m + e * 0.10, y + direction * e * 0.10)
+            path.cubicTo(
+                m + e * 0.36,
+                y + direction * e * 0.62,
+                m + e * 0.64,
+                y + direction * e * 0.62,
+                m + e * 0.90,
+                y + direction * e * 0.10,
+            )
+        painter.drawPath(path)
+    elif kind == "speaker":
+        # Where the sound goes, which is what the Audio group sets: a cone,
+        # filled, with the two waves coming off it.
+        #
+        # Not `play`.  That is the transport, it is on the tool bar twice
+        # already, and a strip of icons has no words to tell two uses of one
+        # mark apart -- the defect `play-region` was drawn to fix.  A bare
+        # cone is not enough either: filled and pointing one way it is the
+        # play triangle mirrored, and mirror-image is the weakest cue in the
+        # set.  The waves are what make it unmistakable, and they fill the
+        # right of the box a lone cone leaves empty.
+        cone = QPainterPath()
+        for i, (u, v) in enumerate(
+            (
+                (0.00, 0.34),
+                (0.16, 0.34),
+                (0.40, 0.06),
+                (0.40, 0.94),
+                (0.16, 0.66),
+                (0.00, 0.66),
+            )
+        ):
+            point = (m + e * u, m + e * v)
+            if i == 0:
+                cone.moveTo(*point)
+            else:
+                cone.lineTo(*point)
+        cone.closeSubpath()
+        painter.fillPath(cone, theme.brush(color, alpha))
+        for radius, weight in ((0.22, 1.0), (0.40, 0.6)):
+            box = QRectF(
+                m + e * (0.46 - radius),
+                m + e * (0.5 - radius),
+                e * 2 * radius,
+                e * 2 * radius,
+            )
+            painter.setPen(theme.pen(color, theme.LW_THIN, alpha=weight * (alpha or 1)))
+            # 16ths of a degree, Qt's own unit: 60 degrees about the axis
+            painter.drawArc(box, -30 * 16, 60 * 16)
+    elif kind == "label-fixed":
+        # The `label` body, solid: these labels are written already and
+        # audian never edits them, where the open box is the one the reader
+        # writes into.  Solid-against-open is the device this vocabulary
+        # already uses for `colorbar` against `spectrogram` -- at full ink
+        # and not a wash, because measured at 16 px a 45% fill inside an
+        # outline is the same mark twice.
+        painter.fillRect(
+            QRectF(m, m + e * 0.25, e * 0.75, e * 0.75), theme.brush(color, alpha)
+        )
+        painter.fillRect(
+            QRectF(m + e * 0.45, m, e * 0.55, e * 0.3), theme.brush(color, alpha)
+        )
 
 
-def glyph_pixmap(kind: str, size: int, color: str, alpha=None) -> QPixmap:
-    """One glyph rendered into a transparent pixmap."""
+#: Radius of the alert dot, as a fraction of the icon it is drawn into.
+GLYPH_BADGE_RADIUS = 0.155
+#: Ring of ground drawn under the dot, so it reads against a mark it may
+#: land on rather than merging into it.
+GLYPH_BADGE_HALO = 1.4
+
+
+def _draw_badge(painter: QPainter, size: int, ground: str) -> None:
+    """Paint the alert dot into the bottom right of an already-drawn glyph.
+
+    Bottom right, not top right.  The two label marks are told apart by a
+    tag in their TOP right corner, which is exactly what a badge there
+    would cover -- so the mark that says "look at this tab" would hide
+    which tab it is.  Nothing in the set has a distinguishing feature at
+    the bottom right.
+    """
+    radius = size * GLYPH_BADGE_RADIUS
+    centre = QPointF(size - radius - 0.5, size - radius - 0.5)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(theme.brush(ground, None))
+    painter.drawEllipse(centre, radius + GLYPH_BADGE_HALO, radius + GLYPH_BADGE_HALO)
+    painter.setBrush(theme.brush("danger", None))
+    painter.drawEllipse(centre, radius, radius)
+
+
+def glyph_pixmap(
+    kind: str, size: int, color: str, alpha=None, badge: str = ""
+) -> QPixmap:
+    """One glyph rendered into a transparent pixmap.
+
+    `badge` names the ground the alert dot's halo is drawn in, and is empty
+    for the glyph on its own.  It is a ground rather than a bool because
+    the dot has to be legible over whatever mark it lands on, and the only
+    way to guarantee that is to clear a ring of the surface it sits on.
+    """
     pm = QPixmap(size, size)
     pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     _draw_glyph(painter, kind, size, color, alpha)
+    if badge:
+        _draw_badge(painter, size, badge)
     painter.end()
     return pm
 
 
-def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
+def glyph_icon(
+    kind: str,
+    size: int = 16,
+    color: str = GLYPH_NORMAL,
+    on: str = GLYPH_ON,
+    badge: str = "",
+) -> QIcon:
     """A monochrome icon drawn as a QPainterPath, in all four QIcon modes.
 
     No emoji, no external assets, and above all no ``QStyle`` standard
@@ -312,6 +438,21 @@ def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
     freedesktop pack has ever heard of, so taking the other seventeen from
     the desktop puts two drawing styles in one tool bar.  These are drawn
     from the tokens, so they follow the desktop's colours regardless.
+
+    `on` is the ink of the checked state, and it has to be an argument
+    because the two places that check a button do not fill it the same way.
+    A tool bar button is filled with ``primary.dim``, so its glyph is drawn
+    in ``on.primary``; the side panel's tab strip keeps a transparent
+    ground and marks the current tab with a rule instead, so ``on.primary``
+    there is white on ``bg.surface`` -- measured **1.07:1** in the daylight
+    theme, which is the invisible-icon defect this whole drawing system was
+    written to avoid, reappearing through a different door.  Such a strip
+    passes ``on=GLYPH_ACTIVE``, matching what the stylesheet already does
+    for the tab's text.
+
+    `badge` composites the alert dot into *every* pixmap, the On states
+    included.  Only into the Off states and the mark would disappear
+    exactly when its tab is the current one.
     """
     icon = QIcon()
     for mode, role, alpha in (
@@ -320,16 +461,19 @@ def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
         (QIcon.Mode.Selected, GLYPH_ACTIVE, None),
         (QIcon.Mode.Disabled, GLYPH_DISABLED, GLYPH_DISABLED_ALPHA),
     ):
-        icon.addPixmap(glyph_pixmap(kind, size, role, alpha), mode, QIcon.State.Off)
+        icon.addPixmap(
+            glyph_pixmap(kind, size, role, alpha, badge), mode, QIcon.State.Off
+        )
     # A checked button is filled with primary.dim, which is *dark* in the
     # daylight theme.  Drawing the On state in the same ink as the Off state
     # put a black glyph on navy there -- the icon vanished exactly when the
-    # button was active.  On states get the on-primary foreground instead.
-    on_pixmap = glyph_pixmap(kind, size, GLYPH_ON, None)
+    # button was active.  On states get the on-primary foreground instead,
+    # unless the caller says its checked state is not a fill.
+    on_pixmap = glyph_pixmap(kind, size, on, None, badge)
     for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected):
         icon.addPixmap(on_pixmap, mode, QIcon.State.On)
     icon.addPixmap(
-        glyph_pixmap(kind, size, GLYPH_DISABLED, GLYPH_DISABLED_ALPHA),
+        glyph_pixmap(kind, size, GLYPH_DISABLED, GLYPH_DISABLED_ALPHA, badge),
         QIcon.Mode.Disabled,
         QIcon.State.On,
     )

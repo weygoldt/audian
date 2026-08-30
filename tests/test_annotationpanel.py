@@ -1154,8 +1154,17 @@ def test_the_pointer_readout_is_wide_enough_to_reach_its_counts(app, panel):
     group = panel.annotation_group
     group.resize(1920 // 2, group.sizeHint().height())
     group.body.resize(group.width(), group.body.sizeHint().height())
-    group.grid.activate()
-    app.processEvents()
+    # Driven to a fixed point rather than activated once.  One pass was
+    # enough while every row of this group was a plain `QHBoxLayout` with a
+    # real minimum width -- the Show row alone was 326 px, so the field
+    # column could not come out narrow however badly the layout had
+    # settled.  Those rows wrap now and ask for nothing, so the column is
+    # only as wide as the layout has actually worked out: measured, 19 px
+    # after one `activate()` and the 879 this test is about after three.
+    for _ in range(3):
+        group.grid.invalidate()
+        group.grid.activate()
+        app.processEvents()
     metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
     # the widest line the readout can be asked to show, from the real bundle
     longest = max(
