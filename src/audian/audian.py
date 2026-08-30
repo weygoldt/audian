@@ -298,14 +298,75 @@ def glyph_pixmap(kind: str, size: int, color: str, alpha=None) -> QPixmap:
     return pm
 
 
+#: Which of our glyph kinds the freedesktop icon naming specification has a
+#: name for.  Consulted only while the desktop's theme is being followed:
+#: an icon from the desktop's pack carries the desktop's ink, which is right
+#: when the toolbar under it is the desktop's colour too and wrong when it
+#: is ours -- with a dark icon pack selected, these would be light grey
+#: glyphs on the daylight theme's pale toolbar, invisible, which is the very
+#: defect the note above `GLYPH_NORMAL` records.
+#:
+#: Seven kinds are deliberately absent: spectrogram, trace, meanspec,
+#: colorbar, navigator, channels and play-region name things a desktop icon
+#: pack has never heard of.  Those keep their drawn glyph in every theme,
+#: which is also why the drawn set cannot simply be deleted.
+GLYPH_THEME_NAMES = {
+    "play": "media-playback-start",
+    "pause": "media-playback-pause",
+    "seek-forward": "media-seek-forward",
+    "seek-backward": "media-seek-backward",
+    "skip-forward": "media-skip-forward",
+    "skip-backward": "media-skip-backward",
+    "forward": "go-next",
+    "back": "go-previous",
+    "home": "go-home",
+    "save": "document-save",
+    "close": "window-close",
+    "zoom": "zoom-in",
+    "fit": "zoom-fit-best",
+    "more": "open-menu",
+    "label": "tag",
+    "analyze": "office-chart-line",
+    "ask": "help-contents",
+    "power": "system-shutdown",
+    "amplitude": "audio-volume-high",
+}
+
+
+def themed_icon(kind: str) -> QIcon | None:
+    """The desktop's own icon for *kind*, or None if it has none.
+
+    Only while the desktop's theme is being followed.  `QIcon.fromTheme`
+    returns a null icon rather than raising when the pack has no such name,
+    and under the offscreen platform it returns a null icon for everything,
+    so the drawn glyph stays the fallback on every path.
+    """
+    if theme.current_variant() != theme.THEME_NATIVE:
+        return None
+    name = GLYPH_THEME_NAMES.get(kind)
+    if name is None:
+        return None
+    icon = QIcon.fromTheme(name)
+    if icon.isNull() or not icon.availableSizes():
+        return None
+    return icon
+
+
 def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
     """A monochrome icon drawn as a QPainterPath, in all four QIcon modes.
 
-    No emoji, no external assets, and above all no ``QStyle`` standard
-    icon: those are pre-rendered pixmaps in the platform theme's own grey
-    and never honour ours.  Every mode is supplied explicitly so that Qt
+    No emoji and no external assets -- except while the desktop's own theme
+    is being followed, where the desktop's icon pack is exactly what the
+    reader asked for and its ink matches the chrome it sits on.
+
+    Never a ``QStyle`` standard icon: those are pre-rendered pixmaps in the
+    style's own grey and honour neither our theme nor the desktop's pack.
+    When the glyph is drawn, every mode is supplied explicitly so that Qt
     picks the right one instead of fading the normal pixmap.
     """
+    themed = themed_icon(kind)
+    if themed is not None:
+        return themed
     icon = QIcon()
     for mode, role, alpha in (
         (QIcon.Mode.Normal, color, None),
@@ -428,7 +489,9 @@ class VerticalTabBar(QTabBar):
         length = rect.height() - (theme.S6 + self.CLOSE_SIZE + theme.S8) - theme.S8
         if length <= 0:
             return
-        label = metrics.elidedText(self.tabText(index), Qt.TextElideMode.ElideMiddle, length)
+        label = metrics.elidedText(
+            self.tabText(index), Qt.TextElideMode.ElideMiddle, length
+        )
         painter.save()
         # bottom-left of the tab becomes the origin; +x now runs up the
         # screen and +y runs across the spine
@@ -798,7 +861,9 @@ class RecentRow(QPushButton):
         # a 60 character file name must not push the column into the next
         # one; the line is elided to the row width in resizeEvent:
         self.name_label.setMinimumWidth(0)
-        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.name_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         vbox.addWidget(self.name_label)
 
         # NOTE: the design brief asked for fg.faint on the directory; it
@@ -812,7 +877,9 @@ class RecentRow(QPushButton):
         stats = self.stats_text(entry)
         self.stats_label = QLabel(stats, self)
         self.stats_label.setFont(mono)
-        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.stats_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self.stats_label.setStyleSheet(
             f"color: {theme.token('fg.muted')}; background: transparent;"
         )
@@ -835,7 +902,9 @@ class RecentRow(QPushButton):
             f"color: {theme.token('fg.muted')}; background: transparent;"
         )
         self.path_label.setMinimumWidth(0)
-        self.path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.path_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         meta_row.addWidget(self.path_label, 1)
         vbox.addLayout(meta_row)
 
@@ -905,7 +974,9 @@ class RecentRow(QPushButton):
                 return text
         # even first/…/last does not fit: shorten that, never the grid
         return metrics.elidedText(
-            lead + sep.join(parts[:1] + ["…"] + parts[-1:]), Qt.TextElideMode.ElideMiddle, width
+            lead + sep.join(parts[:1] + ["…"] + parts[-1:]),
+            Qt.TextElideMode.ElideMiddle,
+            width,
         )
 
 
@@ -932,6 +1003,23 @@ def settings() -> dict:
     return {}
 
 
+def apply_theme_preference(app, preference: str) -> str:
+    """Load the token table *preference* asks for, and push it into *app*.
+
+    ``'system'`` means the desktop's own colours, font and icon pack, not
+    merely its light-or-dark bit: `set_native_theme` derives a table from
+    the platform palette, and `theme.apply` then leaves the style, the
+    palette and the application stylesheet alone rather than overruling
+    them.  Pinning dark or light loads audian's own designed table instead.
+    """
+    if preference == theme.THEME_SYSTEM:
+        theme.set_native_theme()
+    else:
+        theme.set_theme(theme.resolve_theme(preference))
+    theme.apply(app)
+    return theme.current_theme()
+
+
 def theme_preference(stored) -> str:
     """Read the stored theme preference.  Never raises.
 
@@ -955,15 +1043,33 @@ def theme_preference(stored) -> str:
 
 
 def save_setting(key: str, value) -> None:
-    """Update one preference in place.  Never raises."""
+    """Update one preference in place.  Never raises.
+
+    Written to a temporary file in the same directory and moved into place,
+    the recipe `LabelSet.write` uses, because this is a read-modify-write of
+    the *whole* document for one key: an interrupted `open(path, "w")`
+    truncates the file and takes every other preference with it, including
+    the reader's label vocabulary, which is not a preference at all but
+    data they typed.  `os.replace` is atomic within a filesystem, so a
+    reader who loses power mid-write keeps the previous file entire.
+    """
     values = settings()
     values[key] = value
+    path = settings_path()
+    tmp = path.with_name(path.name + ".tmp")
     try:
         audian_dirs.user_config_path.mkdir(parents=True, exist_ok=True)
-        with open(settings_path(), "w") as df:
+        with open(tmp, "w") as df:
             json.dump(values, df, indent=2)
+            df.flush()
+            os.fsync(df.fileno())
+        os.replace(tmp, path)
     except OSError as e:
         log.debug("could not write settings: %s", e)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class StartupPage(QWidget):
@@ -1079,11 +1185,15 @@ class StartupPage(QWidget):
             chip = QLabel(key, self)
             chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
             chip.setStyleSheet(chip_style())
-            grid.addWidget(chip, i, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(
+                chip, i, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
             desc = QLabel(what, self)
             desc.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
             desc.setStyleSheet(f"color: {theme.token('fg.muted')};")
-            grid.addWidget(desc, i, 1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(
+                desc, i, 1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
         vbox.addLayout(grid)
         vbox.addStretch(1)
         return vbox
@@ -1410,13 +1520,23 @@ class CheatSheet(QDialog):
                 chip = QLabel(keys, panel)
                 chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
                 chip.setStyleSheet(chip_style())
-                grid.addWidget(chip, row, 2 * col, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(
+                    chip,
+                    row,
+                    2 * col,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                )
                 desc = QLabel(act.text().replace("&", ""), panel)
                 desc.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
                 desc.setStyleSheet(
                     f"color: {theme.token('fg')};background: transparent;"
                 )
-                grid.addWidget(desc, row, 2 * col + 1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(
+                    desc,
+                    row,
+                    2 * col + 1,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                )
                 row += 1
             grid.setRowStretch(row, 1)
         self.adjustSize()
@@ -1965,7 +2085,9 @@ class Audian(QMainWindow):
         # the status bar's minimum from 1184 px to 2148 and the window with
         # it.
         self.message_label.setMinimumWidth(0)
-        self.message_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.message_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         #: the unelided line, for the tool tip and for re-eliding on a resize
         self._message_full = ""
         bar.addWidget(self.message_label, 1)
@@ -1999,7 +2121,9 @@ class Audian(QMainWindow):
             label.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
             label.setTextFormat(Qt.TextFormat.RichText)
             label.setWordWrap(False)
-            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            label.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
             # sized from the widest string the field can ever show, so that
             # a moving pointer never reflows the bar:
             label.setFixedWidth(
@@ -2048,7 +2172,9 @@ class Audian(QMainWindow):
         self.progress_label = QLabel("", progress_box)
         self.progress_label.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         self.progress_label.setStyleSheet(f"color: {theme.token('fg.muted')};")
-        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.progress_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         pbox.addWidget(self.progress_label, 1)
         self.progress_bar = QProgressBar(progress_box)
         self.progress_bar.setFixedWidth(6 * theme.S12)
@@ -2180,7 +2306,9 @@ class Audian(QMainWindow):
             return
         metrics = QFontMetrics(label.font())
         label.setText(
-            metrics.elidedText(self._message_full, Qt.TextElideMode.ElideRight, max(label.width(), 1))
+            metrics.elidedText(
+                self._message_full, Qt.TextElideMode.ElideRight, max(label.width(), 1)
+            )
         )
 
     def clear_message(self) -> None:
@@ -2265,7 +2393,9 @@ class Audian(QMainWindow):
         label = f"{text} {value:d}%" if text else f"{value:d}%"
         metrics = theme.ui_metrics(theme.SIZE_SMALL_PT)
         self.progress_label.setText(
-            metrics.elidedText(label, Qt.TextElideMode.ElideRight, self.progress_label.width())
+            metrics.elidedText(
+                label, Qt.TextElideMode.ElideRight, self.progress_label.width()
+            )
         )
         self.progress_bar.setToolTip(label)
         if value >= 100:
@@ -2388,7 +2518,9 @@ class Audian(QMainWindow):
             if widget is not None:
                 widget.setStyleSheet(f"color: {theme.token(token_name)};")
 
-    def toolbar_button(self, act, style=Qt.ToolButtonStyle.ToolButtonIconOnly) -> QToolButton:
+    def toolbar_button(
+        self, act, style=Qt.ToolButtonStyle.ToolButtonIconOnly
+    ) -> QToolButton:
         button = QToolButton(self.toolbar_content)
         button.setDefaultAction(act)
         button.setToolButtonStyle(style)
@@ -2451,7 +2583,9 @@ class Audian(QMainWindow):
             self.acts.ask_region,
             self.acts.label_region,
         ):
-            button = self.toolbar_button(act, Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button = self.toolbar_button(
+                act, Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+            )
             self.mode_buttons.append(button)
         self.toolbar_gap()
 
@@ -2520,7 +2654,9 @@ class Audian(QMainWindow):
         self.channel_button = QToolButton(self.toolbar_content)
         self._set_glyph(self.channel_button, "channels")
         self.channel_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.channel_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.channel_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
         self.channel_button.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         self.channel_button.setAutoRaise(True)
         self.channel_button.setToolTip(
@@ -3327,7 +3463,9 @@ class Audian(QMainWindow):
         )
 
         self.acts.time_small_up = QAction("Backward", self)
-        self.acts.time_small_up.setShortcuts(QKeySequence.StandardKey.MoveToPreviousLine)
+        self.acts.time_small_up.setShortcuts(
+            QKeySequence.StandardKey.MoveToPreviousLine
+        )
         self.acts.time_small_up.triggered.connect(
             lambda x: self.apply_time_ranges("small_down", self.link_timescroll)
         )
@@ -3336,7 +3474,10 @@ class Audian(QMainWindow):
         self._set_glyph(self.acts.time_end, "skip-forward")
         self.acts.time_end.setToolTip("Skip to end of data (End)")
         self.acts.time_end.setShortcuts(
-            [QKeySequence.StandardKey.MoveToEndOfLine, QKeySequence.StandardKey.MoveToEndOfDocument]
+            [
+                QKeySequence.StandardKey.MoveToEndOfLine,
+                QKeySequence.StandardKey.MoveToEndOfDocument,
+            ]
         )
         self.acts.time_end.triggered.connect(
             lambda x: self.apply_time_ranges("end", self.link_timescroll)
@@ -3346,7 +3487,10 @@ class Audian(QMainWindow):
         self._set_glyph(self.acts.time_home, "skip-backward")
         self.acts.time_home.setToolTip("Skip to beginning of data (Home)")
         self.acts.time_home.setShortcuts(
-            [QKeySequence.StandardKey.MoveToStartOfLine, QKeySequence.StandardKey.MoveToStartOfDocument]
+            [
+                QKeySequence.StandardKey.MoveToStartOfLine,
+                QKeySequence.StandardKey.MoveToStartOfDocument,
+            ]
         )
         self.acts.time_home.triggered.connect(
             lambda x: self.apply_time_ranges("home", self.link_timescroll)
@@ -3619,13 +3763,17 @@ class Audian(QMainWindow):
         )
 
         self.acts.frequency_down = QAction("Move &down", self)
-        self.acts.frequency_down.setShortcuts(QKeySequence.StandardKey.MoveToPreviousChar)
+        self.acts.frequency_down.setShortcuts(
+            QKeySequence.StandardKey.MoveToPreviousChar
+        )
         self.acts.frequency_down.triggered.connect(
             lambda x: self.apply_ranges("down", Panel.frequencies[0])
         )
 
         self.acts.frequency_home = QAction("&Home", self)
-        self.acts.frequency_home.setShortcuts(QKeySequence.StandardKey.MoveToPreviousWord)
+        self.acts.frequency_home.setShortcuts(
+            QKeySequence.StandardKey.MoveToPreviousWord
+        )
         self.acts.frequency_home.triggered.connect(
             lambda x: self.apply_ranges("home", Panel.frequencies[0])
         )
@@ -4050,13 +4198,17 @@ class Audian(QMainWindow):
         )
 
         self.acts.select_next_channel = QAction("Select next channel", self)
-        self.acts.select_next_channel.setShortcuts(QKeySequence.StandardKey.SelectNextPage)
+        self.acts.select_next_channel.setShortcuts(
+            QKeySequence.StandardKey.SelectNextPage
+        )
         self.acts.select_next_channel.triggered.connect(
             lambda x: self.select_channels("select_next_channel")
         )
 
         self.acts.select_previous_channel = QAction("Select previous channel", self)
-        self.acts.select_previous_channel.setShortcuts(QKeySequence.StandardKey.SelectPreviousPage)
+        self.acts.select_previous_channel.setShortcuts(
+            QKeySequence.StandardKey.SelectPreviousPage
+        )
         self.acts.select_previous_channel.triggered.connect(
             lambda x: self.select_channels("select_previous_channel")
         )
@@ -5232,10 +5384,13 @@ def audian_cli(cargs=[], plugins=None):
     # --theme is not written back: it says how to open this run, not what to
     # remember, which is the rule it has always followed.
     preference = theme_preference(args.theme or settings().get("theme"))
+    # before anything of ours is pushed onto the application, while its
+    # palette and font are still the desktop's
+    theme.capture_system(app)
     # tell the platform before the first widget is built, so the title bar
     # and any native dialog come up in the scheme we are about to paint
     theme.push_color_scheme(preference)
-    theme.apply(app, theme.resolve_theme(preference))
+    apply_theme_preference(app, preference)
     main = Audian(
         files,
         load_kwargs,

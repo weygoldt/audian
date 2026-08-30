@@ -426,7 +426,13 @@ TOKENS: dict[str, str] = dict(DARK_TOKENS)
 #: theme.  Built once; values collide harmlessly (GRID_COLOR is TRACE_ZERO).
 _BY_VALUE: dict[str, str] = {v.upper(): k for k, v in DARK_TOKENS.items()}
 
-_ACTIVE = {"name": THEME_DARK}
+#: Where the active table came from: our own design system, or the desktop.
+#: Not a theme name -- `current_theme` still reports dark or light, because
+#: that is the question every consumer is actually asking.
+THEME_AUDIAN = "audian"
+THEME_NATIVE = "native"
+
+_ACTIVE = {"name": THEME_DARK, "variant": THEME_AUDIAN}
 
 # Caches for anything expensive or QApplication-dependent.
 _CACHE: dict[str, Any] = {}
@@ -435,6 +441,22 @@ _CACHE: dict[str, Any] = {}
 def current_theme() -> str:
     """Return the name of the active theme, ``'dark'`` or ``'light'``."""
     return _ACTIVE["name"]
+
+
+def current_variant() -> str:
+    """Whether the active tokens are ours or derived from the desktop."""
+    return _ACTIVE["variant"]
+
+
+def theme_key() -> str:
+    """Cache key for anything whose value depends on the whole token table.
+
+    `current_theme` alone is not enough once the tokens can come from the
+    desktop: a native dark table and audian's own dark table are both
+    ``'dark'`` and have different colours in them, so a palette or a
+    stylesheet cached under the bare name would be handed to the wrong one.
+    """
+    return f"{_ACTIVE['name']}:{_ACTIVE['variant']}"
 
 
 def system_theme() -> str:
@@ -501,7 +523,142 @@ def push_color_scheme(preference: str) -> None:
         pass
 
 
-def set_theme(name: str = THEME_DARK) -> None:
+def capture_system(app) -> None:
+    """Remember what the platform theme handed us, before we overwrite it.
+
+    Must run **before** :func:`apply`, because the first thing `apply` does
+    is push our own style, palette and font onto the application -- after
+    which the desktop's are gone and there is nothing left to derive from.
+
+    The palette is copied, not referenced: `QApplication.setPalette` mutates
+    the object the application holds, and a reference would follow it.
+    """
+    _CACHE["system.palette"] = QPalette(app.palette())
+    _CACHE["system.font"] = QFont(app.font())
+
+
+def system_palette() -> QPalette:
+    """The desktop's palette, or Qt's default if we never captured one."""
+    captured = _CACHE.get("system.palette")
+    if captured is not None:
+        return captured
+    app = QGuiApplication.instance()
+    return QPalette(app.palette()) if app is not None else QPalette()
+
+
+def system_font() -> QFont:
+    """The desktop's UI font, or Qt's default if we never captured one."""
+    captured = _CACHE.get("system.font")
+    if captured is not None:
+        return QFont(captured)
+    app = QGuiApplication.instance()
+    return QFont(app.font()) if app is not None else QFont()
+
+
+def ensure_contrast(color: str, ground: str, minimum: float) -> str:
+    """Lift *color* away from *ground* until it clears *minimum*.
+
+    The desktop chooses its colours for its own widgets, not for a
+    spectrogram, and it is under no obligation to clear 4.5:1 -- measured on
+    one Breeze desktop, its own accent scores 3.71 on the window ground and
+    its link colour 4.01 on the button ground, both under the bar audian
+    holds every one of its own tokens to.
+
+    So a derived token is not used as handed over.  It is mixed toward white
+    or black, whichever the ground is further from, in twentieths, and the
+    first step that clears the bar is taken.  Twentieths because the point
+    is to keep the desktop's hue recognisably intact: the smallest push that
+    works, not a jump to the nearest legible primary.  A colour that cannot
+    clear the bar at all comes back fully mixed rather than unchanged --
+    unreadable is worse than off-hue.
+    """
+    if contrast_ratio(color, ground) >= minimum:
+        return color
+    target = "#FFFFFF" if relative_luminance(ground) < 0.5 else "#000000"
+    candidate = color
+    for step in range(1, 21):
+        candidate = mix_colors(color, target, step / 20).name()
+        if contrast_ratio(candidate, ground) >= minimum:
+            return candidate
+    return candidate
+
+
+#: Which token comes from which ``QPalette`` role.  Only the roles a desktop
+#: actually defines are listed: the data-series colours, the annotation hues
+#: and the playback accent have no palette equivalent and are kept from the
+#: matching hand-made table, where they are already checked for contrast and
+#: separated for colour vision deficiency.
+_NATIVE_ROLES: tuple[tuple[str, Any], ...] = (
+    ("bg.base", QPalette.ColorRole.Window),
+    ("bg.plot", QPalette.ColorRole.Base),
+    ("bg.surface", QPalette.ColorRole.Button),
+    ("fg", QPalette.ColorRole.WindowText),
+    ("border", QPalette.ColorRole.Mid),
+    ("border.hi", QPalette.ColorRole.Dark),
+    ("primary", QPalette.ColorRole.Highlight),
+    ("on.primary", QPalette.ColorRole.HighlightedText),
+)
+
+
+def native_tokens() -> tuple[str, dict[str, str]]:
+    """Build a token table out of the desktop's own palette.
+
+    Returns the base theme it counts as -- dark or light, decided by the
+    luminance of the desktop's window ground, because every ``current_theme()
+    == THEME_LIGHT`` test downstream is asking "is the page pale", not "which
+    of our two tables is loaded" -- and the table itself.
+
+    Only the roles a desktop actually defines are taken.  The rest are kept
+    from the matching hand-made table, and there is no way around that: a
+    ``QPalette`` has nothing to say about what colour a filtered trace is, or
+    an envelope, or a trial marker.  Those are data colours, chosen to stay
+    apart from each other under four kinds of colour vision deficiency, and
+    no desktop has an opinion to transfer.
+
+    Everything derived is then repaired against the grounds it is painted on,
+    so a desktop with a low-contrast accent gets audian's legibility with the
+    desktop's hue rather than one or the other.
+    """
+    pal = system_palette()
+
+    def role(name) -> str:
+        return pal.color(name).name()
+
+    ground = role(QPalette.ColorRole.Window)
+    base_name = THEME_DARK if relative_luminance(ground) < 0.5 else THEME_LIGHT
+    table = dict(THEMES[base_name])
+    for token_name, palette_role in _NATIVE_ROLES:
+        table[token_name] = role(palette_role)
+
+    # roles Qt has no name for, mixed from the ones it does
+    ink = table["fg"]
+    table["bg.raised"] = mix_colors(table["bg.base"], ink, 0.06).name()
+    table["bg.lane"] = mix_colors(table["bg.plot"], table["bg.base"], 0.5).name()
+    table["fg.muted"] = mix_colors(ink, table["bg.base"], 0.30).name()
+    table["fg.faint"] = mix_colors(ink, table["bg.base"], 0.50).name()
+    table["primary.dim"] = mix_colors(table["primary"], table["bg.base"], 0.45).name()
+    table["edge"] = mix_colors(table["border"], ink, 0.35).name()
+    table["trace.zero"] = mix_colors(table["bg.plot"], ink, 0.18).name()
+
+    # Qt 6.6 names the desktop's accent separately from its selection colour;
+    # where it is set it is the better source for the one audian calls primary
+    accent = pal.color(QPalette.ColorRole.Accent)
+    if accent.isValid() and accent.name() != table["bg.base"]:
+        table["primary"] = accent.name()
+        table["primary.dim"] = mix_colors(accent.name(), table["bg.base"], 0.45).name()
+
+    for fg_name, bg_name in TEXT_CONTRAST_PAIRS:
+        table[fg_name] = ensure_contrast(table[fg_name], table[bg_name], MIN_CONTRAST)
+    # fg.faint is decoration and disabled text only, so it is held to the
+    # non-text floor -- the same ruling the module docstring records for the
+    # hand-made tables
+    table["fg.faint"] = ensure_contrast(
+        table["fg.faint"], table["bg.surface"], MIN_GRAPHIC_CONTRAST
+    )
+    return base_name, table
+
+
+def set_theme(name: str = THEME_DARK, tokens: dict[str, str] | None = None) -> None:
     """Switch the active theme and drop every cached palette / stylesheet.
 
     Updates :data:`TOKENS` in place so that already-imported call sites see the
@@ -509,18 +666,49 @@ def set_theme(name: str = THEME_DARK) -> None:
     (and re-run the ``style_*`` appliers on live plot items) to push the change
     into a running application.
 
+    *tokens* overrides the table `name` would have loaded, which is how the
+    desktop-derived palette gets in: `native_tokens` returns the base theme
+    it counts as, and that name is what `current_theme` keeps reporting, so
+    every "is the page pale" test downstream keeps working unchanged.  The
+    variant is recorded separately, because a native dark table and audian's
+    own dark table must not answer to the same cache key.
+
     Raises
     ------
     KeyError
         If *name* is not a known theme.
     """
-    table = THEMES[name]
+    table = THEMES[name] if tokens is None else tokens
     _ACTIVE["name"] = name
+    _ACTIVE["variant"] = THEME_AUDIAN if tokens is None else THEME_NATIVE
     TOKENS.clear()
     TOKENS.update(table)
     for key in list(_CACHE):
-        if key.startswith(("palette:", "stylesheet:")):
+        if key.startswith(("palette:", "stylesheet:", "font:native:", "metrics:")):
             del _CACHE[key]
+
+
+def set_native_theme() -> str:
+    """Load the desktop's colours, or fall back to ours if it has none.
+
+    The fallback is not a nicety.  The offscreen platform the test suite
+    runs on reports no colour scheme at all and hands out Fusion's generic
+    *light* palette, so a native table built there would silently flip the
+    whole suite to a pale page and change the meaning of every contrast and
+    geometry assertion in it.  "The platform has a real theme" is the gate,
+    and `Qt.ColorScheme.Unknown` is how a platform says it has not.
+    """
+    app = QGuiApplication.instance()
+    if (
+        app is None
+        or "system.palette" not in _CACHE
+        or QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Unknown
+    ):
+        set_theme(system_theme())
+        return current_theme()
+    base, table = native_tokens()
+    set_theme(base, table)
+    return base
 
 
 def token(name: str) -> str:
@@ -801,8 +989,37 @@ def font_ui(size: int | None = None, bold: bool = False) -> QFont:
 
     Used for every widget label, menu entry and button.  Not fixed pitch --
     proportional text reads better in chrome.
+
+    While the desktop's theme is being followed this is the desktop's own UI
+    font, at the desktop's own size, because that is what "follow the system"
+    means for type: a reader who has set their session to 12 pt has usually
+    done it because 10 pt is hard for them to read, and an application that
+    quietly keeps its own 10 pt has ignored the one setting they cared most
+    about.  *size* is still honoured as a **relative** step -- a caller
+    asking for SIZE_SMALL_PT gets the system size less the same one point --
+    so in-plot labels stay smaller than chrome either way.
+
+    The monospace font is deliberately not treated this way: `font_mono` is
+    used for numeric readouts, where digit alignment is the requirement and
+    the desktop's fixed-pitch face may not be one.
     """
-    return _font(FONT_UI_FAMILIES, size, bold, mono=False)
+    if current_variant() != THEME_NATIVE:
+        return _font(FONT_UI_FAMILIES, size, bold, mono=False)
+    base = system_font()
+    point = base.pointSize()
+    if point <= 0:  # a font given in pixels has no point size to shift
+        point = SIZE_PT
+    if size is not None:
+        point = max(1, point + int(size) - SIZE_PT)
+    key = f"font:native:{point}:{bold}"
+    font = _CACHE.get(key)
+    if font is None:
+        font = QFont(base)
+        font.setPointSize(point)
+        font.setBold(bold)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        _CACHE[key] = font
+    return QFont(font)
 
 
 def font_mono(size: int | None = None, bold: bool = False) -> QFont:
@@ -2062,7 +2279,7 @@ def palette() -> QPalette:
     Fusion derives disabled colours badly from a dark base if you leave it to
     guess, producing unreadable grey-on-grey.
     """
-    key = f"palette:{current_theme()}"
+    key = f"palette:{theme_key()}"
     cached = _CACHE.get(key)
     if cached is not None:
         return QPalette(cached)
@@ -2534,7 +2751,7 @@ def stylesheet() -> str:
     colour literal in it.  No gradients, no box-shadow, no border-radius on
     anything that contains a plot.
     """
-    key = f"stylesheet:{current_theme()}"
+    key = f"stylesheet:{theme_key()}"
     cached = _CACHE.get(key)
     if cached is None:
         cached = _QSS.substitute(
@@ -2610,13 +2827,33 @@ def apply(app: QApplication, theme_name: str | None = None) -> None:
     """
     if theme_name is not None:
         set_theme(theme_name)
-    style = QStyleFactory.create("Fusion")
-    if style is not None:
-        app.setStyle(style)
-    app.setPalette(palette())
+    if current_variant() != THEME_NATIVE:
+        style = QStyleFactory.create("Fusion")
+        if style is not None:
+            app.setStyle(style)
+    if current_variant() == THEME_NATIVE:
+        # Leave the desktop's own palette in place.  Overwriting it with a
+        # copy of itself would be harmless but pointless, and it would cost
+        # the thing that makes following work: once an application sets a
+        # palette Qt stops replacing it, so `app.palette()` would freeze at
+        # the colours captured at startup and the next desktop change would
+        # have nothing left to read.  The stylesheet is applied last and
+        # wins over the palette wherever the two overlap, so the look is
+        # still ours to control.
+        _CACHE["system.palette"] = QPalette(app.palette())
+    else:
+        app.setPalette(palette())
     app.setFont(font_ui())
     apply_pg_config()
-    app.setStyleSheet(stylesheet())
+    # The application stylesheet is where audian stops being a Qt
+    # application and starts being a painted one: 409 lines of baked hex and
+    # pixel metrics that overrule the palette wherever the two meet.  While
+    # the desktop's theme is being followed it is not applied at all, which
+    # is the whole of the standard Qt answer to "look native" -- the style
+    # and the palette already know what the desktop looks like, and every
+    # line of QSS can only disagree with them.  Cleared rather than skipped,
+    # so that turning the following on mid-session takes the old sheet off.
+    app.setStyleSheet("" if current_variant() == THEME_NATIVE else stylesheet())
 
 
 # ---------------------------------------------------------------------------

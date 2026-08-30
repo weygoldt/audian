@@ -791,7 +791,9 @@ class ChannelRailRow(QWidget):
         self.number.setMinimumWidth(
             theme.mono_metrics(theme.SIZE_SMALL_PT).horizontalAdvance("00")
         )
-        self.number.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.number.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+        )
         # A stacked row has to fit inside a dense lane.  Whatever this row
         # asks for, the grid gives it, so an unconstrained stack simply made
         # every lane taller: at 54 px the sixteen channel stack no longer fit
@@ -908,7 +910,9 @@ class ChannelRailRow(QWidget):
     def mousePressEvent(self, event) -> None:
         self.drag_origin = event.pos()
         modifiers = QApplication.keyboardModifiers()
-        self.browser.rail_clicked(self.channel, bool(modifiers & Qt.KeyboardModifier.ShiftModifier))
+        self.browser.rail_clicked(
+            self.channel, bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        )
 
     def mouseMoveEvent(self, event) -> None:
         if self.drag_origin is None:
@@ -1101,6 +1105,48 @@ class DataBrowser(QWidget):
     #: provably inert rather than silently changing what every already
     #: recorded file opens at.
     SPEC_BAND_SETTING_VERSION = 2
+
+    SPECTROGRAM_SETTING = "spectrogram"
+    #: 1: ``{"version": 1, "colormap": {"dark": name, "light": name},
+    #: "nfft": int|None, "overlap": float|None}``.
+    #:
+    #: The colormap used to live in a `QSettings` INI of its own, as an
+    #: **index** into `theme.spectrogram_maps()`.  Both halves of that were
+    #: wrong.  A second store in the same directory meant the one preference
+    #: a reader changes most often was the one that did not travel with the
+    #: rest of the file, and none of the defensiveness written for
+    #: `settings.json` -- the version gate, the whole-value-or-nothing read --
+    #: applied to it.  And the index is theme-relative: the dark theme offers
+    #: eight maps and the daylight theme five, so index 3 was inferno on one
+    #: page and greyscale on the other, and indices 5-7 chosen under dark
+    #: were silently clamped to 0 when read under light.
+    #:
+    #: So the name is stored, not the position, and one name **per theme**.
+    #: Per theme because the two lists share no entries: the maps are picked
+    #: to put the noise floor at the colour of the page, which is why
+    #: `REVERSED_MAPS` exists, and a single name would have to fall back to
+    #: the default every time the theme changed.  Now that the theme can
+    #: follow the desktop and flip with no gesture from the reader at all,
+    #: that would have been a preference quietly resetting itself twice a
+    #: day.  Two names cost one extra key and mean the choice made on each
+    #: page comes back to that page.
+    #:
+    #: nfft and overlap are null until a reader touches them, on the rule
+    #: `SPEC_BAND_SETTING_VERSION` states: ship inert, and never freeze this
+    #: session's default into the file as though it had been chosen.  Both
+    #: are dimensionless -- a window of 256 samples means the same trade of
+    #: frequency against time on an 8 kHz file and a 96 kHz one, which is
+    #: why they travel where an absolute Hz band would not.
+    SPECTROGRAM_SETTING_VERSION = 1
+
+    #: The Fourier windows the parameter bar offers, as exponents of two.
+    #: Named so that a restored window is snapped to a step the combo can
+    #: actually show: `set_nfft_widget` returns silently when `findData`
+    #: misses, so a window off the list would leave the picture and the bar
+    #: disagreeing with nothing said about it.
+    NFFT_EXPONENTS = range(3, 20)
+    NFFT_MIN = 2 ** NFFT_EXPONENTS[0]
+    NFFT_MAX = 2 ** NFFT_EXPONENTS[-1]
 
     # y-range policies of the trace panels:
     y_shared = 0
@@ -1435,6 +1481,13 @@ class DataBrowser(QWidget):
 
         # plots:
         self.color_map = self.read_color_map_setting()
+        #: window and overlap the reader has asked for this run, or None
+        #: while both are still whatever the recording opened on.  Only a
+        #: number that came from a gesture is ever written.
+        self.nfft_pref = None
+        self.overlap_pref = None
+        #: a settings write is queued for the end of this turn of the loop
+        self.spectrogram_save_queued = False
         self.figs = []  # all GraphicsLayoutWidgets - one for each channel
         self.borders = []
         self.splitters = []  # every trace/spectrogram grab band
@@ -1460,18 +1513,79 @@ class DataBrowser(QWidget):
         # colors and fonts are owned by theme.apply()
 
     @staticmethod
-    def read_color_map_setting() -> int:
-        """Spectrogram colormap index as stored by a previous session."""
-        settings = QSettings("audian", "audian")
-        try:
-            index = int(
-                settings.value("spectrogram/colormap", theme.DEFAULT_SPECTROGRAM_MAP)
+    def spectrogram_settings() -> dict:
+        """The stored spectrogram preferences, or empty.
+
+        Whole-value-or-nothing, the rule `annotation_settings` states: a
+        value written by an audian that spelled this key differently is not
+        half-read, it is dropped and said so.
+        """
+        from .audian import settings
+
+        saved = settings().get(DataBrowser.SPECTROGRAM_SETTING)
+        if not isinstance(saved, dict):
+            return {}
+        if saved.get("version") != DataBrowser.SPECTROGRAM_SETTING_VERSION:
+            log.warning(
+                "ignoring %s settings written in version %r; this audian "
+                "writes version %d",
+                DataBrowser.SPECTROGRAM_SETTING,
+                saved.get("version"),
+                DataBrowser.SPECTROGRAM_SETTING_VERSION,
             )
+            return {}
+        return saved
+
+    @staticmethod
+    def migrated_color_map() -> str | None:
+        """The colormap the old `QSettings` store held, as a name.
+
+        Read once, on the way past, for a reader upgrading from the audian
+        that kept this one preference in an INI file of its own.  The stored
+        value is an index, and nothing recorded which theme's list it was an
+        index into, so it is resolved against the list in force now -- which
+        is exactly what the old reader did with it, so nobody sees a change
+        they did not already have.
+
+        The old key is left where it is.  It costs a few bytes, and removing
+        it would take the preference away from an older audian still
+        installed beside this one without giving it anything back.
+        """
+        try:
+            stored = QSettings("audian", "audian").value("spectrogram/colormap", None)
+            if stored is None:
+                return None
+            index = int(stored)
         except (TypeError, ValueError):
-            index = theme.DEFAULT_SPECTROGRAM_MAP
-        if index < 0 or index >= len(theme.spectrogram_maps()):
-            index = theme.DEFAULT_SPECTROGRAM_MAP
-        return index
+            return None
+        maps = theme.spectrogram_maps()
+        if index < 0 or index >= len(maps):
+            return None
+        return maps[index]
+
+    @staticmethod
+    def read_color_map_setting() -> int:
+        """Spectrogram colormap index for the *active* theme.
+
+        Stored as a name and resolved here, so the answer is an index into
+        the list this theme actually offers.  A name the active theme does
+        not offer -- the daylight maps read under the dark theme, or a map
+        this pyqtgraph no longer ships -- falls back to the default rather
+        than to whatever sits at that position.
+        """
+        saved = DataBrowser.spectrogram_settings().get("colormap")
+        name = None
+        if isinstance(saved, dict):
+            name = saved.get(theme.current_theme())
+        elif not saved:
+            # nothing under the new key: a first run after the upgrade
+            name = DataBrowser.migrated_color_map()
+        if not isinstance(name, str):
+            return theme.DEFAULT_SPECTROGRAM_MAP
+        maps = theme.spectrogram_maps()
+        if name not in maps:
+            return theme.DEFAULT_SPECTROGRAM_MAP
+        return maps.index(name)
 
     @contextmanager
     def updating(self):
@@ -1711,6 +1825,7 @@ class DataBrowser(QWidget):
         # child of the window it belongs to while tabs are being moved.
         self.gui = gui
         self.adopt_task_manager(getattr(gui, "tasks", None))
+        self.restore_resolution()
         # load data:
         self.data.open(unwrap, unwrap_clip)
         if self.data.data is None:
@@ -2071,7 +2186,9 @@ class DataBrowser(QWidget):
             self.stack_area = QScrollArea(stack_pane)
             self.stack_area.setWidgetResizable(True)
             self.stack_area.setFrameShape(QFrame.Shape.NoFrame)
-            self.stack_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.stack_area.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
             self.stack_area.setWidget(stack_widget)
             # The rows divide up the *viewport*, and the viewport is still
             # zero-sized while the browser is being built.  Without this
@@ -2154,7 +2271,9 @@ class DataBrowser(QWidget):
         self.taxis.set_start_time(self.data.start_time)
         self.taxis.mode_source = self.lane_starttime_mode
         self.taxis_fig.addItem(self.taxis, row=0, col=0)
-        self.taxis_fig.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.taxis_fig.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
 
         # the corner between the rail and the time axis: the one place in
         # the stack that is not a lane, an axis or a control, which is
@@ -2230,7 +2349,9 @@ class DataBrowser(QWidget):
         # stack host for the reason its docstring gives; pinning the band
         # around it as well means a future row added to this bar cannot make
         # the whole thing elastic without somebody noticing.
-        self.parambar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.parambar.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         grid = QGridLayout(self.parambar)
         grid.setContentsMargins(theme.S8, theme.S8, theme.S8, theme.S6)
         grid.setHorizontalSpacing(theme.S16)
@@ -2330,7 +2451,7 @@ class DataBrowser(QWidget):
             self.nfftw.tooltip = "Number of samples of a Fourier window"
             self.nfftw.setToolTip(self.nfftw.tooltip)
             self.nfftw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-            for i in range(3, 20):
+            for i in DataBrowser.NFFT_EXPONENTS:
                 nfft = 2**i
                 self.nfftw.addItem(self.nfft_label(nfft), nfft)
             self.nfftw.setEditable(False)
@@ -2782,7 +2903,7 @@ class DataBrowser(QWidget):
         # spectrogram stays a dark slab in a white window.
         if self.cmapw is not None:
             self.cmapw.populate()
-        self.set_color_map(self.color_map, dispatch=False)
+        self.set_color_map(self.color_map, dispatch=False, save=False)
         # annotation pens carry a resolved colour, and the chip icons are
         # baked pixmaps, so both have to be drawn again rather than restyled
         for overlay in self.annotation_overlays:
@@ -4523,7 +4644,9 @@ class DataBrowser(QWidget):
         # a label that asks for the width of its longest string would relayout
         # the whole bar under the pointer -- the failure `annotation_hoverw`
         # was rebuilt to stop.  The full text stays in the tool tip.
-        self.label_statusw.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.label_statusw.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         theme.tint(self.label_statusw, "fg.muted")
         group.add_row("File", "", self.label_statusw)
 
@@ -4612,7 +4735,9 @@ class DataBrowser(QWidget):
         text = self.label_status_text()
         label.setToolTip(text)
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
-        label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(label.width(), 1)))
+        label.setText(
+            metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(label.width(), 1))
+        )
         if self.label_undow is not None:
             self.label_undow.setEnabled(self.labels.can_undo())
         self.update_label_alert()
@@ -5052,7 +5177,10 @@ class DataBrowser(QWidget):
         reaches for either is asking for the same thing.
         """
         modifiers = QApplication.keyboardModifiers()
-        extend = bool(modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
+        extend = bool(
+            modifiers
+            & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+        )
         self.solo_annotation_layer(layer_id, extend)
 
     def apply_annotation_layers(self, wanted) -> bool:
@@ -5492,7 +5620,9 @@ class DataBrowser(QWidget):
         text = self.annotation_under(time)
         label.setToolTip(text)
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
-        label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(label.width(), 1)))
+        label.setText(
+            metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(label.width(), 1))
+        )
 
     # -- the parameter bar group --
 
@@ -5597,7 +5727,9 @@ class DataBrowser(QWidget):
         # Ignored, not Preferred: the label takes the width the row has and
         # never asks for more, so what the pointer is near cannot change the
         # geometry of the bar (see show_annotation_under).
-        self.annotation_hoverw.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.annotation_hoverw.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         theme.tint(self.annotation_hoverw, "fg.muted")
         group.add_row("Pointer", "", self.annotation_hoverw)
 
@@ -5802,7 +5934,9 @@ class DataBrowser(QWidget):
             return
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
         label.setText(
-            metrics.elidedText(label.toolTip(), Qt.TextElideMode.ElideRight, max(label.width(), 1))
+            metrics.elidedText(
+                label.toolTip(), Qt.TextElideMode.ElideRight, max(label.width(), 1)
+            )
         )
 
     def update_label_alert(self) -> None:
@@ -5933,7 +6067,9 @@ class DataBrowser(QWidget):
             return
         metrics = theme.mono_metrics(theme.SIZE_SMALL_PT)
         session_id = bundle.meta.session_id or "session"
-        name = metrics.elidedText(session_id, Qt.TextElideMode.ElideMiddle, 20 * theme.S8)
+        name = metrics.elidedText(
+            session_id, Qt.TextElideMode.ElideMiddle, 20 * theme.S8
+        )
         # The channel goes in the label, not only in the tool tip: the fit is
         # per channel, and which one it was made against is the difference
         # between an annotation that was checked against what is on screen
@@ -6862,6 +6998,90 @@ class DataBrowser(QWidget):
             },
         )
 
+    def restore_resolution(self) -> None:
+        """Put the stored Fourier window and overlap on the trace.
+
+        Before `data.open()`, which is the one place they can be set for
+        free: `BufferedSpectrogram.open` *reads* nfft and overlap to size
+        its buffers rather than resetting them, so a value put here is the
+        one the first transform runs at.  Going through `set_resolution`
+        instead would recompute a spectrogram that had just been computed,
+        and it could not run at all -- the parameter-bar widgets it drives
+        do not exist yet, and it early-returns while `self.setting` is up.
+
+        Validated rather than trusted, because the settings file is a file a
+        reader may edit by hand: a window is snapped to a power of two in
+        the range the combo offers, and an overlap outside 0 to 1 is
+        dropped.  A window wider than the recording is left to
+        `BufferedSpectrogram` to clamp, which it already does against the
+        real length.
+        """
+        if not self.spectrogram or self.spectrogram not in self.data:
+            return
+        saved = DataBrowser.spectrogram_settings()
+        spectrogram = self.data[self.spectrogram]
+        nfft = saved.get("nfft")
+        if isinstance(nfft, int) and not isinstance(nfft, bool):
+            if self.NFFT_MIN <= nfft <= self.NFFT_MAX:
+                # snap to the combo's own steps: a window the bar cannot
+                # show would leave the picture and the parameter bar
+                # disagreeing with nothing said about it
+                spectrogram.nfft = 1 << int(nfft).bit_length() - 1
+                self.nfft_pref = spectrogram.nfft
+        overlap = saved.get("overlap")
+        if isinstance(overlap, (int, float)) and not isinstance(overlap, bool):
+            if 0.0 <= float(overlap) < 1.0:
+                spectrogram.overlap_frac = float(overlap)
+                self.overlap_pref = spectrogram.overlap_frac
+        spectrogram.set_hop()
+
+    def schedule_spectrogram_save(self) -> None:
+        """Queue one settings write for the end of this turn of the loop.
+
+        `save_setting` reads, updates and rewrites the whole settings file,
+        and a colormap change repaints every spectrogram panel before it
+        returns.  One write per gesture, not one per panel.
+        """
+        if self.spectrogram_save_queued:
+            return
+        self.spectrogram_save_queued = True
+        QTimer.singleShot(0, self.save_spectrogram_settings)
+
+    def save_spectrogram_settings(self) -> None:
+        """Write the colormap, the Fourier window and the overlap.
+
+        Reads the stored value back first and updates only the theme whose
+        map was actually touched: the other page's choice is not this
+        window's to overwrite, and a reader who flips between the two
+        themes would otherwise lose one of them every time.
+
+        A window and an overlap nobody has typed stay null rather than being
+        written as the numbers this session happened to open with -- the
+        same rule `save_panel_split` states, for the same reason.
+        """
+        from .audian import save_setting
+
+        self.spectrogram_save_queued = False
+        saved = DataBrowser.spectrogram_settings()
+        maps = saved.get("colormap")
+        maps = dict(maps) if isinstance(maps, dict) else {}
+        names = theme.spectrogram_maps()
+        if 0 <= self.color_map < len(names):
+            maps[theme.current_theme()] = names[self.color_map]
+        save_setting(
+            DataBrowser.SPECTROGRAM_SETTING,
+            {
+                "version": DataBrowser.SPECTROGRAM_SETTING_VERSION,
+                "colormap": maps,
+                "nfft": saved.get("nfft") if self.nfft_pref is None else self.nfft_pref,
+                "overlap": (
+                    saved.get("overlap")
+                    if self.overlap_pref is None
+                    else self.overlap_pref
+                ),
+            },
+        )
+
     def save_panel_split(self) -> None:
         """Write the split.  Once per gesture, never per mouse move.
 
@@ -7327,6 +7547,16 @@ class DataBrowser(QWidget):
         if nfft is None and overlap_frac is None:
             return
         self.set_resolution(nfft=nfft, overlap_frac=overlap_frac)
+        # end of the gesture, so this is a window the reader asked for.
+        # Only this browser writes: the others are reached through
+        # `dispatch_resolution`, which comes in by `set_resolution` and
+        # never past here, so the stored value cannot depend on the order
+        # the tabs happen to sit in.
+        spectrogram = self.data[self.spectrogram] if self.spectrogram else None
+        if spectrogram is not None:
+            self.nfft_pref = int(spectrogram.nfft)
+            self.overlap_pref = float(spectrogram.overlap_frac)
+            self.schedule_spectrogram_save()
 
     def set_resolution(
         self, nfft=None, overlap_frac=None, dispatch: bool = True
@@ -7405,8 +7635,19 @@ class DataBrowser(QWidget):
             hop_frac = 1 - self.current_overlap()
             self.update_resolution(overlap_frac=1 - hop_frac * 2)
 
-    def set_color_map(self, color_map=None, dispatch: bool = True) -> None:
-        """Apply a perceptually uniform spectrogram colormap and remember it."""
+    def set_color_map(
+        self, color_map=None, dispatch: bool = True, save: bool = True
+    ) -> None:
+        """Apply a perceptually uniform spectrogram colormap and remember it.
+
+        *save* is off on the two paths that are not a reader choosing a map:
+        the browser being built, and the theme being re-applied.  A browser
+        that wrote its own default at construction would overwrite the
+        choice made in the window beside it -- the rule `save_parameter_tab`
+        states -- and a theme switch now happens on its own, when the
+        desktop changes, so a write on that path would rewrite a preference
+        nobody touched.
+        """
         if color_map is not None:
             self.color_map = int(color_map)
         if self.color_map < 0 or self.color_map >= len(theme.spectrogram_maps()):
@@ -7418,7 +7659,8 @@ class DataBrowser(QWidget):
             blocked = self.cmapw.blockSignals(True)
             self.cmapw.setCurrentIndex(self.color_map)
             self.cmapw.blockSignals(blocked)
-        QSettings("audian", "audian").setValue("spectrogram/colormap", self.color_map)
+        if save:
+            self.schedule_spectrogram_save()
         if dispatch:
             self.sigColorMapChanged.emit()
 
@@ -8357,12 +8599,18 @@ class DataBrowser(QWidget):
                 c += 1
         vbox.addWidget(self.analysis_table)
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Close | QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Reset,
+            QDialogButtonBox.StandardButton.Close
+            | QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Reset,
             dialog,
         )
         buttons.rejected.connect(dialog.reject)
-        buttons.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(self.clear_analysis)
-        buttons.button(QDialogButtonBox.StandardButton.Save).clicked.connect(self.save_analysis)
+        buttons.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(
+            self.clear_analysis
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Save).clicked.connect(
+            self.save_analysis
+        )
         vbox.addWidget(buttons)
         dialog.finished.connect(lambda _: setattr(self, "analysis_table", None))
         dialog.adjustSize()
