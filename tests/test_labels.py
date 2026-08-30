@@ -1793,10 +1793,10 @@ def test_escape_puts_the_label_down(labelling):
     in this repository asserts a *binding* rather than pressing the key.
     Under the offscreen platform the window is never activated --
     ``QApplication.activeWindow()`` is None and ``isActiveWindow()`` is False
-    -- and a `Qt.WindowShortcut` needs an active window, so **no** shortcut
-    fires at all: measured, `QTest.keyClick` of ``2`` left the current
-    category on "event" and of ``F9`` left the labels visible, both of them
-    bindings that work. Activated, the same key press deselects.
+    -- and a `Qt.ShortcutContext.WindowShortcut` needs an active window, so
+    **no** shortcut fires at all: measured, `QTest.keyClick` of ``2`` left
+    the current category on "event" and of ``F9`` left the labels visible,
+    both of them bindings that work. Activated, the same key press deselects.
     """
     from PySide6.QtTest import QTest
 

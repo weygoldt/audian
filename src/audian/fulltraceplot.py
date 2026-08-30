@@ -976,7 +976,7 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
         floor_height = int(theme.NAVIGATOR_HEIGHT + axis_height + top + bottom)
         self.setMinimumHeight(min(floor_height, max(theme.NAVIGATOR_HEIGHT, total)))
         self.setMaximumHeight(max(floor_height, total))
-        # QSizePolicy.Maximum reads sizeHint() as the upper bound, and
+        # QSizePolicy.Policy.Maximum reads sizeHint() as the upper bound, and
         # GraphicsLayoutWidget's own hint knows nothing about our rows.  Left
         # at the default the splitter caps the navigator at 56 px and the
         # bottom time axis is clipped away entirely.

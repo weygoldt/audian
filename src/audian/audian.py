@@ -609,12 +609,12 @@ class ToolStrip(QWidget):
     Why
     ---
 
-    Every button on this bar is `QSizePolicy.Minimum`, so the bar's minimum
-    width is the plain SUM of them: 1372 px measured on a four channel
-    recording, and 1458 once the amplitude and channel buttons are showing
-    their longest text.  That is a floor the window cannot go under, and on a
-    14 inch laptop at 150% display scaling the whole screen is 1280 logical
-    pixels -- so audian could not be made to fit at all.
+    Every button on this bar is `QSizePolicy.Policy.Minimum`, so the bar's
+    minimum width is the plain SUM of them: 1372 px measured on a four
+    channel recording, and 1458 once the amplitude and channel buttons are
+    showing their longest text.  That is a floor the window cannot go under,
+    and on a 14 inch laptop at 150% display scaling the whole screen is 1280
+    logical pixels -- so audian could not be made to fit at all.
 
     What it gives up, and in what order
     -----------------------------------
@@ -645,9 +645,9 @@ class ToolStrip(QWidget):
     back out again the moment it had room.  A constant means the floor is one
     number that never moves, and because that number is the real content
     width of the tightest stage, Qt is never asked to squeeze a button below
-    its own minimum -- which is what `QSizePolicy.Ignored` here would have
-    done instead: measured, it let Analyze shrink from a 98 px hint to 30 px
-    and clipped the glyphs inside the icon-only buttons.
+    its own minimum -- which is what `QSizePolicy.Policy.Ignored` here would
+    have done instead: measured, it let Analyze shrink from a 98 px hint to
+    30 px and clipped the glyphs inside the icon-only buttons.
 
     Still a plain QWidget with a QHBoxLayout, for the reason
     `Audian.setup_toolbar` gives: `QToolBar` recomputes its layout from the

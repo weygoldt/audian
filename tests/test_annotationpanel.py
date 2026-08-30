@@ -520,11 +520,12 @@ def test_predicted_pulses_are_counted_apart_from_the_observed_ones(app, tmp_path
 def test_the_span_counts_never_ask_the_parameter_bar_for_more_width(panel):
     """The readout changes on every mouse move; the bar may not move with it.
 
-    `QSizePolicy.Ignored` is why: the label takes the width that is left over
-    and never asks for more, so a long line elides instead of relaying out
-    the whole bar under the pointer -- the failure the status bar readouts
-    were rebuilt to stop.  The counts put the longest line in the application
-    into this label, so the property is asserted here and the elision with it.
+    `QSizePolicy.Policy.Ignored` is why: the label takes the width that is
+    left over and never asks for more, so a long line elides instead of
+    relaying out the whole bar under the pointer -- the failure the status
+    bar readouts were rebuilt to stop.  The counts put the longest line in
+    the application into this label, so the property is asserted here and the
+    elision with it.
     """
     label = panel.annotation_hoverw
     assert label.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored

@@ -440,11 +440,11 @@ class ParameterTabs(QWidget):
     Two things keep a tab change from resizing every lane in the stack.
     `QStackedLayout` reports the max over ALL pages, hidden ones included, so
     the bar's height does not depend on which tab is current; and this widget
-    is `QSizePolicy.Fixed` vertically, because `QStackedLayout` inherits
-    `QLayout.expandingDirections()` -- which is both directions -- and
-    `QWidgetItem` hands that to its widget.  Measured without the policy: the
-    bar took 402 px against a 154 px size hint and the channel stack's scroll
-    viewport fell to 247 px over 616 px of content.
+    is `QSizePolicy.Policy.Fixed` vertically, because `QStackedLayout`
+    inherits `QLayout.expandingDirections()` -- which is both directions --
+    and `QWidgetItem` hands that to its widget.  Measured without the policy:
+    the bar took 402 px against a 154 px size hint and the channel stack's
+    scroll viewport fell to 247 px over 616 px of content.
     """
 
     #: Emitted with the group title when the reader picks a tab.
@@ -3467,7 +3467,8 @@ class DataBrowser(QWidget):
 
         # store marker position:
         if evt[0].button() == Qt.MouseButton.LeftButton:  # and \
-            # (evt[0].modifiers() & Qt.ControlModifier) == Qt.ControlModifier:
+            # (evt[0].modifiers() & Qt.KeyboardModifier.ControlModifier)
+            #     == Qt.KeyboardModifier.ControlModifier:
             self.plot_ranges.store_marker()
 
     # --- labels ----------------------------------------------------------

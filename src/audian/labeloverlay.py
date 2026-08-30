@@ -36,17 +36,17 @@ survive whatever is already on the lane.  Measured on a four channel stack at
 1200x900, one drag per lane with the item under the whole drag, counting the
 view box's ``sigSelectedRegion``:
 
-===========================================  ================
-item                                         region signals
-===========================================  ================
-bare lane                                    1
-``QGraphicsRectItem``, no mouse buttons      1
-``QGraphicsRectItem``, ``Qt.LeftButton``     1
-``pg.ScatterPlotItem``, default buttons      1
-``pg.RectROI(movable=True)``                 **0**
-``pg.RectROI(movable=False)``                1
-``pg.RectROI(movable=False)`` + grips        1
-===========================================  ================
+====================================================  ================
+item                                                  region signals
+====================================================  ================
+bare lane                                             1
+``QGraphicsRectItem``, no mouse buttons               1
+``QGraphicsRectItem``, ``Qt.MouseButton.LeftButton``  1
+``pg.ScatterPlotItem``, default buttons               1
+``pg.RectROI(movable=True)``                          **0**
+``pg.RectROI(movable=False)``                         1
+``pg.RectROI(movable=False)`` + grips                 1
+====================================================  ================
 
 The movable ROI took the drag and moved *itself*, from (1.0 s, 1000.0 Hz) to
 (2.397 s, 2220.3 Hz).  That is the whole reason stored labels are not ROIs:
@@ -208,9 +208,9 @@ def _passive(item) -> None:
     curves.
 
     Not, on these two item types, what keeps the rubber band working: a rect
-    item flipped to ``Qt.LeftButton`` and a scatter with pyqtgraph's default
-    buttons both let a drag through unchanged when it was measured.  See the
-    module docstring for the one item that did not.
+    item flipped to ``Qt.MouseButton.LeftButton`` and a scatter with
+    pyqtgraph's default buttons both let a drag through unchanged when it was
+    measured.  See the module docstring for the one item that did not.
     """
     item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
     item.setAcceptHoverEvents(False)

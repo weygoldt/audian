@@ -51,7 +51,8 @@ Therefore:
   ``FG_MUTED`` (7.69:1 on ``BG_PLOT``).  :func:`style_axis` uses ``FG_MUTED``
   for text, never ``FG_FAINT``.
 * ``FG_FAINT`` is reserved for **non-text decoration** (tick marks, dashed
-  crosshairs, inactive rules) and for the ``QPalette.Disabled`` colour group.
+  crosshairs, inactive rules) and for the ``QPalette.ColorGroup.Disabled``
+  colour group.
 
 Verified ratios on ``BG_PLOT``: FG 15.93, FG_MUTED 7.69, PRIMARY 5.87,
 ACCENT 9.25, SUCCESS 8.03, DANGER 6.21, TRACE_RAW 11.42, TRACE_FILTERED 12.06,
@@ -813,7 +814,7 @@ def brush(c: Any, alpha: float | int | None = None) -> QBrush:
 
 
 def no_pen() -> QPen:
-    """Return a ``Qt.NoPen`` pen, for axis lines and unstroked shapes."""
+    """Return a ``Qt.PenStyle.NoPen`` pen, for axis lines and unstroked shapes."""
     return QPen(Qt.PenStyle.NoPen)
 
 
@@ -1380,13 +1381,13 @@ def annotation_pen(
     -----
     ``observed=False`` wins over *unvalidated* when both are set: the ``[2, 2]``
     dash is the more specific statement, and both leave ``style()`` off
-    ``Qt.SolidLine``, which is what the trust rule actually asserts.
+    ``Qt.PenStyle.SolidLine``, which is what the trust rule actually asserts.
     """
     p = pen(annotation_color(role), width=width, alpha=alpha)
     if not observed:
         # a short, even dash: at 1 px width it survives a 6 px tick, where
-        # Qt.DashLine (4-2 in pen-width units) would draw a single segment
-        # and look solid.
+        # Qt.PenStyle.DashLine (4-2 in pen-width units) would draw a single
+        # segment and look solid.
         p.setDashPattern([2.0, 2.0])
     elif unvalidated:
         p.setStyle(Qt.PenStyle.DashLine)
@@ -1398,10 +1399,10 @@ def annotation_brush(
 ) -> QBrush:
     """Return the fill brush for an annotation span of *role*.
 
-    *unvalidated* switches the fill to ``Qt.BDiagPattern`` -- a 45 degree
-    hatch.  A hatch survives glare and greyscale where a reduced opacity does
-    not, and it leaves the bar's position, height and width untouched, so the
-    layout does not move when trust changes.
+    *unvalidated* switches the fill to ``Qt.BrushStyle.BDiagPattern`` -- a 45
+    degree hatch.  A hatch survives glare and greyscale where a reduced
+    opacity does not, and it leaves the bar's position, height and width
+    untouched, so the layout does not move when trust changes.
     """
     b = brush(annotation_color(role), alpha=alpha)
     if unvalidated:
@@ -2234,9 +2235,10 @@ QTabWidget::pane {
 QTabBar {
     background-color: $bg_base;
 }
-/* Tabs sit on the LEFT (QTabWidget.West).  The selected tab is marked by a
-   rule down its leading edge, the same device the channel rail uses, and the
-   label is painted horizontally by VerticalTabBar -- Qt would rotate it. */
+/* Tabs sit on the LEFT (QTabWidget.TabPosition.West).  The selected tab is
+   marked by a rule down its leading edge, the same device the channel rail
+   uses, and the label is painted horizontally by VerticalTabBar -- Qt would
+   rotate it. */
 QTabBar::tab {
     background-color: $bg_base;
     color: $fg_muted;

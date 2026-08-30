@@ -464,9 +464,9 @@ def main(argv=None):
 
     if args.census:
         # Wayland census.  The criterion is *parentless* and *visible*, not
-        # "top-level": every QMenu carries Qt.Popup and so reports itself as
-        # a window even when it is properly owned by the menu bar, and
-        # pyqtgraph's hidden control widgets are parked on one deliberate
+        # "top-level": every QMenu carries Qt.WindowType.Popup and so reports
+        # itself as a window even when it is properly owned by the menu bar,
+        # and pyqtgraph's hidden control widgets are parked on one deliberate
         # hidden holder.  What must never appear is an unowned window, or a
         # second visible one, or any top-level QLabel - that last one is the
         # hover-popup bug this overhaul existed to kill.
