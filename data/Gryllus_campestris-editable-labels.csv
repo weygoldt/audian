@@ -1,0 +1,4 @@
+category,kind,channel,t_start_s,t_end_s,f_low_hz,f_high_hz,note
+event,span,0,2.321472,2.424120,3382.010,15217.152,
+event,span,0,2.629416,2.745713,2685.825,14918.787,
+event,span,0,2.853821,2.980493,3133.372,15714.427,

@@ -298,75 +298,21 @@ def glyph_pixmap(kind: str, size: int, color: str, alpha=None) -> QPixmap:
     return pm
 
 
-#: Which of our glyph kinds the freedesktop icon naming specification has a
-#: name for.  Consulted only while the desktop's theme is being followed:
-#: an icon from the desktop's pack carries the desktop's ink, which is right
-#: when the toolbar under it is the desktop's colour too and wrong when it
-#: is ours -- with a dark icon pack selected, these would be light grey
-#: glyphs on the daylight theme's pale toolbar, invisible, which is the very
-#: defect the note above `GLYPH_NORMAL` records.
-#:
-#: Seven kinds are deliberately absent: spectrogram, trace, meanspec,
-#: colorbar, navigator, channels and play-region name things a desktop icon
-#: pack has never heard of.  Those keep their drawn glyph in every theme,
-#: which is also why the drawn set cannot simply be deleted.
-GLYPH_THEME_NAMES = {
-    "play": "media-playback-start",
-    "pause": "media-playback-pause",
-    "seek-forward": "media-seek-forward",
-    "seek-backward": "media-seek-backward",
-    "skip-forward": "media-skip-forward",
-    "skip-backward": "media-skip-backward",
-    "forward": "go-next",
-    "back": "go-previous",
-    "home": "go-home",
-    "save": "document-save",
-    "close": "window-close",
-    "zoom": "zoom-in",
-    "fit": "zoom-fit-best",
-    "more": "open-menu",
-    "label": "tag",
-    "analyze": "office-chart-line",
-    "ask": "help-contents",
-    "power": "system-shutdown",
-    "amplitude": "audio-volume-high",
-}
-
-
-def themed_icon(kind: str) -> QIcon | None:
-    """The desktop's own icon for *kind*, or None if it has none.
-
-    Only while the desktop's theme is being followed.  `QIcon.fromTheme`
-    returns a null icon rather than raising when the pack has no such name,
-    and under the offscreen platform it returns a null icon for everything,
-    so the drawn glyph stays the fallback on every path.
-    """
-    if theme.current_variant() != theme.THEME_NATIVE:
-        return None
-    name = GLYPH_THEME_NAMES.get(kind)
-    if name is None:
-        return None
-    icon = QIcon.fromTheme(name)
-    if icon.isNull() or not icon.availableSizes():
-        return None
-    return icon
-
-
 def glyph_icon(kind: str, size: int = 16, color: str = GLYPH_NORMAL) -> QIcon:
     """A monochrome icon drawn as a QPainterPath, in all four QIcon modes.
 
-    No emoji and no external assets -- except while the desktop's own theme
-    is being followed, where the desktop's icon pack is exactly what the
-    reader asked for and its ink matches the chrome it sits on.
-
-    Never a ``QStyle`` standard icon: those are pre-rendered pixmaps in the
-    style's own grey and honour neither our theme nor the desktop's pack.
-    When the glyph is drawn, every mode is supplied explicitly so that Qt
+    No emoji, no external assets, and above all no ``QStyle`` standard
+    icon: those are pre-rendered pixmaps in the platform theme's own grey
+    and never honour ours.  Every mode is supplied explicitly so that Qt
     picks the right one instead of fading the normal pixmap.
+
+    Not the desktop's icon pack either, even while its colours are being
+    followed.  Seven of the kinds drawn here -- spectrogram, trace,
+    meanspec, colorbar, navigator, channels, play-region -- name things no
+    freedesktop pack has ever heard of, so taking the other seventeen from
+    the desktop puts two drawing styles in one tool bar.  These are drawn
+    from the tokens, so they follow the desktop's colours regardless.
     """
-    themed = themed_icon(kind)
-    if themed is not None:
-        return themed
     icon = QIcon()
     for mode, role, alpha in (
         (QIcon.Mode.Normal, color, None),
@@ -1013,6 +959,7 @@ def apply_theme_preference(app, preference: str) -> str:
     them.  Pinning dark or light loads audian's own designed table instead.
     """
     if preference == theme.THEME_SYSTEM:
+        theme.refresh_system(app)
         theme.set_native_theme()
     else:
         theme.set_theme(theme.resolve_theme(preference))
@@ -1827,7 +1774,7 @@ class Audian(QMainWindow):
         theme.push_color_scheme(preference)
         save_setting("theme", preference)
         self.sync_theme_actions()
-        self.apply_app_theme(theme.resolve_theme(preference))
+        self.apply_app_theme()
 
     def follow_system_theme(self, follow: bool) -> None:
         """Menu entry point: start or stop following the desktop's choice.
@@ -1851,10 +1798,10 @@ class Audian(QMainWindow):
         """
         if getattr(self, "theme_preference", None) != theme.THEME_SYSTEM:
             return
-        wanted = theme.system_theme()
-        if wanted == theme.current_theme():
-            return
-        QTimer.singleShot(0, lambda: self.apply_app_theme(theme.system_theme()))
+        # No early return on "the light-or-dark bit did not move": a
+        # desktop can change its colours without crossing that line, and
+        # those are the colours audian is wearing.
+        QTimer.singleShot(0, self.apply_app_theme)
 
     def sync_theme_actions(self) -> None:
         """Point the two theme checkboxes at the current preference."""
@@ -1872,20 +1819,28 @@ class Audian(QMainWindow):
             act.setChecked(checked)
             act.blockSignals(blocked)
 
-    def apply_app_theme(self, name: str) -> None:
-        """Repaint the whole application in *name*.  Does not persist anything.
+    def apply_app_theme(self, name: str | None = None) -> None:
+        """Repaint the whole application.  Does not persist anything.
+
+        With no *name* the table is chosen from the current preference,
+        which is the only way the desktop's colours can be picked up: they
+        have to be re-read from the platform before they can be derived, and
+        a caller passing a theme name has already decided the answer.
 
         ``theme.apply()`` only reaches the Qt chrome -- palette, font and
         stylesheet.  The plots are a pyqtgraph graphics scene whose pens and
         brushes were resolved when each item was built, so without the walk
         below a switch leaves light menus wrapped around dark plots.
         """
-        if name not in (theme.THEME_DARK, theme.THEME_LIGHT):
-            return
         app = QApplication.instance()
         if app is None:
             return
-        theme.apply(app, name)
+        if name is None:
+            apply_theme_preference(app, getattr(self, "theme_preference", None))
+        elif name in (theme.THEME_DARK, theme.THEME_LIGHT):
+            theme.apply(app, name)
+        else:
+            return
         self.refresh_glyph_icons()
         self.restyle_chrome()
         for browser in self.browsers:

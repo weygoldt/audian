@@ -537,6 +537,26 @@ def capture_system(app) -> None:
     _CACHE["system.font"] = QFont(app.font())
 
 
+def refresh_system(app) -> None:
+    """Re-read the desktop's palette after it has changed under us.
+
+    Needed because :func:`apply` sets a palette of its own, and an
+    application that sets one stops being given the platform's: measured,
+    after ``setPalette`` the window colour stayed at the value we wrote
+    across a colour-scheme change, so `app.palette()` would answer with our
+    own last answer for ever.
+
+    Setting an empty ``QPalette`` clears the override -- also measured, the
+    platform's colour came straight back -- so that is what this does before
+    capturing.  The palette it leaves behind is the desktop's; the caller
+    re-derives and calls :func:`apply`, which puts ours back on top.  A
+    single frame in between where the desktop's colours are live is not
+    visible, because nothing repaints until the derivation is done.
+    """
+    app.setPalette(QPalette())
+    capture_system(app)
+
+
 def system_palette() -> QPalette:
     """The desktop's palette, or Qt's default if we never captured one."""
     captured = _CACHE.get("system.palette")
@@ -990,36 +1010,16 @@ def font_ui(size: int | None = None, bold: bool = False) -> QFont:
     Used for every widget label, menu entry and button.  Not fixed pitch --
     proportional text reads better in chrome.
 
-    While the desktop's theme is being followed this is the desktop's own UI
-    font, at the desktop's own size, because that is what "follow the system"
-    means for type: a reader who has set their session to 12 pt has usually
-    done it because 10 pt is hard for them to read, and an application that
-    quietly keeps its own 10 pt has ignored the one setting they cared most
-    about.  *size* is still honoured as a **relative** step -- a caller
-    asking for SIZE_SMALL_PT gets the system size less the same one point --
-    so in-plot labels stay smaller than chrome either way.
-
-    The monospace font is deliberately not treated this way: `font_mono` is
-    used for numeric readouts, where digit alignment is the requirement and
-    the desktop's fixed-pitch face may not be one.
+    Audian's own face in every variant, including while the desktop's
+    colours are being followed.  Type is where "follow the system" stops
+    being worth it: every pixel metric in the module -- tool bar height,
+    dense channel height, chip and control heights -- was measured against
+    this face at this size, and a desktop font one point larger pushes five
+    of sixteen channels below the scroll.  The colours can come from
+    anywhere; the metrics cannot, until they are expressions rather than
+    numbers.  See todo.md.
     """
-    if current_variant() != THEME_NATIVE:
-        return _font(FONT_UI_FAMILIES, size, bold, mono=False)
-    base = system_font()
-    point = base.pointSize()
-    if point <= 0:  # a font given in pixels has no point size to shift
-        point = SIZE_PT
-    if size is not None:
-        point = max(1, point + int(size) - SIZE_PT)
-    key = f"font:native:{point}:{bold}"
-    font = _CACHE.get(key)
-    if font is None:
-        font = QFont(base)
-        font.setPointSize(point)
-        font.setBold(bold)
-        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-        _CACHE[key] = font
-    return QFont(font)
+    return _font(FONT_UI_FAMILIES, size, bold, mono=False)
 
 
 def font_mono(size: int | None = None, bold: bool = False) -> QFont:
@@ -1751,22 +1751,6 @@ def tint(widget: Any, token_name: str = "fg.muted") -> Any:
     time.
     """
     widget.setProperty(FG_PROPERTY, token_name)
-    if current_variant() == THEME_NATIVE:
-        # Standard Qt: the colour of a widget's text is a palette role, not
-        # a stylesheet rule.  A per-widget sheet also detaches the widget
-        # from the style entirely -- Qt stops drawing it natively the moment
-        # one is set -- which is the opposite of what following the desktop
-        # is for.
-        pal = widget.palette()
-        for role in (
-            QPalette.ColorRole.WindowText,
-            QPalette.ColorRole.Text,
-            QPalette.ColorRole.ButtonText,
-        ):
-            pal.setColor(role, qcolor(token_name))
-        widget.setPalette(pal)
-        widget.setStyleSheet("")
-        return widget
     widget.setStyleSheet(f"color: {token(token_name)};")
     return widget
 
@@ -1775,17 +1759,6 @@ def frame(widget: Any) -> Any:
     """Give a container the hairline group frame, re-appliably."""
     widget.setObjectName("audianGroup")
     widget.setProperty(FRAME_PROPERTY, True)
-    if current_variant() == THEME_NATIVE:
-        # Standard Qt: a frame is a QFrame shape the style draws, in the
-        # style's own idea of a group border.  Anything that is not a QFrame
-        # gets no frame rather than a painted-on one.
-        widget.setStyleSheet("")
-        shape = getattr(widget, "setFrameShape", None)
-        if shape is not None:
-            from PySide6.QtWidgets import QFrame
-
-            shape(QFrame.Shape.StyledPanel)
-        return widget
     widget.setStyleSheet(
         "#audianGroup { "
         f"border: {HAIRLINE}px solid {token('border')}; "
@@ -1818,21 +1791,6 @@ def band(
     widget.setProperty(BAND_PROPERTY, f"{int(bool(top))}{int(bool(bottom))}|{ground}")
     name = widget.objectName() or "audianBand"
     widget.setObjectName(name)
-    if current_variant() == THEME_NATIVE:
-        # Standard Qt: a ground is a palette role the style fills, chosen by
-        # `setBackgroundRole`.  The seam rule is dropped with the sheet --
-        # the desktop's own style already separates a tool bar from what is
-        # under it, in whatever way that desktop separates things, and a
-        # hairline of our own on top of that is the painted look this mode
-        # exists to stop.
-        widget.setStyleSheet("")
-        widget.setAutoFillBackground(True)
-        widget.setBackgroundRole(
-            QPalette.ColorRole.Window
-            if ground == "bg.base"
-            else QPalette.ColorRole.Button
-        )
-        return widget
     rules = [f"background-color: {token(ground)}"]
     if top:
         rules.append(f"border-top: {HAIRLINE}px solid {token('edge')}")
@@ -2869,33 +2827,13 @@ def apply(app: QApplication, theme_name: str | None = None) -> None:
     """
     if theme_name is not None:
         set_theme(theme_name)
-    if current_variant() != THEME_NATIVE:
-        style = QStyleFactory.create("Fusion")
-        if style is not None:
-            app.setStyle(style)
-    if current_variant() == THEME_NATIVE:
-        # Leave the desktop's own palette in place.  Overwriting it with a
-        # copy of itself would be harmless but pointless, and it would cost
-        # the thing that makes following work: once an application sets a
-        # palette Qt stops replacing it, so `app.palette()` would freeze at
-        # the colours captured at startup and the next desktop change would
-        # have nothing left to read.  The stylesheet is applied last and
-        # wins over the palette wherever the two overlap, so the look is
-        # still ours to control.
-        _CACHE["system.palette"] = QPalette(app.palette())
-    else:
-        app.setPalette(palette())
+    style = QStyleFactory.create("Fusion")
+    if style is not None:
+        app.setStyle(style)
+    app.setPalette(palette())
     app.setFont(font_ui())
     apply_pg_config()
-    # The application stylesheet is where audian stops being a Qt
-    # application and starts being a painted one: 409 lines of baked hex and
-    # pixel metrics that overrule the palette wherever the two meet.  While
-    # the desktop's theme is being followed it is not applied at all, which
-    # is the whole of the standard Qt answer to "look native" -- the style
-    # and the palette already know what the desktop looks like, and every
-    # line of QSS can only disagree with them.  Cleared rather than skipped,
-    # so that turning the following on mid-session takes the old sheet off.
-    app.setStyleSheet("" if current_variant() == THEME_NATIVE else stylesheet())
+    app.setStyleSheet(stylesheet())
 
 
 # ---------------------------------------------------------------------------

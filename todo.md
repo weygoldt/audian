@@ -11,41 +11,54 @@
   1100. It is what stops the window going below 734, so it is next if audian
   ever has to tile into half a laptop panel.
 
-- [x] Follow native system theme (colors, fonts, icons).  Done as a third
-  theme preference, `system`, which is now the default.  It takes the
-  desktop's palette, its UI font and its icon pack, and follows
-  `colorSchemeChanged` live.  The standard Qt way turned out to be *stop
-  overriding*: while it is on, audian forces no style, sets no palette and
-  applies no application stylesheet, and `tint`/`frame`/`band` use
-  setPalette / QFrame shapes / setBackgroundRole instead of per-widget
-  sheets.  Pinning dark or light still loads the two hand-made tables.
+- [x] Follow native system theme.  Done as a third theme preference,
+  `system`, which is the default, and it follows `colorSchemeChanged` live.
 
-  What is still ours, and has to be: pyqtgraph resolves pens at
-  construction, so the plot layer needs explicit colours and a QPalette has
-  no opinion about what colour a filtered trace is.  Those tokens are
-  derived from the platform palette where a role exists and kept from the
-  matching hand-made table where none does -- the data series, the
-  annotation hues, the spectrogram colormaps.  Derived tokens are then
-  pushed away from their ground until they clear 4.5:1, because a desktop
-  is under no obligation to: measured here, Breeze's accent scores 3.71 on
-  the window ground and arrives as #4f9dcf rather than #308cc6.
+  It takes the desktop's **colours only**.  Fonts, icons and the whole
+  design language stay audian's, and that was tried the other way first:
+  taking the desktop's font and icon pack and dropping the application
+  stylesheet is the textbook Qt answer to "look native", and it looked
+  cheap -- the metrics, radii, hairlines and control heights all live in
+  that sheet, and without it Qt's default Fusion chrome is what is left.
+  The colours were never what made it look foreign.
 
-- [ ] Seven toolbar glyphs have no freedesktop name -- spectrogram, trace,
-  meanspec, colorbar, navigator, channels, play-region -- so in system mode
-  the bar mixes the desktop's icon pack with seven drawn glyphs of our own.
-  They agree on ink, since the drawn ones use the derived tokens, but not
-  on drawing style.  Either find names that exist across the common packs
-  or accept the mix; it is visible in the tool bar and nowhere else.
+  So the design system stays and only the token *values* are re-pointed at
+  the platform palette: grounds from Window and Base, ink from WindowText,
+  the selection colour from Accent where Qt 6.6 has it, the rest mixed from
+  those.  Tokens with no palette role -- the data series, the annotation
+  hues, the spectrogram colormaps -- are kept from the matching hand-made
+  table, and they have to be: pyqtgraph resolves pens at construction, so
+  the plot layer needs explicit colours, and a QPalette has no opinion
+  about what colour a filtered trace is.
 
-- [ ] The absolute pixel metrics were tuned to Inter 10pt and system mode
-  now runs them against whatever face and size the desktop has -- 9pt Sans
-  Serif here.  TOOLBAR_HEIGHT 36, CHANNEL_DENSE_HEIGHT 34,
-  TOOLBAR_BUTTON_BOX 30, RAIL_NUMBER_HEIGHT 14, CONTROL_HEIGHT 26 and
-  CHIP_HEIGHT 22 are the ones that would have to become QFontMetrics
-  expressions before a reader with a 12pt desktop font is safe: at that
-  size five of sixteen channels go below the scroll, which is the failure
-  CHANNEL_DENSE_HEIGHT's own comment records.  Not hit here because the
-  desktop font is smaller than Inter, not larger.
+  Derived tokens are pushed away from their ground until they clear 4.5:1,
+  because a desktop is under no obligation to: measured, Breeze's accent
+  scores 3.71 on the window ground and arrives as #4f9dcf rather than
+  #308cc6 -- the hue kept, the legibility gained.
+
+  The one piece of real machinery is `refresh_system`.  An application that
+  sets a palette stops being handed the platform's, so after the first
+  `apply` the desktop's colours are unreadable -- measured, the window
+  colour stayed at ours across a scheme change.  Setting an empty QPalette
+  clears the override and the platform's come straight back, so that runs
+  before each re-derivation.
+
+- [ ] The desktop's UI font is deliberately not adopted.  Every pixel
+  metric in theme.py was measured against Inter 10pt -- TOOLBAR_HEIGHT 36,
+  CHANNEL_DENSE_HEIGHT 34, TOOLBAR_BUTTON_BOX 30, RAIL_NUMBER_HEIGHT 14,
+  CONTROL_HEIGHT 26, CHIP_HEIGHT 22 -- and a 12pt desktop font pushes five
+  of sixteen channels below the scroll, which is the failure
+  CHANNEL_DENSE_HEIGHT's own comment records.  Adopting it means turning
+  those numbers into QFontMetrics expressions first.  That is the whole of
+  the work; the switch itself is one line in `font_ui`.
+
+- [ ] The desktop's icon pack is deliberately not adopted.  Seventeen of
+  the twenty-four glyph kinds have a freedesktop name; seven do not --
+  spectrogram, trace, meanspec, colorbar, navigator, channels,
+  play-region -- so taking the seventeen puts two drawing styles in one
+  tool bar.  The drawn set follows the desktop's colours anyway, because it
+  is painted from the tokens.  Revisit only if the seven find names that
+  exist across the common packs.
 
 - [x] Store user settings in .config directory.  The spectrogram colormap
   moved out of the QSettings INI it had to itself and into settings.json
