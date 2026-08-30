@@ -86,7 +86,7 @@ def pump(app, seconds, deadline_note=""):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         app.processEvents()
-        app.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         time.sleep(0.005)
     if deadline_note:
         sys.stderr.write(f"[pump] {deadline_note}\n")
@@ -259,9 +259,9 @@ def redirect_persistence(scratch: Path) -> None:
     import audian.audian as A
 
     A.settings_path = lambda: scratch / "settings.json"
-    QSettings.setDefaultFormat(QSettings.IniFormat)
-    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
-        for scope in (QSettings.UserScope, QSettings.SystemScope):
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
             QSettings.setPath(fmt, scope, os.fspath(scratch))
 
 
@@ -464,16 +464,16 @@ def main(argv=None):
 
     if args.census:
         # Wayland census.  The criterion is *parentless* and *visible*, not
-        # "top-level": every QMenu carries Qt.Popup and so reports itself as
-        # a window even when it is properly owned by the menu bar, and
-        # pyqtgraph's hidden control widgets are parked on one deliberate
+        # "top-level": every QMenu carries Qt.WindowType.Popup and so reports
+        # itself as a window even when it is properly owned by the menu bar,
+        # and pyqtgraph's hidden control widgets are parked on one deliberate
         # hidden holder.  What must never appear is an unowned window, or a
         # second visible one, or any top-level QLabel - that last one is the
         # hover-popup bug this overhaul existed to kill.
         from PySide6.QtWidgets import QLabel
 
         for _ in range(5):
-            app.sendPostedEvents(None, QEvent.DeferredDelete)
+            app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             app.processEvents()
         tops = QApplication.topLevelWidgets()
         visible = [w for w in tops if w.isVisible()]
@@ -523,7 +523,7 @@ def main(argv=None):
 
     main_win.close()
     pump(app, 0.5)
-    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     if faults:
         sys.stderr.write("\nFAULTS:\n")

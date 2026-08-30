@@ -402,12 +402,12 @@ def test_a_predicted_point_is_full_height_dashed_and_capped(app, layer):
     observed = overlay.marks[(PULSE_VOLLEY, 0)]
     predicted = overlay.marks[(PULSE_VOLLEY, 1)]
     assert sorted(set(np.round(predicted.getData()[1], 6))) == [0.0, 1.0]
-    assert observed.opts["pen"].style() == Qt.SolidLine
-    assert predicted.opts["pen"].style() != Qt.SolidLine
+    assert observed.opts["pen"].style() == Qt.PenStyle.SolidLine
+    assert predicted.opts["pen"].style() != Qt.PenStyle.SolidLine
     assert predicted.opts["pen"].color().name() == observed.opts["pen"].color().name()
     caps = overlay.caps[(PULSE_VOLLEY, 1)]
     assert caps.getData()[0].tolist() == [3.5]
-    assert caps.opts["brush"].style() == Qt.NoBrush, (
+    assert caps.opts["brush"].style() == Qt.BrushStyle.NoBrush, (
         "a filled dot reads as a measurement"
     )
 
@@ -777,11 +777,11 @@ def test_an_unvalidated_fit_breaks_every_pen_and_hatches_every_fill(app, tmp_pat
     assert annotations.unvalidated
     overlay = drawn_overlay(app, annotations)
     for item in overlay.marks.values():
-        assert item.opts["pen"].style() != Qt.SolidLine
+        assert item.opts["pen"].style() != Qt.PenStyle.SolidLine
     for item in overlay.edges.values():
-        assert item.opts["pen"].style() != Qt.SolidLine
+        assert item.opts["pen"].style() != Qt.PenStyle.SolidLine
     for item in overlay.fills.values():
-        assert item.opts["brush"].style() == Qt.BDiagPattern
+        assert item.opts["brush"].style() == Qt.BrushStyle.BDiagPattern
 
 
 def test_a_validated_bundle_badges_as_validated(layer):
@@ -933,7 +933,7 @@ def test_overlay_items_never_take_the_mouse(app, layer):
     )
     assert items
     for item in items:
-        assert item.acceptedMouseButtons() == Qt.NoButton
+        assert item.acceptedMouseButtons() == Qt.MouseButton.NoButton
         assert not item.acceptHoverEvents()
 
 
@@ -1259,8 +1259,8 @@ def test_a_letter_never_takes_the_mouse(app, layer):
     """
     overlay = drawn_overlay(app, layer)
     for item in overlay.labels:
-        assert item.acceptedMouseButtons() == Qt.NoButton
-        assert item.textItem.acceptedMouseButtons() == Qt.NoButton
+        assert item.acceptedMouseButtons() == Qt.MouseButton.NoButton
+        assert item.textItem.acceptedMouseButtons() == Qt.MouseButton.NoButton
 
 
 def test_a_letter_rides_above_every_other_annotation(app, layer):

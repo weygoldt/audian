@@ -139,7 +139,7 @@ def test_strip_pg_menus_removes_menus_and_keeps_ctrl_widgets():
         plot.setMenuEnabled(False)
         theme.strip_pg_menus(plot)
         theme.strip_pg_menus(plot)  # idempotent
-    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert count() == before
     # PlotItem.showGrid() and friends reach into plot.ctrl -- must survive.
     plots[0].showGrid(x=True, y=True, alpha=theme.GRID_ALPHA)
@@ -724,8 +724,8 @@ def test_a_predicted_mark_differs_by_dash_and_never_by_hue():
     observed = theme.annotation_pen("trial")
     predicted = theme.annotation_pen("trial", observed=False)
     assert observed.color().name() == predicted.color().name()
-    assert observed.style() == Qt.SolidLine
-    assert predicted.style() != Qt.SolidLine
+    assert observed.style() == Qt.PenStyle.SolidLine
+    assert predicted.style() != Qt.PenStyle.SolidLine
     assert predicted.dashPattern() == [2.0, 2.0]
 
 
@@ -742,12 +742,12 @@ def test_an_unvalidated_alignment_is_dashed_and_hatched_never_faded():
         theme.set_theme(name)
         for role in theme.ANNOTATION_ROLES:
             p = theme.annotation_pen(role, unvalidated=True)
-            assert p.style() != Qt.SolidLine, (name, role)
+            assert p.style() != Qt.PenStyle.SolidLine, (name, role)
             assert p.color().alpha() == 255, (name, role)
             b = theme.annotation_brush(role, unvalidated=True)
-            assert b.style() == Qt.BDiagPattern, (name, role)
+            assert b.style() == Qt.BrushStyle.BDiagPattern, (name, role)
             assert b.color().alpha() == 255, (name, role)
-            assert theme.annotation_brush(role).style() == Qt.SolidPattern
+            assert theme.annotation_brush(role).style() == Qt.BrushStyle.SolidPattern
     theme.set_theme(theme.THEME_DARK)
 
 

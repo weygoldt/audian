@@ -339,7 +339,7 @@ def labelling(browser):
     settle()
 
 
-def send(browser, channel, kind, x, y, button, buttons, mods=Qt.NoModifier):
+def send(browser, channel, kind, x, y, button, buttons, mods=Qt.KeyboardModifier.NoModifier):
     """One real mouse event, routed the way a pointer is.
 
     The *global* position is not decoration: `QGraphicsScene` finds the item
@@ -364,7 +364,7 @@ def send(browser, channel, kind, x, y, button, buttons, mods=Qt.NoModifier):
     settle()
 
 
-def drag(browser, channel, ax, x0, y0, x1, y1, mods=Qt.NoModifier):
+def drag(browser, channel, ax, x0, y0, x1, y1, mods=Qt.KeyboardModifier.NoModifier):
     """Rubber-band from data ``(x0, y0)`` to ``(x1, y1)`` in one lane.
 
     Two things this cannot do and be right.
@@ -388,41 +388,41 @@ def drag(browser, channel, ax, x0, y0, x1, y1, mods=Qt.NoModifier):
     send(
         browser,
         channel,
-        QEvent.MouseButtonPress,
+        QEvent.Type.MouseButtonPress,
         a.x(),
         a.y(),
-        Qt.LeftButton,
-        Qt.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
         mods,
     )
     send(
         browser,
         channel,
-        QEvent.MouseMove,
+        QEvent.Type.MouseMove,
         (a.x() + b.x()) / 2,
         (a.y() + b.y()) / 2,
-        Qt.NoButton,
-        Qt.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
         mods,
     )
     send(
         browser,
         channel,
-        QEvent.MouseMove,
+        QEvent.Type.MouseMove,
         b.x(),
         b.y(),
-        Qt.NoButton,
-        Qt.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
         mods,
     )
     send(
         browser,
         channel,
-        QEvent.MouseButtonRelease,
+        QEvent.Type.MouseButtonRelease,
         b.x(),
         b.y(),
-        Qt.LeftButton,
-        Qt.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
         mods,
     )
 
@@ -966,8 +966,8 @@ def ctrl_click(browser, channel, ax, t, y):
     """Pick the label at data ``(t, y)`` the way a reader does."""
     p = ax.getViewBox().mapViewToScene(pg.Point(t, y))
     for kind, button, buttons in (
-        (QEvent.MouseButtonPress, Qt.LeftButton, Qt.LeftButton),
-        (QEvent.MouseButtonRelease, Qt.LeftButton, Qt.NoButton),
+        (QEvent.Type.MouseButtonPress, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton),
+        (QEvent.Type.MouseButtonRelease, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton),
     ):
         application = QApplication.instance()
         viewport = browser.figs[channel].viewport()
@@ -980,7 +980,7 @@ def ctrl_click(browser, channel, ax, t, y):
                 QPointF(viewport.mapToGlobal(pos)),
                 button,
                 buttons,
-                Qt.ControlModifier,
+                Qt.KeyboardModifier.ControlModifier,
             ),
         )
         settle()
@@ -997,7 +997,7 @@ def grip(overlay, kind: str):
     raise AssertionError(f"no {kind!r} grip: {[h['type'] for h in editor.handles]}")
 
 
-def drag_scene(browser, channel, x0, y0, x1, y1, mods=Qt.NoModifier):
+def drag_scene(browser, channel, x0, y0, x1, y1, mods=Qt.KeyboardModifier.NoModifier):
     """A drag in SCENE coordinates, for grips, whose position is a pixel.
 
     It opens with a **buttonless move**, which `drag` does not, and that is
@@ -1013,11 +1013,11 @@ def drag_scene(browser, channel, x0, y0, x1, y1, mods=Qt.NoModifier):
     this exercises the one a reader actually takes.
     """
     for kind, x, y, button, buttons in (
-        (QEvent.MouseMove, x0, y0, Qt.NoButton, Qt.NoButton),
-        (QEvent.MouseButtonPress, x0, y0, Qt.LeftButton, Qt.LeftButton),
-        (QEvent.MouseMove, (x0 + x1) / 2, (y0 + y1) / 2, Qt.NoButton, Qt.LeftButton),
-        (QEvent.MouseMove, x1, y1, Qt.NoButton, Qt.LeftButton),
-        (QEvent.MouseButtonRelease, x1, y1, Qt.LeftButton, Qt.NoButton),
+        (QEvent.Type.MouseMove, x0, y0, Qt.MouseButton.NoButton, Qt.MouseButton.NoButton),
+        (QEvent.Type.MouseButtonPress, x0, y0, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton),
+        (QEvent.Type.MouseMove, (x0 + x1) / 2, (y0 + y1) / 2, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton),
+        (QEvent.Type.MouseMove, x1, y1, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton),
+        (QEvent.Type.MouseButtonRelease, x1, y1, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton),
     ):
         application = QApplication.instance()
         viewport = browser.figs[channel].viewport()
@@ -1054,7 +1054,7 @@ def grip_at(overlay, x, y):
     )
 
 
-def drag_grip(browser, channel, overlay, kind, dx, dy, mods=Qt.NoModifier):
+def drag_grip(browser, channel, overlay, kind, dx, dy, mods=Qt.KeyboardModifier.NoModifier):
     """Drag one grip `dx`, `dy` device pixels."""
     at = grip(overlay, kind).scenePos()
     drag_scene(browser, channel, at.x(), at.y(), at.x() + dx, at.y() + dy, mods)
@@ -1134,7 +1134,7 @@ def test_a_modified_drag_over_the_selected_label_still_reaches_the_lane(labellin
     editor = overlay_for(browser, "spectrogram", 1).editor
     assert editor is not None
     view = ax.getViewBox()
-    for mods in (Qt.ShiftModifier, Qt.AltModifier):
+    for mods in (Qt.KeyboardModifier.ShiftModifier, Qt.KeyboardModifier.AltModifier):
         was = (label.t0, label.t1, label.f0, label.f1)
         seen = []
         view.sigSelectedRegion.connect(lambda *a: seen.append(a))
@@ -1558,11 +1558,11 @@ def test_a_ctrl_drag_reaches_for_a_label_and_never_writes_one(labelling):
     label = browser.labels.labels[0]
     assert len(browser.labels) == 1
     # a Ctrl+drag well inside the label: a wobble, not a new box
-    drag(browser, 1, ax, 1.9, 1900.0, 2.1, 2100.0, mods=Qt.ControlModifier)
+    drag(browser, 1, ax, 1.9, 1900.0, 2.1, 2100.0, mods=Qt.KeyboardModifier.ControlModifier)
     assert len(browser.labels) == 1, "a Ctrl+drag wrote a label"
     assert browser.selected_label is label
     # and one over empty lane picks nothing, and still writes nothing
-    drag(browser, 1, ax, 3.4, 3400.0, 3.6, 3600.0, mods=Qt.ControlModifier)
+    drag(browser, 1, ax, 3.4, 3400.0, 3.6, 3600.0, mods=Qt.KeyboardModifier.ControlModifier)
     assert len(browser.labels) == 1
     assert browser.selected_label is None
 
@@ -1590,26 +1590,26 @@ def test_a_grip_click_that_moves_nothing_is_not_an_edit(labelling):
     # all, so a press and release in one place never reaches the write-back
     # and would prove nothing.  Out and back is the wobble.
     at = grip(overlay, "t").scenePos()
-    send(browser, 0, QEvent.MouseMove, at.x(), at.y(), Qt.NoButton, Qt.NoButton)
+    send(browser, 0, QEvent.Type.MouseMove, at.x(), at.y(), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton)
     send(
         browser,
         0,
-        QEvent.MouseButtonPress,
+        QEvent.Type.MouseButtonPress,
         at.x(),
         at.y(),
-        Qt.LeftButton,
-        Qt.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
     )
-    send(browser, 0, QEvent.MouseMove, at.x() + 9, at.y(), Qt.NoButton, Qt.LeftButton)
-    send(browser, 0, QEvent.MouseMove, at.x(), at.y(), Qt.NoButton, Qt.LeftButton)
+    send(browser, 0, QEvent.Type.MouseMove, at.x() + 9, at.y(), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton)
+    send(browser, 0, QEvent.Type.MouseMove, at.x(), at.y(), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton)
     send(
         browser,
         0,
-        QEvent.MouseButtonRelease,
+        QEvent.Type.MouseButtonRelease,
         at.x(),
         at.y(),
-        Qt.LeftButton,
-        Qt.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
     )
     pump(0.1)
     assert (label.t0, label.t1, label.f0, label.f1) == moved
@@ -1793,10 +1793,10 @@ def test_escape_puts_the_label_down(labelling):
     in this repository asserts a *binding* rather than pressing the key.
     Under the offscreen platform the window is never activated --
     ``QApplication.activeWindow()`` is None and ``isActiveWindow()`` is False
-    -- and a `Qt.WindowShortcut` needs an active window, so **no** shortcut
-    fires at all: measured, `QTest.keyClick` of ``2`` left the current
-    category on "event" and of ``F9`` left the labels visible, both of them
-    bindings that work. Activated, the same key press deselects.
+    -- and a `Qt.ShortcutContext.WindowShortcut` needs an active window, so
+    **no** shortcut fires at all: measured, `QTest.keyClick` of ``2`` left
+    the current category on "event" and of ``F9`` left the labels visible,
+    both of them bindings that work. Activated, the same key press deselects.
     """
     from PySide6.QtTest import QTest
 
@@ -1806,7 +1806,7 @@ def test_escape_puts_the_label_down(labelling):
     ctrl_click(browser, 0, ax, 1.5, 1500.0)
     assert browser.selected_label is not None
     bound = [
-        a for a in browser.actions() if a.shortcut() == QKeySequence(Qt.Key_Escape)
+        a for a in browser.actions() if a.shortcut() == QKeySequence(Qt.Key.Key_Escape)
     ]
     assert len(bound) == 1, "Escape is bound once on the browser"
     window = browser.window()
@@ -1814,7 +1814,7 @@ def test_escape_puts_the_label_down(labelling):
     browser.setFocus()
     pump(0.3)
     assert window.isActiveWindow()
-    QTest.keyClick(window, Qt.Key_Escape)
+    QTest.keyClick(window, Qt.Key.Key_Escape)
     pump(0.2)
     assert browser.selected_label is None
     assert all(o.editor is None for o in browser.label_overlays)

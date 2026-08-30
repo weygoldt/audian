@@ -47,8 +47,8 @@ def smoke(monkeypatch):
     monkeypatch.setattr(audian_app, "settings_path", audian_app.settings_path)
     home = Path(QSettings("audian", "audian").fileName()).parent.parent
     yield module
-    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
-        for scope in (QSettings.UserScope, QSettings.SystemScope):
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
             QSettings.setPath(fmt, scope, os.fspath(home))
 
 

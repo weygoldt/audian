@@ -56,7 +56,7 @@ def pump(seconds):
     app = QApplication.instance()
     while time.monotonic() < end:
         app.processEvents()
-        app.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         time.sleep(0.005)
 
 
@@ -75,8 +75,8 @@ def window(tmp_path):
     original = audian_app.settings_path
     home = Path(QSettings("audian", "audian").fileName()).parent.parent
     audian_app.settings_path = lambda: tmp_path / "settings.json"
-    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
-        for scope in (QSettings.UserScope, QSettings.SystemScope):
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
             QSettings.setPath(fmt, scope, os.fspath(tmp_path))
 
     theme.apply(app)
@@ -96,8 +96,8 @@ def window(tmp_path):
         pass
     pump(0.3)
     audian_app.settings_path = original
-    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
-        for scope in (QSettings.UserScope, QSettings.SystemScope):
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
             QSettings.setPath(fmt, scope, os.fspath(home))
 
 

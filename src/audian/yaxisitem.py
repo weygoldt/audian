@@ -50,7 +50,7 @@ class YAxisItem(pg.AxisItem):
         if callback is None:
             self.unsetCursor()
         else:
-            self.setCursor(Qt.PointingHandCursor)
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mouseClickEvent(self, ev):
         """A double click puts this axis back to the whole of the data.
@@ -87,7 +87,7 @@ class YAxisItem(pg.AxisItem):
         if (
             self._on_reset is not None
             and ev.double()
-            and ev.button() == Qt.LeftButton
+            and ev.button() == Qt.MouseButton.LeftButton
             and self.boundingRect().contains(ev.pos())
         ):
             self._on_reset()

@@ -51,7 +51,8 @@ Therefore:
   ``FG_MUTED`` (7.69:1 on ``BG_PLOT``).  :func:`style_axis` uses ``FG_MUTED``
   for text, never ``FG_FAINT``.
 * ``FG_FAINT`` is reserved for **non-text decoration** (tick marks, dashed
-  crosshairs, inactive rules) and for the ``QPalette.Disabled`` colour group.
+  crosshairs, inactive rules) and for the ``QPalette.ColorGroup.Disabled``
+  colour group.
 
 Verified ratios on ``BG_PLOT``: FG 15.93, FG_MUTED 7.69, PRIMARY 5.87,
 ACCENT 9.25, SUCCESS 8.03, DANGER 6.21, TRACE_RAW 11.42, TRACE_FILTERED 12.06,
@@ -708,9 +709,9 @@ def _font(stack: Sequence[str], size: int | None, bold: bool, mono: bool) -> QFo
             font.setFamilies(list(stack))
         font.setPointSize(pt)
         font.setBold(bold)
-        font.setStyleStrategy(QFont.PreferAntialias)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         if mono:
-            font.setStyleHint(QFont.Monospace)
+            font.setStyleHint(QFont.StyleHint.Monospace)
             font.setFixedPitch(True)
         _CACHE[key] = font
     return QFont(font)  # a copy: callers may mutate what they are given
@@ -813,8 +814,8 @@ def brush(c: Any, alpha: float | int | None = None) -> QBrush:
 
 
 def no_pen() -> QPen:
-    """Return a ``Qt.NoPen`` pen, for axis lines and unstroked shapes."""
-    return QPen(Qt.NoPen)
+    """Return a ``Qt.PenStyle.NoPen`` pen, for axis lines and unstroked shapes."""
+    return QPen(Qt.PenStyle.NoPen)
 
 
 # ---------------------------------------------------------------------------
@@ -919,7 +920,7 @@ def grid_pen() -> QPen:
 
 def crosshair_pen() -> QPen:
     """Pen for the dashed hover crosshair.  Decoration, hence ``fg.faint``."""
-    return pen("fg.faint", width=LW_HAIRLINE, style=Qt.DashLine)
+    return pen("fg.faint", width=LW_HAIRLINE, style=Qt.PenStyle.DashLine)
 
 
 def cursor_pen() -> QPen:
@@ -1380,16 +1381,16 @@ def annotation_pen(
     -----
     ``observed=False`` wins over *unvalidated* when both are set: the ``[2, 2]``
     dash is the more specific statement, and both leave ``style()`` off
-    ``Qt.SolidLine``, which is what the trust rule actually asserts.
+    ``Qt.PenStyle.SolidLine``, which is what the trust rule actually asserts.
     """
     p = pen(annotation_color(role), width=width, alpha=alpha)
     if not observed:
         # a short, even dash: at 1 px width it survives a 6 px tick, where
-        # Qt.DashLine (4-2 in pen-width units) would draw a single segment
-        # and look solid.
+        # Qt.PenStyle.DashLine (4-2 in pen-width units) would draw a single
+        # segment and look solid.
         p.setDashPattern([2.0, 2.0])
     elif unvalidated:
-        p.setStyle(Qt.DashLine)
+        p.setStyle(Qt.PenStyle.DashLine)
     return p
 
 
@@ -1398,14 +1399,14 @@ def annotation_brush(
 ) -> QBrush:
     """Return the fill brush for an annotation span of *role*.
 
-    *unvalidated* switches the fill to ``Qt.BDiagPattern`` -- a 45 degree
-    hatch.  A hatch survives glare and greyscale where a reduced opacity does
-    not, and it leaves the bar's position, height and width untouched, so the
-    layout does not move when trust changes.
+    *unvalidated* switches the fill to ``Qt.BrushStyle.BDiagPattern`` -- a 45
+    degree hatch.  A hatch survives glare and greyscale where a reduced
+    opacity does not, and it leaves the bar's position, height and width
+    untouched, so the layout does not move when trust changes.
     """
     b = brush(annotation_color(role), alpha=alpha)
     if unvalidated:
-        b.setStyle(Qt.BDiagPattern)
+        b.setStyle(Qt.BrushStyle.BDiagPattern)
     return b
 
 
@@ -1989,42 +1990,42 @@ def palette() -> QPalette:
 
     p = QPalette()
     roles = {
-        QPalette.Window: "bg.base",
-        QPalette.WindowText: "fg",
-        QPalette.Base: "bg.surface",
-        QPalette.AlternateBase: "bg.raised",
-        QPalette.Text: "fg",
-        QPalette.Button: "bg.surface",
-        QPalette.ButtonText: "fg",
-        QPalette.BrightText: "danger",
-        QPalette.ToolTipBase: "bg.raised",
-        QPalette.ToolTipText: "fg",
-        QPalette.PlaceholderText: "fg.faint",
-        QPalette.Highlight: "primary",
-        QPalette.HighlightedText: "bg.base",
-        QPalette.Link: "primary",
-        QPalette.LinkVisited: "primary.dim",
-        QPalette.Light: "border.hi",
-        QPalette.Midlight: "border",
-        QPalette.Mid: "border",
-        QPalette.Dark: "border.hi",
-        QPalette.Shadow: "bg.base",
+        QPalette.ColorRole.Window: "bg.base",
+        QPalette.ColorRole.WindowText: "fg",
+        QPalette.ColorRole.Base: "bg.surface",
+        QPalette.ColorRole.AlternateBase: "bg.raised",
+        QPalette.ColorRole.Text: "fg",
+        QPalette.ColorRole.Button: "bg.surface",
+        QPalette.ColorRole.ButtonText: "fg",
+        QPalette.ColorRole.BrightText: "danger",
+        QPalette.ColorRole.ToolTipBase: "bg.raised",
+        QPalette.ColorRole.ToolTipText: "fg",
+        QPalette.ColorRole.PlaceholderText: "fg.faint",
+        QPalette.ColorRole.Highlight: "primary",
+        QPalette.ColorRole.HighlightedText: "bg.base",
+        QPalette.ColorRole.Link: "primary",
+        QPalette.ColorRole.LinkVisited: "primary.dim",
+        QPalette.ColorRole.Light: "border.hi",
+        QPalette.ColorRole.Midlight: "border",
+        QPalette.ColorRole.Mid: "border",
+        QPalette.ColorRole.Dark: "border.hi",
+        QPalette.ColorRole.Shadow: "bg.base",
     }
     for role, name in roles.items():
         p.setColor(role, qcolor(name))
 
     disabled = {
-        QPalette.WindowText: "fg.faint",
-        QPalette.Text: "fg.faint",
-        QPalette.ButtonText: "fg.faint",
-        QPalette.Highlight: "primary.dim",
-        QPalette.HighlightedText: "fg.muted",
-        QPalette.Base: "bg.base",
-        QPalette.Button: "bg.base",
-        QPalette.Window: "bg.base",
+        QPalette.ColorRole.WindowText: "fg.faint",
+        QPalette.ColorRole.Text: "fg.faint",
+        QPalette.ColorRole.ButtonText: "fg.faint",
+        QPalette.ColorRole.Highlight: "primary.dim",
+        QPalette.ColorRole.HighlightedText: "fg.muted",
+        QPalette.ColorRole.Base: "bg.base",
+        QPalette.ColorRole.Button: "bg.base",
+        QPalette.ColorRole.Window: "bg.base",
     }
     for role, name in disabled.items():
-        p.setColor(QPalette.Disabled, role, qcolor(name))
+        p.setColor(QPalette.ColorGroup.Disabled, role, qcolor(name))
 
     _CACHE[key] = p
     return QPalette(p)
@@ -2234,9 +2235,10 @@ QTabWidget::pane {
 QTabBar {
     background-color: $bg_base;
 }
-/* Tabs sit on the LEFT (QTabWidget.West).  The selected tab is marked by a
-   rule down its leading edge, the same device the channel rail uses, and the
-   label is painted horizontally by VerticalTabBar -- Qt would rotate it. */
+/* Tabs sit on the LEFT (QTabWidget.TabPosition.West).  The selected tab is
+   marked by a rule down its leading edge, the same device the channel rail
+   uses, and the label is painted horizontally by VerticalTabBar -- Qt would
+   rotate it. */
 QTabBar::tab {
     background-color: $bg_base;
     color: $fg_muted;

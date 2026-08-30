@@ -67,7 +67,7 @@ def pump(seconds):
     app = QApplication.instance()
     while time.monotonic() < end:
         app.processEvents()
-        app.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         time.sleep(0.005)
 
 
@@ -116,8 +116,8 @@ def build_window(app, directory, channels, signal=None):
     soundfile.write(recording, signal, rate)
 
     audian_app.settings_path = lambda: directory / "settings.json"
-    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
-        for scope in (QSettings.UserScope, QSettings.SystemScope):
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
             QSettings.setPath(fmt, scope, os.fspath(directory))
 
     theme.apply(app)
@@ -152,8 +152,8 @@ def open_stack(app, directory, channels, signal=None):
     window.deleteLater()
     pump(0.3)
     audian_app.settings_path = original
-    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
-        for scope in (QSettings.UserScope, QSettings.SystemScope):
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
             QSettings.setPath(fmt, scope, os.fspath(home))
 
 
@@ -245,7 +245,7 @@ def send(app, browser, channel, kind, y, button, buttons):
             QPointF(viewport.mapToGlobal(pos)),
             button,
             buttons,
-            Qt.NoModifier,
+            Qt.KeyboardModifier.NoModifier,
         ),
     )
     settle()
@@ -376,10 +376,10 @@ def test_the_band_is_the_one_in_scene_item_that_takes_the_mouse(browser):
     """Every other item sets NoButton so a click reaches the plot beneath."""
     c = spec_channel(browser)
     band = splitter(browser, c)
-    assert band.acceptedMouseButtons() & Qt.LeftButton
+    assert band.acceptedMouseButtons() & Qt.MouseButton.LeftButton
     assert band.acceptHoverEvents()
-    assert band.cursor().shape() == Qt.SplitVCursor
-    assert browser.borders[c].acceptedMouseButtons() == Qt.NoButton
+    assert band.cursor().shape() == Qt.CursorShape.SplitVCursor
+    assert browser.borders[c].acceptedMouseButtons() == Qt.MouseButton.NoButton
     # and it has to be above the two plots it overlaps, or the half of it
     # that lies over the trace would never see a press
     assert band.zValue() > panel(browser, "trace").axs[c].zValue()
@@ -417,22 +417,22 @@ def test_a_real_press_drag_release_through_the_scene_moves_the_boundary(
         app,
         roomy_browser,
         c,
-        QEvent.MouseButtonPress,
+        QEvent.Type.MouseButtonPress,
         before,
-        Qt.LeftButton,
-        Qt.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
     )
     send(
-        app, roomy_browser, c, QEvent.MouseMove, before + 12, Qt.NoButton, Qt.LeftButton
+        app, roomy_browser, c, QEvent.Type.MouseMove, before + 12, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton
     )
     send(
         app,
         roomy_browser,
         c,
-        QEvent.MouseButtonRelease,
+        QEvent.Type.MouseButtonRelease,
         before + 12,
-        Qt.LeftButton,
-        Qt.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
     )
     assert boundary(roomy_browser, c) == pytest.approx(before + 12, abs=0.01)
 
@@ -456,13 +456,13 @@ def test_a_lane_that_changes_under_the_drag_does_not_rescale_it(
         app,
         roomy_browser,
         c,
-        QEvent.MouseButtonPress,
+        QEvent.Type.MouseButtonPress,
         start,
-        Qt.LeftButton,
-        Qt.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
     )
     send(
-        app, roomy_browser, c, QEvent.MouseMove, start + 20, Qt.NoButton, Qt.LeftButton
+        app, roomy_browser, c, QEvent.Type.MouseMove, start + 20, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton
     )
     assert boundary(roomy_browser, c) == pytest.approx(start + 20, abs=0.01)
 
@@ -478,17 +478,17 @@ def test_a_lane_that_changes_under_the_drag_does_not_rescale_it(
     # change left behind is on a fraction and the split rounds off it.  The
     # bug this pins moved 25 px, not 20.
     send(
-        app, roomy_browser, c, QEvent.MouseMove, start + 40, Qt.NoButton, Qt.LeftButton
+        app, roomy_browser, c, QEvent.Type.MouseMove, start + 40, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton
     )
     assert boundary(roomy_browser, c) == pytest.approx(moved + 20, abs=1.0)
     send(
         app,
         roomy_browser,
         c,
-        QEvent.MouseButtonRelease,
+        QEvent.Type.MouseButtonRelease,
         start + 40,
-        Qt.LeftButton,
-        Qt.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
     )
     roomy_browser.toggle_fulldata()
     settle()
@@ -505,10 +505,10 @@ def test_double_clicking_the_band_resets_the_split(app, roomy_browser, roomy_res
         app,
         roomy_browser,
         c,
-        QEvent.MouseButtonDblClick,
+        QEvent.Type.MouseButtonDblClick,
         boundary(roomy_browser, c),
-        Qt.LeftButton,
-        Qt.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
     )
     assert boundary(roomy_browser, c) == pytest.approx(before, abs=0.01)
 
@@ -1537,7 +1537,7 @@ def send_at(browser, channel, kind, x, y, button, buttons):
             QPointF(viewport.mapToGlobal(pos)),
             button,
             buttons,
-            Qt.NoModifier,
+            Qt.KeyboardModifier.NoModifier,
         ),
     )
     settle()
@@ -1547,12 +1547,12 @@ def click_axis(browser, channel, ax, double, side="left"):
     """Click, or double click, the axis of one lane."""
     at = axis_centre(ax, side)
     x, y = at.x(), at.y()
-    send_at(browser, channel, QEvent.MouseMove, x, y, Qt.NoButton, Qt.NoButton)
+    send_at(browser, channel, QEvent.Type.MouseMove, x, y, Qt.MouseButton.NoButton, Qt.MouseButton.NoButton)
     send_at(
-        browser, channel, QEvent.MouseButtonPress, x, y, Qt.LeftButton, Qt.LeftButton
+        browser, channel, QEvent.Type.MouseButtonPress, x, y, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton
     )
     send_at(
-        browser, channel, QEvent.MouseButtonRelease, x, y, Qt.LeftButton, Qt.NoButton
+        browser, channel, QEvent.Type.MouseButtonRelease, x, y, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
     )
     if double:
         # pyqtgraph turns this into an ordinary MouseClickEvent with
@@ -1561,20 +1561,20 @@ def click_axis(browser, channel, ax, double, side="left"):
         send_at(
             browser,
             channel,
-            QEvent.MouseButtonDblClick,
+            QEvent.Type.MouseButtonDblClick,
             x,
             y,
-            Qt.LeftButton,
-            Qt.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
         )
         send_at(
             browser,
             channel,
-            QEvent.MouseButtonRelease,
+            QEvent.Type.MouseButtonRelease,
             x,
             y,
-            Qt.LeftButton,
-            Qt.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
         )
     pump(0.2)
 
@@ -1635,7 +1635,7 @@ def test_only_the_left_button_resets_an_axis(browser, button):
     """Nothing held the button guard: taking it out left every test green."""
     ax = panel(browser, "trace").axs[1]
     view = ax.getViewBox()
-    which = Qt.RightButton if button == "right" else Qt.MiddleButton
+    which = Qt.MouseButton.RightButton if button == "right" else Qt.MouseButton.MiddleButton
     _t, (y0, y1) = view.viewRange()
     try:
         view.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
@@ -1643,11 +1643,11 @@ def test_only_the_left_button_resets_an_axis(browser, button):
         _t, (z0, z1) = view.viewRange()
         at = axis_centre(ax)
         x, y = at.x(), at.y()
-        send_at(browser, 1, QEvent.MouseMove, x, y, Qt.NoButton, Qt.NoButton)
-        send_at(browser, 1, QEvent.MouseButtonPress, x, y, which, which)
-        send_at(browser, 1, QEvent.MouseButtonRelease, x, y, which, Qt.NoButton)
-        send_at(browser, 1, QEvent.MouseButtonDblClick, x, y, which, which)
-        send_at(browser, 1, QEvent.MouseButtonRelease, x, y, which, Qt.NoButton)
+        send_at(browser, 1, QEvent.Type.MouseMove, x, y, Qt.MouseButton.NoButton, Qt.MouseButton.NoButton)
+        send_at(browser, 1, QEvent.Type.MouseButtonPress, x, y, which, which)
+        send_at(browser, 1, QEvent.Type.MouseButtonRelease, x, y, which, Qt.MouseButton.NoButton)
+        send_at(browser, 1, QEvent.Type.MouseButtonDblClick, x, y, which, which)
+        send_at(browser, 1, QEvent.Type.MouseButtonRelease, x, y, which, Qt.MouseButton.NoButton)
         pump(0.2)
         _t, (w0, w1) = view.viewRange()
         assert (w0, w1) == pytest.approx((z0, z1))
@@ -1677,42 +1677,42 @@ def test_a_double_click_beside_the_axis_does_not_reset(browser):
             settle()
             _t, (z0, z1) = view.viewRange()
             x = edge + dx
-            send_at(browser, 1, QEvent.MouseMove, x, at.y(), Qt.NoButton, Qt.NoButton)
+            send_at(browser, 1, QEvent.Type.MouseMove, x, at.y(), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton)
             send_at(
                 browser,
                 1,
-                QEvent.MouseButtonPress,
+                QEvent.Type.MouseButtonPress,
                 x,
                 at.y(),
-                Qt.LeftButton,
-                Qt.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
             )
             send_at(
                 browser,
                 1,
-                QEvent.MouseButtonRelease,
+                QEvent.Type.MouseButtonRelease,
                 x,
                 at.y(),
-                Qt.LeftButton,
-                Qt.NoButton,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.NoButton,
             )
             send_at(
                 browser,
                 1,
-                QEvent.MouseButtonDblClick,
+                QEvent.Type.MouseButtonDblClick,
                 x,
                 at.y(),
-                Qt.LeftButton,
-                Qt.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
             )
             send_at(
                 browser,
                 1,
-                QEvent.MouseButtonRelease,
+                QEvent.Type.MouseButtonRelease,
                 x,
                 at.y(),
-                Qt.LeftButton,
-                Qt.NoButton,
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.NoButton,
             )
             pump(0.2)
             _t, (w0, w1) = view.viewRange()

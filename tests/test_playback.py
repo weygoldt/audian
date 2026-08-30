@@ -170,9 +170,9 @@ class _Click:
 
     `modifiers` defaults to `NoModifier` and not to `0`.  A real event returns
     a `KeyboardModifier`, and under Qt5 a stub could return the int because
-    the enums were int-like; under Qt6 they are not, and `0 & Qt.ShiftModifier`
-    is a `TypeError`.  A stub that lies about its types only tests the code it
-    lies to.
+    the enums were int-like; under Qt6 they are not, and
+    `0 & Qt.KeyboardModifier.ShiftModifier` is a `TypeError`.  A stub that
+    lies about its types only tests the code it lies to.
     """
 
     def __init__(self, button, modifiers=None):
@@ -211,7 +211,7 @@ def test_clicking_a_lane_focuses_that_channel():
     from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=0)
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton),), 5)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.LeftButton),), 5)
     assert calls == [(5, False)]
 
 
@@ -219,7 +219,7 @@ def test_shift_clicking_a_lane_extends_the_selection():
     from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=2)
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton, Qt.ShiftModifier),), 6)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier),), 6)
     assert calls == [(6, True)]
 
 
@@ -229,7 +229,7 @@ def test_clicking_the_current_lane_does_not_relayout():
     from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=5)
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton),), 5)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.LeftButton),), 5)
     assert calls == []
 
 
@@ -237,7 +237,7 @@ def test_right_clicking_a_lane_does_not_change_the_channel():
     from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=0)
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.RightButton),), 5)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.RightButton),), 5)
     assert calls == []
 
 
@@ -254,11 +254,11 @@ def test_ctrl_clicking_a_lane_in_label_mode_does_not_relayout_the_stack():
     stub, calls = _clickable(current=0, mode=DataBrowser.MODE_LABEL)
     stub.mouse_moved = lambda evt, channel: None
     stub.select_label_at = lambda channel, pos: True
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton, Qt.ControlModifier),), 5)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier),), 5)
     assert calls == []
 
     stub, calls = _clickable(current=0, mode=DataBrowser.MODE_ZOOM)
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.LeftButton, Qt.ControlModifier),), 5)
+    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier),), 5)
     assert calls == [(5, False)]
 
 

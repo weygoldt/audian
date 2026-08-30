@@ -189,7 +189,7 @@ class EnvelopeItem(pg.GraphicsObject):
         try:
             # the envelope is a dense stack of near-vertical edges;
             # antialiasing only smears them into a haze.
-            p.setRenderHint(QPainter.Antialiasing, False)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             p.setPen(self._pen)
             p.setBrush(self._brush)
             p.drawPath(self._path)
@@ -293,13 +293,13 @@ class ActivityItem(pg.GraphicsObject):
             return
         p.save()
         try:
-            p.setRenderHint(QPainter.Antialiasing, False)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             p.setPen(self._band_pen)
             p.setBrush(self._band_brush)
             p.drawPath(self._band)
             if not self._spikes.isEmpty():
                 p.setPen(self._spike_pen)
-                p.setBrush(Qt.NoBrush)
+                p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawPath(self._spikes)
         finally:
             p.restore()
@@ -347,7 +347,7 @@ class NavigatorRegion(pg.LinearRegionItem):
         top = rect.center().y() - 0.5 * handle_height
         p.save()
         try:
-            p.setRenderHint(QPainter.Antialiasing, False)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             p.setPen(theme.no_pen())
             p.setBrush(theme.brush("primary"))
             for x in (rect.left(), rect.right()):
@@ -979,12 +979,12 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
         floor_height = int(theme.NAVIGATOR_HEIGHT + axis_height + top + bottom)
         self.setMinimumHeight(min(floor_height, max(theme.NAVIGATOR_HEIGHT, total)))
         self.setMaximumHeight(max(floor_height, total))
-        # QSizePolicy.Maximum reads sizeHint() as the upper bound, and
+        # QSizePolicy.Policy.Maximum reads sizeHint() as the upper bound, and
         # GraphicsLayoutWidget's own hint knows nothing about our rows.  Left
         # at the default the splitter caps the navigator at 56 px and the
         # bottom time axis is clipped away entirely.
         self._natural_height = max(floor_height, total)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.updateGeometry()
 
     def sizeHint(self):
