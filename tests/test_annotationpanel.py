@@ -360,7 +360,7 @@ def test_a_modifier_click_switches_just_that_layer(panel):
 def test_ctrl_and_shift_both_extend(app, panel, monkeypatch):
     """A reader reaching for either modifier is asking for the same thing."""
     panel.solo_annotation_layer("pulses.volley")
-    for modifier in (Qt.ControlModifier, Qt.ShiftModifier):
+    for modifier in (Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.ShiftModifier):
         monkeypatch.setattr(QApplication, "keyboardModifiers", lambda m=modifier: m)
         panel.annotation_chip_clicked("trials.silence")
         assert "pulses.volley" in switched_on(panel)
@@ -527,7 +527,7 @@ def test_the_span_counts_never_ask_the_parameter_bar_for_more_width(panel):
     into this label, so the property is asserted here and the elision with it.
     """
     label = panel.annotation_hoverw
-    assert label.sizePolicy().horizontalPolicy() == QSizePolicy.Ignored
+    assert label.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
     label.setFixedWidth(60)
     before = panel.parambar.sizeHint().width()
     panel.show_annotation_under(3.0)

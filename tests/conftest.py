@@ -88,6 +88,6 @@ def _qt_teardown():
     # passes: deleting one object posts the DeferredDelete for its children.
     for _ in range(10):
         app.processEvents()
-        app.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         if not QApplication.topLevelWidgets():
             break

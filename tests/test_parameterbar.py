@@ -210,7 +210,7 @@ def test_a_tab_change_never_takes_height_from_the_channel_stack(fixture, request
 def test_the_bar_is_fixed_vertically(browser):
     """The one line the test above exists to protect, stated directly."""
     for widget in (browser.parambar, browser.param_tabs):
-        assert widget.sizePolicy().verticalPolicy() == QSizePolicy.Fixed
+        assert widget.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
 
 
 # ------------------------------------------------------------------ content
@@ -292,7 +292,7 @@ def test_the_tabs_are_not_in_the_keyboard_focus_chain(browser):
     so the strip takes no focus, the way the channel rail's toggles do not.
     """
     for button in browser.param_tabs.buttons.values():
-        assert button.focusPolicy() == Qt.NoFocus
+        assert button.focusPolicy() == Qt.FocusPolicy.NoFocus
 
 
 def test_a_tab_marks_itself_when_its_page_is_saying_something_bad(browser):
@@ -529,7 +529,7 @@ def test_the_bar_comes_back_when_the_window_does(browser):
         # test that captured a compact bar would assert nothing at all
         assert window.toolbar.width() >= max(window.toolbar.stage_widths().values())
         assert all(
-            b.toolButtonStyle() == Qt.ToolButtonTextBesideIcon
+            b.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonTextBesideIcon
             for b in window.mode_buttons
         )
         assert all(b.isVisible() for b in window.mode_buttons)

@@ -199,7 +199,7 @@ def test_a_rule_sits_below_every_annotation_and_never_takes_the_mouse(split):
     lane is a click on the lane."""
     for line in split.join_markers:
         assert line.zValue() < FILL_Z
-        assert line.acceptedMouseButtons() == Qt.NoButton
+        assert line.acceptedMouseButtons() == Qt.MouseButton.NoButton
         assert not line.acceptHoverEvents()
 
 

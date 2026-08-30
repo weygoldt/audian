@@ -103,7 +103,7 @@ def make_panel(app):
         host.close()
         host.deleteLater()
     app.processEvents()
-    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def switch_on(app, panel):
@@ -400,7 +400,7 @@ def test_the_panel_items_never_take_the_mouse(app, panel):
     )
     assert items
     for item in items:
-        assert item.acceptedMouseButtons() == Qt.NoButton
+        assert item.acceptedMouseButtons() == Qt.MouseButton.NoButton
         assert item.acceptHoverEvents() is False
 
 
@@ -478,7 +478,7 @@ def pump(app, seconds):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         app.processEvents()
-        app.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         time.sleep(0.005)
 
 
