@@ -341,10 +341,12 @@ class ParameterGroup(QWidget):
         self.rows = 0
         #: Grid lines actually consumed, which is two per row when `narrow`.
         #: This, and never `rows`, is where anything placed under the last
-        #: row goes -- `equalize`'s trailing stretch above all, which put
-        #: between the third and fourth row of a narrow five-row group would
-        #: blow the group apart.
+        #: row goes -- the trailing stretch above all, which put between the
+        #: third and fourth row of a narrow five-row group would blow the
+        #: group apart.
         self.gridrows = 0
+        #: which grid line currently carries the trailing stretch, or -1
+        self._packed = -1
         #: ``(row name, shortcut)`` for every row that prints one.  The bar
         #: shows one group at a time now, so a reader looking for a key can
         #: no longer read every group's off the screen at once; the tab's
@@ -381,6 +383,26 @@ class ParameterGroup(QWidget):
     def wants_width(widget: QWidget) -> bool:
         return widget.sizePolicy().horizontalPolicy() in ParameterGroup.WIDE_POLICIES
 
+    def pack_top(self) -> None:
+        """Keep the slack below the last row rather than between the rows.
+
+        A grid given more height than its rows need spreads the difference
+        between them.  In the bar that never showed, because `equalize`
+        froze every body to one height and set this stretch itself; in the
+        panel the pages are stacked and each gets the tallest page's
+        height, so without this the Spectrogram page's two `Opens at` spin
+        boxes came out 70 px tall -- rows a long way apart rather than a
+        group.
+
+        Maintained as rows are added rather than at the end, so a group is
+        correct at every point in its construction and a caller cannot
+        forget to close it.
+        """
+        if self._packed >= 0:
+            self.grid.setRowStretch(self._packed, 0)
+        self._packed = self.gridrows
+        self.grid.setRowStretch(self._packed, 1)
+
     def claim_stretch(self, column: int, widget: QWidget) -> None:
         """Give `column` the leftover width if its widget asked for it.
 
@@ -412,6 +434,7 @@ class ParameterGroup(QWidget):
                 self.grid.addWidget(w, self.gridrows, 1 + i)
                 self.claim_stretch(1 + i, w)
             self.gridrows += 1
+        self.pack_top()
         self.rows += 1
         return [caption, *widgets]
 
@@ -444,6 +467,15 @@ class ParameterGroup(QWidget):
         px each, where the slider's width *is* the frequency resolution.
         """
         span = max(ParameterGroup.NARROW_SPAN, len(widgets))
+        if self.gridrows:
+            # Air above every caption but the first.  The grid has one
+            # vertical spacing and stacking uses it twice per row -- once
+            # between a caption and its own field, once between one row and
+            # the next -- so at S2 both gaps are two pixels and the page
+            # reads as one list rather than as rows.  The caption carries
+            # the difference, which is the only place a QGridLayout lets it
+            # go.
+            caption.setContentsMargins(0, theme.S6, 0, 0)
         self.grid.addWidget(caption, self.gridrows, 0, 1, span)
         self.gridrows += 1
         if len(widgets) == 1:
@@ -477,6 +509,7 @@ class ParameterGroup(QWidget):
         self.grid.setColumnStretch(columns - 1, 1)
         self.grid.setColumnStretch(ParameterGroup.SPACER_COLUMN, 0)
         self.gridrows += 1
+        self.pack_top()
         self.rows += 1
         return widget
 
@@ -546,11 +579,9 @@ class ParameterGroup(QWidget):
             group.grid.activate()
         height = max(ParameterGroup.frame_height(g) for g in groups)
         for group in groups:
-            # absorb the added height below the last row, not between rows --
-            # and below the last GRID line, which a narrow group has two of
-            # per row: `setRowStretch(group.rows, 1)` on a narrow five-row
-            # group would put the slack between its third and fourth rows.
-            group.grid.setRowStretch(group.gridrows, 1)
+            # the added height lands below the last row rather than between
+            # the rows, which `pack_top` maintains as the rows are added
+            group.pack_top()
             group.body.setFixedHeight(height)
 
 

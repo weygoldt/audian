@@ -203,6 +203,37 @@ def test_a_wrapping_row_folds_nothing_and_overlaps_nothing(app):
                 assert left > prev_right, f"chips overlap at {width} px"
 
 
+def test_a_chip_that_grows_is_re_placed(app):
+    """A row that places by hand has to be told when a chip changes size.
+
+    The annotation source line is whatever the bundle called itself and is
+    set long after the row was built.  Placed at the `sizeHint` it had when
+    it was empty, it came out as the two characters it had room for -- and
+    only a later resize, which is not guaranteed to happen, put it right.
+    `QWidget.updateGeometry` posts a `LayoutRequest` to the parent, which is
+    the hook this row listens on.
+    """
+    row = WrapRow()
+    label = QLabel("")
+    row.add_widget(label)
+    row.resize(400, row.heightForWidth(400))
+    # shown, because Qt defers a hidden widget's layout requests and the
+    # defect being pinned is exactly one that only shows on a live row
+    row.show()
+    settle()
+    narrow = label.width()
+
+    label.setText("TEST  fit ch 00 -- a bundle with a long name")
+    settle()
+    assert label.width() > narrow
+    assert label.width() == label.sizeHint().width()
+
+    # and shrinking again is the same path
+    label.setText("x")
+    settle()
+    assert label.width() == label.sizeHint().width()
+
+
 def test_the_packer_keeps_a_bounded_strip_a_prefix(app):
     """One line-breaker, two policies.
 

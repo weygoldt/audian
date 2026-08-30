@@ -48,7 +48,7 @@ hints.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QEvent, QSize
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from . import theme
@@ -226,6 +226,25 @@ class WrapRow(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.relayout()
+
+    def event(self, event) -> bool:
+        """Re-place the chips when one of them changes size on its own.
+
+        A chip is placed at its `sizeHint`, and a chip whose *text* changes
+        afterwards has a different one -- the annotation source line is
+        whatever the bundle called itself and is set long after the row was
+        built.  A layout would hear about that by itself; a row that places
+        by hand has to ask.
+
+        `QWidget.updateGeometry` on a child posts a `LayoutRequest` to its
+        parent, which is this, so that is the hook.  Without it the source
+        line came out as the two characters it had room for when the row
+        was empty, and only a later resize -- which is not guaranteed to
+        happen -- put it right.
+        """
+        if event.type() == QEvent.Type.LayoutRequest:
+            self.relayout()
+        return super().event(event)
 
     def relayout(self) -> None:
         """Place every chip, and tell the layout above if the count moved."""
