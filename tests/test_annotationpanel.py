@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO / "src"))
 from PySide6.QtCore import QSize, Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
+    QLabel,
     QMainWindow,
     QMenu,
     QSizePolicy,
@@ -520,7 +521,7 @@ def test_predicted_pulses_are_counted_apart_from_the_observed_ones(app, tmp_path
 
 
 def test_the_span_counts_never_ask_the_parameter_bar_for_more_width(panel):
-    """The readout changes on every mouse move; the bar may not move with it.
+    """The readout changes on every mouse move; the group may not move with it.
 
     `QSizePolicy.Policy.Ignored` is why: the label takes the width that is
     left over and never asks for more, so a long line elides instead of
@@ -528,18 +529,64 @@ def test_the_span_counts_never_ask_the_parameter_bar_for_more_width(panel):
     bar readouts were rebuilt to stop.  The counts put the longest line in
     the application into this label, so the property is asserted here and the
     elision with it.
+
+    Asserted on the **group**, and the whole assertion is a repair.  It used
+    to read ``panel.parambar.sizeHint().width() == before``, and this
+    module's `parambar` is a bare `QWidget` with no layout: `sizeHint()` is
+    the invalid `QSize(-1, -1)`, so both sides were ``-1`` and the line had
+    never tested anything at all.  The group has a real hint -- measured
+    81 px -- and it is what the readout actually sits in.
+
+    Two things had to be got right for it to measure anything, and both
+    were got wrong first.
+
+    The long line goes in with `setText` and not through
+    `show_annotation_under`: that method *elides before it assigns*, so
+    driving it leaves the label holding two characters and the group cannot
+    move whatever its policy is.
+
+    And the grid is invalidated and activated before it is asked.  A
+    `QGridLayout` caches its minimum, so with the policy deliberately
+    broken to `Preferred` the group still answered 88 px after the text was
+    set, after `processEvents` and after `invalidate` -- and told the truth,
+    1034, only once it had been activated.  A test that measured before that
+    point stayed green against a policy that would have widened the panel by
+    a thousand pixels.
+
+    Verified in both directions: `Ignored` holds the group at 81 px with the
+    whole line in the label, `Preferred` takes it to 1034.
     """
     label = panel.annotation_hoverw
+    group = panel.annotation_group
     assert label.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
-    label.setFixedWidth(60)
-    before = panel.parambar.sizeHint().width()
-    panel.show_annotation_under(3.0)
+
     full = panel.annotation_under(3.0)
     assert "Volley" in full
+    before_min = group.minimumSizeHint().width()
+    before_hint = group.sizeHint().width()
+
+    # the longest line in the application, straight into the label, and the
+    # group does not move by a pixel
+    label.setText(full)
+    group.grid.invalidate()
+    group.grid.activate()
+    assert group.minimumSizeHint().width() == before_min
+    assert group.sizeHint().width() == before_hint
+
+    # ... where a label that asked for its own text would have wanted this
+    # much, which is what the row would cost if the policy were tidied away
+    greedy = QLabel(full)
+    greedy.setFont(label.font())
+    greedy.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    assert greedy.minimumSizeHint().width() > 10 * before_min
+
+    # and the line the reader really gets is elided to the width the row
+    # has, with the whole of it kept on the tool tip
+    label.setFixedWidth(60)
+    panel.show_annotation_under(3.0)
     assert label.text() != full
     assert theme.mono_metrics(theme.SIZE_SMALL_PT).horizontalAdvance(label.text()) <= 60
     assert label.toolTip() == full
-    assert panel.parambar.sizeHint().width() == before
 
 
 # --- nothing loaded ----------------------------------------------------------

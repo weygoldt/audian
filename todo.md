@@ -64,14 +64,26 @@
   is the actual claim -- a test that only said "does not raise" would go
   green on a walk that restyled nothing at all.
 
-- [ ] A dead assertion in `tests/test_annotationpanel.py`.  The last line of
-  `test_the_span_counts_never_ask_the_parameter_bar_for_more_width` is
-  `assert panel.parambar.sizeHint().width() == before`, and the stub's
-  `parambar` is a bare `QWidget` with no layout: both sides are `-1`, so it
-  has never tested anything.  Re-point it at something with a real hint --
-  `annotation_group.minimumSizeHint().width()` before and after -- because
-  in a panel the readout genuinely is the widest thing in that group and
-  the `Ignored` policy is what stops it dragging the panel open.
+- [x] The dead assertion in
+  `test_the_span_counts_never_ask_the_parameter_bar_for_more_width` measures
+  the annotation group now, and the entry this replaces named the repair but
+  not the two traps in it.  The old line was
+  `panel.parambar.sizeHint().width() == before`, and this module's `parambar`
+  is a bare `QWidget` with no layout, so both sides were the invalid `-1`.
+
+  Re-pointing it at the group was not enough, and each of the two ways it
+  stayed dead was found by breaking the policy on purpose and watching the
+  test pass anyway.  `show_annotation_under` *elides before it assigns*, so
+  driving it leaves the label holding two characters and the group cannot
+  move whatever its policy is -- the long line has to go in with `setText`.
+  And a `QGridLayout` caches its minimum: with the policy broken to
+  `Preferred` the group still answered 88 px after the text was set, after
+  `processEvents` and after `invalidate`, and told the truth, 1034, only once
+  it had been activated.
+
+  So it reads `setText`, `invalidate`, `activate`, then measure, and it is
+  verified in both directions: `Ignored` holds the group at 81 px with the
+  whole 132 character line in the label, `Preferred` takes it to 1034.
 
 - [x] Follow the system theme, for dark and light.  A third theme
   preference, `system`, now the default: it reads
