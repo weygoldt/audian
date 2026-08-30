@@ -432,6 +432,15 @@ class Data(object):
             d.set_need_update()
 
     def update_times(self, t0, t1):
+        """Move every buffer to cover `[t0, t1]`.
+
+        Everything this touches is shifted **in place**:
+        `BufferedArray._recycle_buffer` moves the surviving part of the
+        loader's own array down over itself, and `align_buffer` does the
+        same for each derived trace.  A compute worker reading those arrays
+        would see a torn buffer, so the caller must have joined the workers
+        first -- see `DataBrowser.set_times`.
+        """
         if self.data.need_update:
             self.data.update_time(t0 - self.tbefore, t1 + self.tafter)
         for trace in self.traces[1:]:

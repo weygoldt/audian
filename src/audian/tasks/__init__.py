@@ -16,4 +16,4 @@ jitter and memory for nothing.
 
 from .tokens import Cancelled, CancelToken, ComputeResult, TraceUpdate
 
-__all__ = ["Cancelled", "CancelToken", "ComputeResult", "TraceUpdate"]
+__all__ = ["CancelToken", "Cancelled", "ComputeResult", "TraceUpdate"]

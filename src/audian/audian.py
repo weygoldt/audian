@@ -38,6 +38,8 @@ from .eventoverlay import SURFACE_LABELS, SURFACE_ORDER
 from .fulltraceplot import OVERVIEW_ACTIVITY, secs_to_str
 from .plugins import Plugins
 from .panels import Panel
+from .tasks.compute import ComputeWorker
+from .tasks.manager import TaskManager
 
 
 log = logging.getLogger("audian")
@@ -1523,6 +1525,13 @@ class Audian(QMainWindow):
         self.events_path = events_path
 
         self.audio = PlayAudio()
+        # One task manager for the whole window, not one per tab: the
+        # pipeline is serial by design (the kernels do not parallelise, see
+        # tasks/compute.py), so five open recordings should share one worker
+        # thread rather than start ten.  Every browser adopts it in
+        # `DataBrowser.open`.
+        self.tasks = TaskManager(self)
+        self.tasks.add_worker("compute", ComputeWorker(self.tasks))
         # `closeEvent` may fire twice; `teardown` reads this to run once
         self._torn_down = False
 
@@ -4902,6 +4911,15 @@ class Audian(QMainWindow):
         if getattr(self, "_torn_down", False):
             return
         self._torn_down = True
+        # First, before any browser lets go of its recording: the compute
+        # worker is reading that recording's buffers, and a QThread nobody
+        # joins is a crash at exit.  `shutdown` cancels, quits and waits with
+        # a bounded timeout, and never calls terminate().
+        tasks = getattr(self, "tasks", None)
+        if tasks is not None:
+            stuck = tasks.shutdown()
+            if stuck:
+                log.warning("worker threads did not stop: %s", ", ".join(stuck))
         for w in list(getattr(self, "browsers", ())):
             w.flush_labels()
             if getattr(w, "annotation_save_pending", False):

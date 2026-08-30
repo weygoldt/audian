@@ -25,7 +25,7 @@ from thunderlab.powerspectrum import spectrogram
 
 from audian.bufferedfilter import BufferedFilter
 from audian.bufferedspectrogram import BufferedSpectrogram
-from audian.tasks.tokens import CancelToken, Cancelled
+from audian.tasks.tokens import Cancelled, CancelToken
 
 RATE = 20000.0
 CHANNELS = 3
@@ -106,7 +106,7 @@ def test_a_chunked_spectrogram_is_bit_identical_to_one_call(source):
             assert np.array_equal(dest, reference), (
                 f"nfft={nfft} chunk={chunk} columns differ"
             )
-            assert "frequencies" in extra and "spec_rect" in extra
+            assert "frequencies" in extra
 
 
 def test_a_cancelled_filter_stops_inside_the_buffer(source):

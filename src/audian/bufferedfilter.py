@@ -92,7 +92,7 @@ class BufferedFilter(BufferedData):
             dest[written:] = 0
         return None
 
-    def update(self):
+    def prepare_update(self) -> bool:
         if (
             self.highpass_cutoff < 0.001 * self.rate / 2
             and self.lowpass_cutoff >= self.rate / 2 - 1e-8
@@ -122,4 +122,4 @@ class BufferedFilter(BufferedData):
                 fs=self.rate,
                 output="sos",
             )
-        self.recompute_all()
+        return True

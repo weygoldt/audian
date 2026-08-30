@@ -153,14 +153,23 @@ class BufferedSpectrogram(BufferedData):
                     if progress is not None:
                         progress(written / ndest)
         dest[written:] = 0
-        # extent of the full buffer:
-        extra["spec_rect"] = [
+        return extra
+
+    def after_load(self) -> None:
+        """Extent of the buffer that is now in place.
+
+        Read from `self.buffer` rather than from the array `process()` just
+        filled, because on a partial reload those are not the same length --
+        `move_buffer` hands `process()` only the slice it recycled.  On the
+        threaded path this runs after the swap, so `self.buffer` is again
+        the right array to measure.
+        """
+        self.spec_rect = [
             self.offset / self.rate,
             0,
             len(self.buffer) / self.rate,
             self.source.rate / 2 + self.fresolution,
         ]
-        return extra
 
     def set_hop(self):
         hop = int(np.round((1 - self.overlap_frac) * self.nfft))
@@ -176,6 +185,10 @@ class BufferedSpectrogram(BufferedData):
             return False
 
     def update(self, nfft=None, overlap_frac=None):
+        if self.prepare_update(nfft, overlap_frac):
+            self.recompute_all()
+
+    def prepare_update(self, nfft=None, overlap_frac=None) -> bool:
         spec_update = False
         if nfft is not None:
             if nfft < 8:
@@ -198,7 +211,7 @@ class BufferedSpectrogram(BufferedData):
             self.tresolution = self.hop / self.source.rate
             self.fresolution = self.source.rate / self.nfft
             self.update_step(self.hop, more_shape=(self.nfft // 2 + 1,))
-            self.recompute_all()
+        return spec_update
 
     def visible_slice(self, t0: float, t1: float) -> tuple[int, int]:
         """Index range of `[t0, t1]` within the current buffer.

@@ -78,3 +78,5 @@ class ComputeResult:
     updates: tuple = ()
     cancelled: bool = False
     error: str | None = None
+    #: which browser asked; results are ignored by everyone else
+    owner: object = None

@@ -59,9 +59,8 @@ def imported_modules(tree: ast.AST) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level == 0 and node.module:
-                names.append(node.module)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.append(node.module)
     return names
 
 

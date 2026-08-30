@@ -45,6 +45,7 @@ from .panels import Panel, Panels
 from .panelsplitter import PanelSplitter
 from .plotranges import PlotRanges
 from .bufferedspectrogram import BufferedSpectrogram
+from .tasks.compute import ComputeJob, plan_chain
 from .fulltraceplot import (
     MODE_ALL,
     MODE_SINGLE,
@@ -1314,6 +1315,14 @@ class DataBrowser(QWidget):
         self.pending_envelope = None
         self.overview_timer = QTimer(self)
         self.overview_timer.timeout.connect(self.report_overview_progress)
+        #: the application's `TaskManager`, adopted in `open()`.  None means
+        #: no worker thread is available and every recompute runs inline --
+        #: which is what a browser built without a main window gets.
+        self.tasks = None
+        self._tasks_connected = False
+        #: trace whose recompute has been asked for and not yet applied, so
+        #: that a scroll cancelling it does not simply lose it
+        self._pending_recompute = None
 
         # y-range policy:
         self.y_mode = DataBrowser.y_shared
@@ -1568,6 +1577,116 @@ class DataBrowser(QWidget):
             item.setVisible(show)
         return changed
 
+    # --- recomputing traces off the GUI thread ---------------------------
+
+    def adopt_task_manager(self, tasks) -> None:
+        """Route this browser's recomputes through `tasks`, or inline."""
+        self.tasks = tasks
+        if tasks is None or self._tasks_connected:
+            return
+        worker = tasks.worker("compute")
+        if worker is not None:
+            worker.sigResultReady.connect(self.apply_compute_result)
+            self._tasks_connected = True
+
+    def request_recompute(self, trace, **params) -> bool:
+        """Apply `params` to `trace` and recompute it and everything derived.
+
+        Returns True when the work was handed to a worker thread.
+
+        The `cancel_and_wait()` first is not a formality.  `process()` reads
+        the trace's own parameters -- `sos`, `nfft`, `hop` -- while it runs,
+        so changing one under a job in flight would filter the second half
+        of a buffer with a different filter than the first.  Joining first
+        makes that impossible, and the join is bounded by one chunk: about
+        11 ms, against the 407 ms freeze it replaces.
+        """
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
+        if not trace.prepare_update(**params):
+            # nothing to recompute, but the caller still asked for a redraw
+            self.redraw_recomputed()
+            return False
+        return self.submit_recompute(trace)
+
+    def submit_recompute(self, trace) -> bool:
+        """Plan and dispatch a recompute of `trace`, with no parameter work.
+
+        Split from `request_recompute` so that a recompute a buffer move had
+        to abandon can be started again without re-applying the parameters
+        -- see `resume_recompute`.
+        """
+        steps = plan_chain(trace)
+        if self.tasks is None or not steps:
+            self._pending_recompute = None
+            trace.recompute_all()
+            self.redraw_recomputed()
+            return False
+        self._pending_recompute = trace
+        epoch, token = self.tasks.bump()
+        self.tasks.submit(ComputeJob(epoch, token, tuple(steps), self))
+        return True
+
+    def resume_recompute(self) -> None:
+        """Start again what a buffer move had to abandon.
+
+        Panning cancels whatever is in flight, because `update_times` shifts
+        the arrays a worker is reading.  Without this the cancelled work
+        would simply be lost: `align_buffer` recycles the overlapping part
+        of a moved buffer rather than recomputing it, so a filter change
+        followed quickly by a scroll would leave most of the trace filtered
+        with the *previous* cutoffs, and leave it that way.
+        """
+        trace = self._pending_recompute
+        if trace is not None and self.tasks is not None:
+            self.submit_recompute(trace)
+
+    def apply_compute_result(self, result) -> None:
+        """Swap in what the worker produced, or drop it. GUI thread only.
+
+        Three things get dropped: a result for another tab, a result whose
+        epoch has been superseded by a later request, and one that was
+        cancelled.  Dropping is the whole of the stale-result policy -- the
+        arrays go with the result object.
+        """
+        if result.owner is not self:
+            return
+        if result.error is not None:
+            log.warning("recompute failed:\n%s", result.error)
+            return
+        if result.cancelled or not self.tasks.is_current(result.epoch):
+            return
+        for update in result.updates:
+            update.trace.apply_update(update)
+        self._pending_recompute = None
+        self.redraw_recomputed()
+
+    def redraw_recomputed(self) -> None:
+        """Put the recomputed buffers on screen.
+
+        Called from wherever the recompute actually finished, which on the
+        threaded path is a later turn of the event loop than the gesture
+        that asked for it.  `apply_filter` used to draw *before* the
+        recompute it had just scheduled on a zero-delay timer, so a filter
+        change did not reach the traces until the next pan -- checked on the
+        two channel file: the drawn arrays were byte-identical before and
+        after a cutoff change.
+
+        `setting` is raised for the same reason the callers that used to do
+        this inline raised it: `setData` informs the view of new bounds, and
+        an auto-ranging viewbox answers with `sigRangeChanged`, which would
+        bounce straight back into `set_times`.  Saved and restored rather
+        than set and cleared, because the inline path is already inside
+        `updating()`.
+        """
+        was_setting = self.setting
+        self.setting = True
+        try:
+            self.panels.update_plots()
+            self.plot_ranges.set_powers()
+        finally:
+            self.setting = was_setting
+
     def toggle_trace(self, checked, name):
         self.set_trace_visible(name, checked)
         self.adjust_layout(self.width(), self.height())
@@ -1586,6 +1705,7 @@ class DataBrowser(QWidget):
         # the progress slot all live on it, and a browser is not always the
         # child of the window it belongs to while tabs are being moved.
         self.gui = gui
+        self.adopt_task_manager(getattr(gui, "tasks", None))
         # load data:
         self.data.open(unwrap, unwrap_clip)
         if self.data.data is None:
@@ -3248,6 +3368,13 @@ class DataBrowser(QWidget):
                 timer.stop()
             except RuntimeError:
                 pass
+        # A tab can close without the window closing, so this is the other
+        # place a worker can be left reading a recording that is about to be
+        # released.  `Audian.teardown` shuts the manager down for good; this
+        # only drains it.
+        self._pending_recompute = None
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
         if self.datafig is not None:
             self.datafig.shutdown()
         if self.data is not None:
@@ -7088,6 +7215,10 @@ class DataBrowser(QWidget):
     def set_times(self, toffset=None, twindow=None):
         if self.setting:
             return
+        # `update_times` shifts the loader's buffer in place, so no worker
+        # may be reading it. Bounded by one chunk, ~11 ms at 16 channels.
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
         with self.updating():
             trange = self.plot_ranges[Panel.times[0]]
             trange.set_ranges(toffset, None, twindow, None, True)
@@ -7095,6 +7226,7 @@ class DataBrowser(QWidget):
             self.sigFilenameChanged.emit(self, fn)
             self.panels.update_plots()
             self.plot_ranges.set_powers()
+        self.resume_recompute()
         self.update_levels()
         if not self.y_locked:
             self.auto_fit_y()
@@ -7173,9 +7305,7 @@ class DataBrowser(QWidget):
             return
         spectrogram = self.data[self.spectrogram]
         with self.updating():
-            spectrogram.update(nfft, overlap_frac)
-            self.panels.update_plots()
-            self.plot_ranges.set_powers()
+            self.request_recompute(spectrogram, nfft=nfft, overlap_frac=overlap_frac)
             if self.nfftw is not None:
                 self.set_nfft_widget(spectrogram.nfft)
                 T = spectrogram.nfft / self.data.rate
@@ -7291,12 +7421,7 @@ class DataBrowser(QWidget):
             for ax in self.panels["spectrogram"].axs:
                 ax.set_filter_handles(filtered.highpass_cutoff, filtered.lowpass_cutoff)
             self.set_filter_widgets(filtered.highpass_cutoff, filtered.lowpass_cutoff)
-            if hasattr(filtered, "request_update"):
-                filtered.request_update(0)
-            else:
-                filtered.update()
-            self.panels.update_plots()
-            self.plot_ranges.set_powers()
+            self.request_recompute(filtered)
         # the navigator resolves raw-vs-filtered from the live cutoffs, so it
         # has to be told the moment they change or the strip stays cyan for a
         # whole interaction while the stack above has already gone amber:
@@ -7351,12 +7476,8 @@ class DataBrowser(QWidget):
         with self.updating():
             envelope.envelope_cutoff = self.pending_envelope
             self.pending_envelope = None
-            if hasattr(envelope, "request_update"):
-                envelope.request_update(0)
-            else:
-                envelope.update()
             self.data.set_need_update()
-            self.panels.update_plots()
+            self.request_recompute(envelope)
             if self.envfw is not None:
                 blocked = self.envfw.blockSignals(True)
                 self.envfw.setValue(envelope.envelope_cutoff)
@@ -7655,11 +7776,14 @@ class DataBrowser(QWidget):
             self.datafig.setVisible(self.show_fulldata)
         self.adjust_layout(self.width(), self.height())
         self.data.set_need_update()
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
         trange = self.plot_ranges[Panel.times[0]]
         fn = self.data.update_times(trange.r0[0], trange.r1[0])
         self.sigFilenameChanged.emit(self, fn)
         self.panels.update_plots()
         self.plot_ranges.set_powers()
+        self.resume_recompute()
 
     def toggle_traces(self):
         self.show_traces = not self.show_traces

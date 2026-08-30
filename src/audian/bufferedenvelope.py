@@ -79,7 +79,7 @@ class BufferedEnvelope(BufferedData):
             progress(1.0)
         return None
 
-    def update(self):
+    def prepare_update(self) -> bool:
         try:
             if self.highpass_cutoff > 0:
                 self.sos = butter(
@@ -99,4 +99,4 @@ class BufferedEnvelope(BufferedData):
                 )
         except ValueError:
             self.sos = None
-        self.recompute_all()
+        return True
