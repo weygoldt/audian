@@ -9,7 +9,34 @@
 
 - [ ] StartupPage is the last floor at 734 px: three fixed columns capped at
   1100. It is what stops the window going below 734, so it is next if audian
-  ever has to tile into half a laptop panel.
+  ever has to tile into half a laptop panel.  On Qt6 that floor is 695, and
+  since the side panel landed it is the floor with a session bundle loaded
+  too -- the parameter bar used to take it to 797 and no longer does.
+
+- [ ] `DataBrowser.setFocus()` is a no-op and one call site believes it is
+  not.  `DataBrowser` is a plain `QWidget` and nothing raises its focus
+  policy off `NoFocus`, so the call at the end of `toggle_channel` does
+  nothing: measured, `app.focusWidget()` is still `None` afterwards.  The
+  only focusable widget on that side is `stack_area` (`StrongFocus`), which
+  is what `set_side_panel` hands the keyboard back to.  Either the browser
+  takes a focus policy or the call should name the scroll area.
+
+- [ ] `theme.restyle_tree` can raise out of its own handler.  It reads the
+  band spec with `edges[0]` and `edges[1]` (`theme.py:1644-1650`) but
+  catches only `RuntimeError`, so a property that is short -- a hand-set
+  one, or a spec written by a build that recorded fewer edges -- raises
+  `IndexError` and aborts the walk mid-tree, leaving every widget after it
+  on the old palette.  Slices (`edges[0:1] == "1"`) cost nothing and cannot.
+  Not reachable today, because the only writer is `band()` itself.
+
+- [ ] A dead assertion in `tests/test_annotationpanel.py`.  The last line of
+  `test_the_span_counts_never_ask_the_parameter_bar_for_more_width` is
+  `assert panel.parambar.sizeHint().width() == before`, and the stub's
+  `parambar` is a bare `QWidget` with no layout: both sides are `-1`, so it
+  has never tested anything.  Re-point it at something with a real hint --
+  `annotation_group.minimumSizeHint().width()` before and after -- because
+  in a panel the readout genuinely is the widest thing in that group and
+  the `Ignored` policy is what stops it dragging the panel open.
 
 - [x] Follow the system theme, for dark and light.  A third theme
   preference, `system`, now the default: it reads
@@ -66,7 +93,8 @@
 - [ ] The rest of the unpersisted state, if it is wanted: panel visibility
   (`show_traces`, `show_specs`, `show_powers`, `mean_spec`), the y-range
   policy, the grid mode, the cross hair, rail visibility, the audio group
-  and the eight cross-tab `link_*` switches.  Filter cutoffs are the
+  and the eight cross-tab `link_*` switches.  The side panel's own width
+  and open state are done, under `side-panel` v1.  Filter cutoffs are the
   awkward ones and were left alone deliberately: `BufferedFilter.open`
   resets all three unconditionally, so the only correct place to restore
   them is `DataBrowser.open` after the loader, which is where -f/-l already

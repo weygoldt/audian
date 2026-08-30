@@ -1,11 +1,14 @@
 # The side panel: moving the parameter bar to the right edge
 
-Design spec and handoff.  Nothing here is built yet.  Written against
-`qt6-handoff` at `cfe1c4e`, in the `qt6-migration` worktree.
+**Built.**  All six steps landed in `ea75927..344e09a`, one commit each
+plus a polish pass.  This document is the design as it was written, at
+`cfe1c4e`; what actually got built differs from it in seven places, and
+those are listed at the end under *What the build changed*.  The commit
+messages carry the reasoning and the measurements.
 
 Read `docs/qt6/recon/parameter-bar.md` first if you are picking this up
-cold: it is the measured map of what the bar is today and what is pinned
-to it.  This document says what to do with it and why.
+cold: it is the measured map of what the bar was and what was pinned to
+it.  This document says what to do with it and why.
 
 
 ## What it solves
@@ -366,3 +369,87 @@ narrower and more robust wherever it lives.
   panel as a whole; whether 320 px is right, which only looking at it
   will answer; and whether the plugin region wants to be a sibling
   splitter pane or a tab set inside one scroll area.
+
+
+## What the build changed
+
+Seven places where the built thing differs from the design above.  Each
+one is a measurement the spec could not have had.
+
+**The panel opens at 360, not 320.**  The annotation pointer readout was
+given a row of its own so its counts survive elision, and that clause
+needs 310 px of mono metrics.  A row gets the panel less its own two `S8`
+margins and the group's: 288 px at 320, which elides it, and 328 at 360,
+which does not.  Everything else fits either way -- the widest built-in
+group is 172 px -- so the number is set by the one thing that does not.
+
+**Narrow rows put each row's fields in one cell, not in shared grid
+columns.**  Sharing them couples unrelated rows: measured, the Heterodyne
+button's column widened the Source row too, and the Audio group stopped at
+265 px instead of 181.  A lone field spans its caption's columns; two sit
+side by side under it.
+
+**At most one column of a narrow row takes the stretch.**  `pg.SpinBox`
+reports `Expanding` without being asked, so `claim_stretch` fired for the
+spin box beside a filter slider as readily as for the slider -- 161 px each
+in a 344 px row, where the slider's width *is* the frequency resolution.
+That is the rule `SPACER_COLUMN`'s own docstring states, now in code.
+
+**Four new glyphs, not three.**  The two label groups cannot share `label`:
+an icon strip has no words, and `audian.py:260-263` already records what
+happened when `play_region` shared `play`'s pixmap.  So `filter`,
+`envelope`, `speaker` and `label-fixed`.
+
+**`glyph_icon` gained an on-state colour, and that is a defect fixed
+rather than a parameter added.**  It painted every checked state in
+`on.primary`, which is right for a tool bar button filled with
+`primary.dim` and measures **1.07:1** on `bg.surface` in the daylight
+theme -- invisible, in light mode only, on the tab the reader is looking
+at.  The strip passes `fg`, which is what the stylesheet already does for
+a checked tab's text.
+
+**`theme.band` was not extended.**  The design asked for the rule to move
+to the panel's leading edge; the splitter handle already draws a hairline
+on the canvas side of itself and lights it on hover, so `band(left=True)`
+would have put two vertical lines six pixels apart.  The panel takes the
+chrome ground and no edge.
+
+**Three more rows had to wrap than the design listed** -- the annotation
+Show row (326 px of surface chips, the widest thing in that group with
+nothing loaded) and the Source row (whose text is whatever the bundle
+called itself), on top of the two chip rows.  And two combo boxes had to
+stop publishing their longest item as a minimum: the NFFT list ran to
+`524288  (10922.67 ms)` and the colour map to a 64 px swatch beside a name.
+
+### Answers to the "not yet known"
+
+* **The built-in region scrolls, not the panel.**  `ParameterTabs` takes a
+  `scroll=` flag and puts its own pages in the area, so the icon strip
+  stays put while the pages move under it.
+* **320 px was not right; 360 is.**  See above.
+* **The plugin region is a sibling splitter pane**, made on first use, so
+  with no plugins the splitter holds one child and shows no handle.
+
+### What it came to
+
+| | before | after |
+|---|---|---|
+| 16-channel stack viewport | 483 px | **651** |
+| ... its scroll range | 196 px | **28** |
+| window floor, empty | 695 | 695 |
+| window floor, bundle loaded | 797 | **695** |
+| browser minimum, panel shown | 517 | 337 |
+| browser minimum, panel hidden | -- | **110** |
+| widest built-in group | 501 | **172** |
+| tab strip | 489 px of text | **220** of icons |
+
+### Still open
+
+* The `Envelope` mark is the weakest of the six -- two hulls about an axis,
+  which reads as a lens.  It is distinct from everything else in the strip,
+  and the Envelope tab does not exist in the default pipeline, so it was
+  left rather than chased.
+* The panel is per-browser, and nothing shares it across file tabs.  That
+  was never asked for and matches how `parameter-tab` already behaves.
+* `side-panel` v1 does not store which plugin tab was open or where the two
+  regions divide.  Deliberate; the constant's docstring says why.
