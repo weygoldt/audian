@@ -94,6 +94,7 @@ from .eventoverlay import (
     swatch_icon,
 )
 from .controlpanel import ControlPanel
+from .wraprow import WrapRow
 from .alignment import SplitCoverage
 from .layers import (
     KIND_POINT,
@@ -369,6 +370,34 @@ class ParameterGroup(QWidget):
     UNBOUNDED = 16777215
 
     @staticmethod
+    def frame_height(group: "ParameterGroup") -> int:
+        """What one group's frame needs, at the width it has got.
+
+        `grid.totalSizeHint()` was the whole answer while nothing in the
+        bar reflowed.  It stopped being one when the annotation chip rows
+        became `WrapRow`s: `QGridLayout` runs its own height-for-width pass
+        inside `totalSizeHint`, at the layout's *own* preferred width
+        rather than at the width the group will actually be given.
+        Measured with a ten-layer bundle loaded, that answers **191 px**
+        for a group that needs **119** in the bar it lives in -- and this
+        is the number `equalize` freezes every frame to, so the bar would
+        have grown 168 -> 229 px.  The chip rows would have cost the lanes
+        61 px of height to save the window 276 px of width nobody was
+        short of, which is the opposite of the trade.
+
+        So ask the grid at the width the body really has.  Before the first
+        layout pass there is no such width, and then the hint is right
+        anyway: an unloaded bar has one chip in one row and nothing wraps.
+        """
+        width = group.body.width()
+        if width > 0 and group.grid.hasHeightForWidth():
+            return max(
+                group.grid.heightForWidth(width),
+                group.grid.totalMinimumSize().height(),
+            )
+        return group.grid.totalSizeHint().height()
+
+    @staticmethod
     def equalize(groups: "list[ParameterGroup]") -> None:
         """Give every group the same frame height.
 
@@ -401,7 +430,7 @@ class ParameterGroup(QWidget):
                 layout.activate()
             group.grid.invalidate()
             group.grid.activate()
-        height = max(g.grid.totalSizeHint().height() for g in groups)
+        height = max(ParameterGroup.frame_height(g) for g in groups)
         for group in groups:
             # absorb the added height below the last row, not between rows:
             group.grid.setRowStretch(group.rows, 1)
@@ -5737,12 +5766,17 @@ class DataBrowser(QWidget):
         # ANNOTATION_CHIP_ROWS.  The chips are the legend as well as the
         # toggle, so they are never elided away to glyphs; what gives instead
         # is the count, which lives in the tool tip and on the menu entry.
+        # A `WrapRow` and not a `QHBoxLayout`: measured with a bundle
+        # loaded, these two rows want 696 px and 555 px, and a plain layout
+        # publishes that as a minimum width the whole application then has
+        # to be wide enough for.  Wrapped they ask for nothing and spend the
+        # height instead, which is the axis a side panel has.  Nothing folds
+        # into a menu the way the category strip's does -- these chips are
+        # the legend, and a layer whose chip is behind a `+N` has no colour
+        # anybody can read off.
         self.annotation_rowboxes = []
         for index, (caption, tip, _tracks) in enumerate(ANNOTATION_CHIP_ROWS):
-            box = QWidget(self.parambar)
-            strip = QHBoxLayout(box)
-            strip.setContentsMargins(0, 0, 0, 0)
-            strip.setSpacing(theme.S4)
+            box = WrapRow(self.parambar)
             if index == 0:
                 # The way back from a solo sits ahead of the first chip, at
                 # the corner the eye reaches first, because a solo is one
@@ -5753,8 +5787,7 @@ class DataBrowser(QWidget):
                 self.annotation_allw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
                 self.annotation_allw.setFixedHeight(theme.CHIP_HEIGHT)
                 self.annotation_allw.clicked.connect(self.show_all_annotation_layers)
-                strip.addWidget(self.annotation_allw)
-            strip.addStretch(1)
+                box.add_widget(self.annotation_allw)
             placed = group.add_row(caption, "", box)
             placed[0].setToolTip(tip)
             self.annotation_rowboxes.append(box)
@@ -5785,7 +5818,7 @@ class DataBrowser(QWidget):
         if not self.annotation_rowboxes:
             return
         for chip in self.annotation_chips:
-            chip.parent().layout().removeWidget(chip)
+            chip.parent().remove_widget(chip)
             chip.setParent(None)
             chip.deleteLater()
         self.annotation_chips = []
@@ -5820,8 +5853,7 @@ class DataBrowser(QWidget):
             )
             self.annotation_layer_chips[state.id] = chip
             self.annotation_chips.append(chip)
-            layout = box.layout()
-            layout.insertWidget(layout.count() - 1, chip)
+            box.add_widget(chip)
 
         # A bundle just loaded is the one gesture where raising the tab is
         # right: the reader asked for that data, and the source line, the

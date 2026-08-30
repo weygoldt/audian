@@ -132,6 +132,7 @@ from .eventoverlay import (
     SURFACE_TRACE,
 )
 from .labels import KIND_SPAN, KINDS, LabelCategory, LabelSet
+from .wraprow import pack_row
 
 #: Above `eventoverlay.MARK_Z` (15) and below the crosshair and the playback
 #: marker (100).  A label is the thing being authored right now; an
@@ -1362,22 +1363,15 @@ class CategoryStrip(QWidget):
         so the fold marker can never itself be the thing that does not fit.
         Stops at the first chip that will not go, which is what keeps the
         shown set a prefix -- see the class docstring.
+
+        The arithmetic itself is `wraprow.pack_row`, bounded at `ROWS`.  It
+        moved there when the annotation chip rows needed the same
+        line-breaking with the ceiling taken off, and there is one of it
+        rather than two so a strip that folds and a row that does not
+        cannot end up breaking lines differently.
         """
-        placements = []
-        row = 0
-        x = 0
-        for index, (category, w) in enumerate(widths):
-            while True:
-                room = budget - (reserve if row == self.ROWS - 1 else 0)
-                if x + w <= room:
-                    placements.append((category, x, row, w))
-                    x += w + self.SPACING
-                    break
-                if x == 0 or row >= self.ROWS - 1:
-                    return placements, [c for c, _w in widths[index:]]
-                row += 1
-                x = 0
-        return placements, []
+        return pack_row(widths, budget, self.SPACING, rows=self.ROWS,
+                        reserve=reserve)
 
     def relayout(self) -> None:
         """Place the chips that fit, and fold the rest into the ``+N`` menu."""

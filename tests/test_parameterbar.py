@@ -33,10 +33,11 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tests"))
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QSizePolicy  # noqa: E402
+from PySide6.QtWidgets import QSizePolicy, QToolButton  # noqa: E402
 
 from audian import theme  # noqa: E402
 from audian.databrowser import ParameterGroup, ParameterTabs  # noqa: E402
+from audian.wraprow import WrapRow, pack_row  # noqa: E402
 from test_panelsplitter import app as app  # noqa: E402,F401  -- a fixture
 from test_panelsplitter import open_stack, pump, settle  # noqa: E402
 from test_session import simple  # noqa: E402
@@ -59,6 +60,129 @@ def wide_browser(app, tmp_path_factory):
 
 def group_minimums(view):
     return {g.title: g.minimumSizeHint().width() for g in view.param_groups}
+
+
+#: The `Sent` row of a loaded session bundle, which is the widest chip row
+#: in the application and the one the wrapping was written for.
+CHIP_NAMES = ("All", "Volley", "Baseline", "Silence",
+              "Resting pulses", "Volley pulses")
+
+
+def chip_row(parent=None, names=CHIP_NAMES):
+    """A `WrapRow` of chips the size the annotation chips really are."""
+    row = WrapRow(parent)
+    for name in names:
+        chip = QToolButton(row)
+        chip.setText(name)
+        chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+        chip.setFixedHeight(theme.CHIP_HEIGHT)
+        row.add_widget(chip)
+    return row
+
+
+# ------------------------------------------------------ the wrapping row
+#
+# Unit tests: no browser, no window, only the `app` fixture -- the same
+# shape as `test_a_bar_that_was_never_built_is_not_a_crash` below, and for
+# the same reason a new module was not opened for them.
+
+
+def test_a_wrapping_row_takes_another_line_rather_than_more_width(app):
+    """The trade the side panel is made of.
+
+    Every chip row in the bar today is a plain `QHBoxLayout`, so a row that
+    outgrows its column widens the whole application -- the two annotation
+    rows want 696 px and 555 px with a bundle loaded.  This one asks for a
+    chip's worth of nothing and spends the height instead, which is the
+    axis a panel has.
+
+    Measured on these six chips: one line at 500 px, two at 400, three at
+    320, four at 220, five at 180.
+    """
+    row = chip_row()
+    row.resize(800, row.heightForWidth(800))
+    settle()
+
+    # it asks for nothing: the row can never be the term that sets a
+    # minimum width, however many chips the reader's data puts in it
+    assert row.minimumSizeHint().width() <= theme.S24
+    assert row.sizeHint().width() <= theme.S24
+
+    lines = {}
+    for width in (500, 400, 320, 220, 180):
+        row.resize(width, row.heightForWidth(width))
+        settle()
+        _placed, count = row.measured(width)
+        lines[width] = count
+        # the height is exactly the lines it says it needs
+        assert row.heightForWidth(width) == (
+            count * theme.CHIP_HEIGHT + (count - 1) * WrapRow.VGAP
+        )
+    # narrower is never fewer lines, and the ends really do differ
+    counts = [lines[w] for w in (500, 400, 320, 220, 180)]
+    assert counts == sorted(counts)
+    assert counts[-1] > counts[0]
+
+
+def test_a_wrapping_row_folds_nothing_and_overlaps_nothing(app):
+    """The reason this is not `CategoryStrip`.
+
+    `CategoryStrip` is two fixed lines and puts the overflow in a ``+N``
+    menu, which is right for a vocabulary the reader chose and wrong for
+    the annotation chips: those are the legend as well as the switch, and a
+    layer whose chip is in a menu has no colour anybody can read off.
+    """
+    row = chip_row()
+    for width in (500, 320, 220, 120, 60):
+        row.resize(width, row.heightForWidth(width))
+        settle()
+        assert len(row.widgets()) == len(CHIP_NAMES)
+        assert all(not chip.isHidden() for chip in row.widgets())
+        placed = sorted(
+            (chip.geometry().top(), chip.geometry().left(),
+             chip.geometry().right())
+            for chip in row.widgets()
+        )
+        for (top, left, _right), (prev_top, _prev_left, prev_right) in zip(
+            placed[1:], placed
+        ):
+            if top == prev_top:
+                assert left > prev_right, f"chips overlap at {width} px"
+
+
+def test_the_packer_keeps_a_bounded_strip_a_prefix(app):
+    """One line-breaker, two policies.
+
+    `CategoryStrip` needs a bounded packer whose shown set is a *prefix* --
+    the first nine categories are the ones with the digit keys, and a strip
+    that hid the third to show the fourth would put the chips out of step
+    with the keyboard.  A `WrapRow` needs an unbounded one that never drops
+    anything.  Both are the same function.
+    """
+    items = [(name, 100) for name in "abcde"]
+
+    placed, leftover = pack_row(items, 250, 4, rows=2)
+    assert [key for key, _x, _line, _w in placed] == ["a", "b", "c", "d"]
+    assert leftover == ["e"]  # a prefix is shown, the rest is left over
+
+    # room held back on the last line for the fold marker
+    placed, leftover = pack_row(items, 250, 4, rows=2, reserve=50)
+    assert [key for key, _x, _line, _w in placed] == ["a", "b", "c"]
+    assert leftover == ["d", "e"]
+
+    # unbounded: three lines, and nothing left over
+    placed, leftover = pack_row(items, 250, 4)
+    assert len(placed) == len(items)
+    assert leftover == []
+    assert max(line for _k, _x, line, _w in placed) == 2
+
+    # an item wider than the whole budget is placed anyway rather than
+    # dropped, because an unbounded caller would rather overflow
+    placed, leftover = pack_row([("wide", 400)], 250, 4)
+    assert placed and leftover == []
+    # ... where a bounded one folds it, which is what the +N menu is for
+    placed, leftover = pack_row([("wide", 400)], 250, 4, rows=2)
+    assert placed == [] and leftover == ["wide"]
 
 
 # ------------------------------------------------------------------- width
@@ -102,22 +226,40 @@ def test_a_loaded_bundle_does_not_widen_the_window(browser, tmp_path):
     Loading a bundle grows the annotations group by one chip per layer.  Side
     by side that took the bar's minimum from 1445 px to 2452 and the window's
     from 1449 to 2456, and `resize(1200, 900)` then returned a 2456 px window.
+
+    Behind tabs it cost one page instead of the sum, which was the fix: the
+    bar went 517 -> 793 and the window 695 -> 797, so the annotations page
+    became the widest thing in the application the moment a reader reached
+    the second step of their own workflow.
+
+    It now costs **nothing**.  The two chip rows wrap, so ten layers are
+    ten more lines of height in a group that has height to spare rather
+    than 696 px of width the window has to be wide enough for.  Measured:
+    the bar stays at 517 and the window at 695 across the load, and the
+    Fixed labels group stays at 407 where it used to reach 777 -- it is not
+    even the widest page any more.  That is the assertion below, and it is
+    stronger than the one it replaces.
     """
     view = browser
     before = view.parambar.minimumSizeHint().width()
-    window = view.window()
+    before_group = view.annotation_group.minimumSizeHint().width()
+    before_window = view.window().minimumSizeHint().width()
     view.annotations.load(simple(tmp_path / "bundle").ref.metadata_path)
     settle()
     pump(0.5)
     try:
         assert len(view.annotation_chips) > 5
-        after = view.parambar.minimumSizeHint().width()
-        # the annotations page is now the widest, so the bar does grow --
-        # but by the width of ONE page, not by the sum of all of them
-        assert after == view.annotation_group.minimumSizeHint().width() + 2 * theme.S8
-        assert after < 2 * before
-        # and the bar is not what the window's minimum comes from
-        assert window.minimumSizeHint().width() > after
+        # the chips are there, and they are all on screen -- wrapped, never
+        # folded away, because they are the legend as well as the switch
+        rows = view.annotation_rowboxes
+        assert sum(len(row.widgets()) for row in rows) > len(view.annotation_chips)
+        assert all(not chip.isHidden() for chip in view.annotation_chips)
+        # and none of them cost a pixel of width
+        assert view.annotation_group.minimumSizeHint().width() == before_group
+        assert view.parambar.minimumSizeHint().width() == before
+        assert view.window().minimumSizeHint().width() == before_window
+        # the annotations page is not the widest page any more either
+        assert before_group < max(group_minimums(view).values())
     finally:
         view.annotations.clear()
         settle()

@@ -60,9 +60,16 @@ from audian.eventoverlay import (  # noqa: E402
     span_icon,
 )
 from audian.layers import KIND_SPAN  # noqa: E402
+from audian.wraprow import WrapRow  # noqa: E402
 
 sys.path.insert(0, str(REPO / "tests"))
 from test_session import pulse, simple, trial, write_bundle  # noqa: E402
+
+#: What a page of the parameter bar really gets in the 1200 px window this
+#: file's measurements were taken at, measured.  Stated because the chip
+#: rows wrap: the group's height is now a function of the width it is
+#: given, so any claim about that height has to name a width.
+BAR_PAGE_WIDTH = 1183
 
 
 def thin_bundle(directory: Path) -> Path:
@@ -1103,6 +1110,15 @@ def test_the_annotations_group_is_five_rows_and_never_a_sixth(app, panel):
     Five is the ceiling.  A sixth would take another 24 px out of every lane
     in the stack, and the ceiling is checked against a group built of that
     many chip-high rows rather than against a number that moves with the font.
+
+    Measured **at a stated width**, and that is new.  The chip rows wrap
+    now, so the group's height is a function of the width it is given:
+    `heightForWidth` reports 119 px at the 1183 the bar hands a page and
+    239 at 300.  `grid.totalSizeHint()` is no longer the number to ask --
+    `QGridLayout` runs its own height-for-width pass inside it, at the
+    layout's own preferred width rather than at the one the group will get,
+    and answers 191 for a group that costs the lanes 119.  A ceiling has to
+    name the width it is a ceiling at.
     """
     group = panel.annotation_group
     assert group.rows == 3 + len(ANNOTATION_CHIP_ROWS)
@@ -1113,8 +1129,10 @@ def test_the_annotations_group_is_five_rows_and_never_a_sixth(app, panel):
         row.setFixedHeight(theme.CHIP_HEIGHT)
         reference.add_row("row", "", row)
     app.processEvents()
+    # what a page really gets in the 1200 px window every other measurement
+    # in this file was taken at
     assert (
-        group.grid.totalSizeHint().height()
+        group.grid.heightForWidth(BAR_PAGE_WIDTH)
         <= reference.grid.totalSizeHint().height() + theme.S8
     )
 
@@ -1163,7 +1181,40 @@ def test_the_pointer_readout_is_wide_enough_to_reach_its_counts(app, panel):
     )
 
 
-def test_a_chip_row_is_one_subline_and_never_wraps(app, panel):
-    """The strip is bounded at one line per row, whatever is in it."""
+def test_a_chip_row_wraps_rather_than_widening(app, panel):
+    """It used to be bounded at one line.  Now it is bounded in width.
+
+    The claim inverted with the side panel.  A plain `QHBoxLayout` of ten
+    layer chips wants 696 px and 555 px, and publishes that as a minimum
+    the whole application has to be wide enough for -- which is how the
+    bar's own minimum reached 2456 px once.  Wrapped, the rows ask for a
+    chip's worth of nothing and spend the height instead, which is the axis
+    a panel has and a bottom bar does not.
+
+    Measured on the ten-layer bundle: `Sent` is one line at 700 px, two at
+    400 and three at 300, and every chip stays on screen at every width.
+    Nothing folds into a menu the way the category strip's does -- these
+    chips are the legend as well as the switch, and a layer whose chip is
+    behind a `+N` has no colour anybody can read off.
+    """
     for box in panel.annotation_rowboxes:
+        # the row is never the term that sets a minimum width
+        assert box.minimumSizeHint().width() <= theme.S24
         assert box.sizeHint().height() <= theme.CHIP_HEIGHT
+
+        chips = box.widgets()
+        assert chips  # or this test is not measuring anything
+        wide = box.heightForWidth(BAR_PAGE_WIDTH)
+        assert wide == theme.CHIP_HEIGHT  # one line, as it is in the bar
+
+        narrow = box.heightForWidth(300)
+        assert narrow >= wide
+        # and the height it asks for is exactly the lines it needs
+        _placed, lines = box.measured(300)
+        assert narrow == lines * theme.CHIP_HEIGHT + (lines - 1) * WrapRow.VGAP
+
+    # the row with the most chips really does wrap at a panel's width, or
+    # the assertions above are satisfied by a row that never had to
+    widest = max(panel.annotation_rowboxes, key=lambda b: len(b.widgets()))
+    assert widest.measured(300)[1] > 1
+    assert len(widest.widgets()) == len(widest.measured(300)[0])  # none dropped
