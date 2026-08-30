@@ -266,21 +266,19 @@ class Data(object):
         return traces
 
     def is_visible(self, name):
-        if name in self:
-            for pi in self[name].plot_items:
-                if pi is not None and pi.isVisible():
-                    return True
-        return False
+        """Is any channel of trace `name` currently drawn?
 
-    def set_visible(self, name, show):
-        changed = False
-        if name in self:
-            for pi in self[name].plot_items:
-                if pi is not None:
-                    if pi.isVisible() != show:
-                        changed = True
-                    pi.setVisible(show)
-        return changed
+        Answered from the trace's own `visible_channels` flags, which the
+        plot items keep up to date -- the data layer never holds a widget.
+        Making a trace visible is therefore the *browser's* job, not this
+        object's; see `DataBrowser.set_trace_visible`.
+        """
+        if name not in self:
+            return False
+        # `self["data"]` is the raw DataLoader, which carries the flags but
+        # not BufferedData's accessors, so read the array directly.
+        flags = getattr(self[name], "visible_channels", None)
+        return flags is not None and bool(flags.any())
 
     def get_region(self, t0, t1, channel):
         traces = {}
@@ -393,7 +391,7 @@ class Data(object):
         self.data.name = "data"
         self.data.panel = "trace"
         self.data.panel_type = "trace"
-        self.data.plot_items = [None] * self.data.channels
+        self.data.visible_channels = np.zeros(self.data.channels, dtype=bool)
         self.data.color = theme.trace_color("raw")
         # lw_thin MUST stay <= 1.0: Qt's raster engine has a fast path for
         # 1 pixel lines, width 1.1 falls back to QStroker.  Measured on the
@@ -429,11 +427,7 @@ class Data(object):
     def set_need_update(self):
         if self.data is None:
             return
-        self.data.need_update = False
-        for pi in self.data.plot_items:
-            if pi is not None and pi.isVisible():
-                self.data.need_update = True
-                break
+        self.data.need_update = bool(self.data.visible_channels.any())
         for d in self.data.dests:
             d.set_need_update()
 

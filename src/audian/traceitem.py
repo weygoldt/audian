@@ -6,6 +6,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from . import theme
+from .dataitem import VisibleChannelMirror
 
 
 #: trace name -> theme role.  Anything else keeps the colour the trace
@@ -20,7 +21,7 @@ TRACE_ROLES = {
 }
 
 
-class TraceItem(pg.PlotDataItem):
+class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
     """One channel of one trace.
 
     Carries two pieces of *stack* state that decide how loudly it is allowed
@@ -60,11 +61,14 @@ class TraceItem(pg.PlotDataItem):
         self._max_pixel = 0
         self._vb_connected = None
 
-        self.data.plot_items[self.channel] = self
-
         pg.PlotDataItem.__init__(
             self, *args, connect="all", antialias=False, skipFiniteCheck=True, **kwargs
         )
+        # An item that has not been added to a plot yet reports itself
+        # visible, which is exactly what `plot_items[channel] = self`
+        # used to mean here.  Every later change arrives through
+        # `itemChange`, including being parented into a hidden plot.
+        self.mirror_visibility()
         self.apply_pen()
         self.setSymbolSize(8)
         self.setSymbolBrush(self.symbol_brush())

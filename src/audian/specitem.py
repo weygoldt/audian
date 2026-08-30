@@ -7,9 +7,10 @@ from math import floor
 from thunderlab.powerspectrum import decibel
 
 from .bufferedspectrogram import channel_power
+from .dataitem import VisibleChannelMirror
 
 
-class SpecItem(pg.ImageItem):
+class SpecItem(VisibleChannelMirror, pg.ImageItem):
     """Spectrogram image of one channel of a BufferedSpectrogram.
 
     Or, once `set_mean_channels()` has been called, of the mean power over
@@ -45,7 +46,7 @@ class SpecItem(pg.ImageItem):
         # index range and stride of what is currently uploaded
         self._image_range = None
 
-        self.data.plot_items[self.channel] = self
+        self.mirror_visibility()
 
     def set_view_range(self, t0: float, t1: float) -> None:
         """Tell the item which time range is visible.

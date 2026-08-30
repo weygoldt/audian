@@ -45,7 +45,12 @@ class BufferedData(BufferedArray):
         self.tafter = 0
         self.panel = panel
         self.panel_type = panel_type
-        self.plot_items = []
+        #: per channel, is anything actually drawing this trace right now?
+        #: Written by the plot items (see `dataitem.VisibleChannelMirror`),
+        #: read here.  A plain array rather than the items themselves, so
+        #: that deciding whether a recompute is worth doing never touches a
+        #: widget -- and so a worker thread may read it.
+        self.visible_channels = np.zeros(0, dtype=bool)
         self.color = theme.trace_color(name) if color is None else color
         self.lw_thin = theme.LW_THIN if lw_thin is None else lw_thin
         self.lw_thick = theme.LW_THICK if lw_thick is None else lw_thick
@@ -102,7 +107,7 @@ class BufferedData(BufferedArray):
         self.rate = self.source.rate
         self.buffer_changed = np.zeros(self.channels, dtype=bool)
         self.buffer = np.zeros((0, self.channels), dtype=self.dtype)
-        self.plot_items = [None] * self.channels
+        self.visible_channels = np.zeros(self.channels, dtype=bool)
         self.buffer_generation = 0
         self.mip_pyramid = MinMaxPyramid() if more_shape is None else None
         self.update_step(step, more_shape)
@@ -180,22 +185,10 @@ class BufferedData(BufferedArray):
         self.reload_buffer()
 
     def is_visible(self):
-        for pi in self.plot_items:
-            if pi is not None and pi.isVisible():
-                return True
-        return False
-
-    def set_visible(self, show):
-        for pi in self.plot_items:
-            if pi is not None:
-                pi.setVisible(show)
+        return bool(self.visible_channels.any())
 
     def set_need_update(self):
-        self.need_update = False
-        for pi in self.plot_items:
-            if pi is not None and pi.isVisible():
-                self.need_update = True
-                break
+        self.need_update = bool(self.visible_channels.any())
         for d in self.dests:
             d.set_need_update()
         # end of dependency chain:

@@ -1539,13 +1539,42 @@ class DataBrowser(QWidget):
         panel_name = self.data[trace_name].panel
         self.panels[panel_name].add_item(plot_item, channel, False)
 
+    def trace_plot_items(self, name):
+        """Every plot item drawing trace `name`, over all panels and lanes.
+
+        The traces used to be reachable the other way round, from
+        `BufferedData.plot_items` -- which put live `QGraphicsItem`s inside
+        the data layer and made a threaded recompute impossible.  The items
+        live where they are drawn; showing and hiding them is the browser's
+        business, and the data layer only reads the bool flags they mirror
+        back (see `dataitem.VisibleChannelMirror`).
+        """
+        wanted = str(name).lower()
+        items = []
+        for panel in self.panels.values():
+            for ax in panel.axs:
+                for item in getattr(ax, "data_items", []):
+                    data = getattr(item, "data", None)
+                    if data is not None and str(data.name).lower() == wanted:
+                        items.append(item)
+        return items
+
+    def set_trace_visible(self, name, show) -> bool:
+        """Show or hide every item drawing trace `name`. True if anything moved."""
+        changed = False
+        for item in self.trace_plot_items(name):
+            if item.isVisible() != show:
+                changed = True
+            item.setVisible(show)
+        return changed
+
     def toggle_trace(self, checked, name):
-        self.data.set_visible(name, checked)
+        self.set_trace_visible(name, checked)
         self.adjust_layout(self.width(), self.height())
         self.sigTraceChanged.emit(self, checked, name)
 
     def set_trace(self, checked, name):
-        self.data.set_visible(name, checked)
+        self.set_trace_visible(name, checked)
         for act in self.trace_acts:
             if act.text() == name:
                 act.blockSignals(True)
