@@ -260,8 +260,17 @@ class ParameterGroup(QWidget):
     #: it themselves with `expanding()`.
     SPACER_COLUMN = 8
 
+    #: Grid columns a narrow row's caption spans, and a lone field with it.
+    #: Two, to match `add_span_row`'s default, so a captionless span row and
+    #: a narrow row line up on the same column edges.
+    NARROW_SPAN = 2
+
     def __init__(
-        self, title: str, parent: Optional[QWidget] = None, caption: bool = True
+        self,
+        title: str,
+        parent: Optional[QWidget] = None,
+        caption: bool = True,
+        narrow: bool = False,
     ):
         super().__init__(parent)
         #: the group's name.  Read by the bar's tab strip, by the settings
@@ -269,6 +278,22 @@ class ParameterGroup(QWidget):
         #: used to recover it from the caption widget that `caption=False`
         #: now removes.
         self.title = title
+        #: Stack each row's caption above its fields instead of beside them.
+        #:
+        #: A construction-time flag and never a width measurement.  A group
+        #: that reflowed on resize would relayout under the reader's hand,
+        #: and per group rather than per application because the same
+        #: builders are called for both shapes: the side panel wants its
+        #: groups narrow and `tests/test_annotationpanel` builds the same
+        #: group wide.
+        #:
+        #: What it buys is the caption column.  Measured, the captions are
+        #: 25 to 114 px wide, and "HIGH-PASS  H / ⇧H" is 38% of a 300 px
+        #: panel before any field exists.  Stacked, every group's minimum
+        #: falls under 181 px -- Spectrogram 513 -> 281, Audio 352 -> 181,
+        #: Filter 269 -> 149 -- at a cost of about 17 px of height per row,
+        #: which is the axis a panel has.
+        self.narrow = bool(narrow)
         vbox = QVBoxLayout(self)
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(theme.S2)
@@ -282,7 +307,17 @@ class ParameterGroup(QWidget):
         self.grid.setVerticalSpacing(theme.S2)
         self.grid.setColumnStretch(ParameterGroup.SPACER_COLUMN, 1)
         vbox.addWidget(self.body)
+        #: How many times `add_row` or `add_span_row` was called -- the rows
+        #: a reader would count.  Asserted by the tests, and unaffected by
+        #: `narrow`, which changes how a row is laid out and not how many
+        #: there are.
         self.rows = 0
+        #: Grid lines actually consumed, which is two per row when `narrow`.
+        #: This, and never `rows`, is where anything placed under the last
+        #: row goes -- `equalize`'s trailing stretch above all, which put
+        #: between the third and fourth row of a narrow five-row group would
+        #: blow the group apart.
+        self.gridrows = 0
         #: ``(row name, shortcut)`` for every row that prints one.  The bar
         #: shows one group at a time now, so a reader looking for a key can
         #: no longer read every group's off the screen at once; the tab's
@@ -342,12 +377,50 @@ class ParameterGroup(QWidget):
         caption = caption_label(label, shortcut)
         if shortcut:
             self.shortcuts.append((label, shortcut))
-        self.grid.addWidget(caption, self.rows, 0)
-        for i, w in enumerate(widgets):
-            self.grid.addWidget(w, self.rows, 1 + i)
-            self.claim_stretch(1 + i, w)
+        if self.narrow:
+            self.add_narrow_row(caption, widgets)
+        else:
+            self.grid.addWidget(caption, self.gridrows, 0)
+            for i, w in enumerate(widgets):
+                self.grid.addWidget(w, self.gridrows, 1 + i)
+                self.claim_stretch(1 + i, w)
+            self.gridrows += 1
         self.rows += 1
         return [caption, *widgets]
+
+    def add_narrow_row(self, caption: QWidget, widgets) -> None:
+        """Place one row's caption on its own grid line, fields on the next.
+
+        A lone field spans the same columns its caption does, so that it is
+        as wide as the group rather than as wide as the group's first
+        column; two fields sit side by side under the caption, the way the
+        `Opens at` band and the `Overlap` slider and its readout read.
+
+        The stretch is the part with a decision in it.  `SPACER_COLUMN`
+        exists because a group used to get the whole of a 1449 px bar, and
+        a 1327 px combo box reading "1" is a defect.  A 320 px panel does
+        not have that problem and has the opposite one: a combo box that
+        stops at its size hint with 150 px of nothing beside it reads as a
+        control that failed to lay out.  So a narrow row hands the leftover
+        to its last field's column -- unless a field asked for it by name
+        with `expanding()`, which is still how the three sliders keep the
+        width that *is* their resolution.
+        """
+        span = max(ParameterGroup.NARROW_SPAN, len(widgets))
+        self.grid.addWidget(caption, self.gridrows, 0, 1, span)
+        self.gridrows += 1
+        if len(widgets) == 1:
+            self.grid.addWidget(widgets[0], self.gridrows, 0, 1, span)
+            self.claim_stretch(span - 1, widgets[0])
+        else:
+            for i, w in enumerate(widgets):
+                self.grid.addWidget(w, self.gridrows, i)
+                self.claim_stretch(i, w)
+        if self.grid.columnStretch(ParameterGroup.SPACER_COLUMN):
+            # nobody asked, so the row takes the width anyway
+            self.grid.setColumnStretch(span - 1, 1)
+            self.grid.setColumnStretch(ParameterGroup.SPACER_COLUMN, 0)
+        self.gridrows += 1
 
     def add_span_row(self, widget: QWidget, columns: int = 2) -> QWidget:
         """Add a captionless row whose widget takes the group's whole width.
@@ -358,11 +431,12 @@ class ParameterGroup(QWidget):
         1167 px of the Labels page's 1183 rather than stopping at the field
         column.
         """
-        self.grid.addWidget(widget, self.rows, 0, 1, columns)
+        self.grid.addWidget(widget, self.gridrows, 0, 1, columns)
         # unconditionally: a row spans because its widget wants the whole
         # width, which is the only reason to give up the caption column
         self.grid.setColumnStretch(columns - 1, 1)
         self.grid.setColumnStretch(ParameterGroup.SPACER_COLUMN, 0)
+        self.gridrows += 1
         self.rows += 1
         return widget
 
@@ -432,8 +506,11 @@ class ParameterGroup(QWidget):
             group.grid.activate()
         height = max(ParameterGroup.frame_height(g) for g in groups)
         for group in groups:
-            # absorb the added height below the last row, not between rows:
-            group.grid.setRowStretch(group.rows, 1)
+            # absorb the added height below the last row, not between rows --
+            # and below the last GRID line, which a narrow group has two of
+            # per row: `setRowStretch(group.rows, 1)` on a narrow five-row
+            # group would put the slack between its third and fourth rows.
+            group.grid.setRowStretch(group.gridrows, 1)
             group.body.setFixedHeight(height)
 
 
@@ -2516,7 +2593,7 @@ class DataBrowser(QWidget):
 
             # The band a spectrogram opens at.  Appended after Colormap
             # rather than squeezed beside the Window combo box: `add_row`
-            # places at `self.rows` and there is no insert API, and the
+            # only ever appends and there is no insert API, and the
             # group then reads as how the picture is computed (Window,
             # Overlap) and then how it is shown (Colormap, Opens at).
             #

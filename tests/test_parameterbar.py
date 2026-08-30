@@ -33,10 +33,14 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tests"))
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QSizePolicy, QToolButton  # noqa: E402
+from PySide6.QtWidgets import QLabel, QSizePolicy, QToolButton  # noqa: E402
 
 from audian import theme  # noqa: E402
-from audian.databrowser import ParameterGroup, ParameterTabs  # noqa: E402
+from audian.databrowser import (  # noqa: E402
+    LogSlider,
+    ParameterGroup,
+    ParameterTabs,
+)
 from audian.wraprow import WrapRow, pack_row  # noqa: E402
 from test_panelsplitter import app as app  # noqa: E402,F401  -- a fixture
 from test_panelsplitter import open_stack, pump, settle  # noqa: E402
@@ -183,6 +187,115 @@ def test_the_packer_keeps_a_bounded_strip_a_prefix(app):
     # ... where a bounded one folds it, which is what the +N menu is for
     placed, leftover = pack_row([("wide", 400)], 250, 4, rows=2)
     assert placed == [] and leftover == ["wide"]
+
+
+# -------------------------------------------------------- the narrow row
+#
+# Also unit tests: `ParameterGroup` builds standalone, which is what
+# `test_eventoverlay.py::test_equalize_regrows_a_group_whose_contents_changed`
+# already relies on.
+
+
+def stacked(narrow, fields=1):
+    """A three-row group, wide or narrow, of `fields` fields per row."""
+    group = ParameterGroup("Probe", None, caption=False, narrow=narrow)
+    for name in ("High-pass", "Low-pass", "Band"):
+        widgets = []
+        for i in range(fields):
+            box = QToolButton(group)
+            box.setText(f"{name}{i}")
+            box.setFixedHeight(theme.CHIP_HEIGHT)
+            widgets.append(box)
+        group.add_row(name, "H / ⇧H", *widgets)
+    return group
+
+
+def test_a_narrow_row_stacks_its_caption(app):
+    """The caption goes above the field, on a grid line of its own.
+
+    Measured, the captions of this bar are 25 to 114 px wide, and
+    "HIGH-PASS  H / ⇧H" is 38 percent of a 300 px panel before any field
+    exists.  Beside the field that is the whole reason a group cannot fit
+    in a side panel; above it, it costs about 17 px of height, which is the
+    axis a panel has.
+    """
+    wide = stacked(narrow=False)
+    narrow = stacked(narrow=True)
+    settle()
+
+    # a row is a row either way: this is what the annotation suite counts
+    assert wide.rows == narrow.rows == 3
+    # but a narrow one spends two grid lines on it
+    assert wide.gridrows == 3
+    assert narrow.gridrows == 6
+
+    # the caption really is on its own line, spanning, with the field below
+    caption = narrow.grid.itemAtPosition(0, 0)
+    field = narrow.grid.itemAtPosition(1, 0)
+    assert caption is not None and field is not None
+    assert isinstance(caption.widget(), QLabel)
+    assert caption.widget().text().startswith("HIGH-PASS")
+    assert field.widget() is not caption.widget()
+    # nothing shares the caption's line
+    assert narrow.grid.itemAtPosition(0, 1) is caption
+    # ... where the wide one puts them side by side on one line
+    assert wide.grid.itemAtPosition(0, 0).widget().text().startswith("HIGH-PASS")
+    assert wide.grid.itemAtPosition(0, 1) is not None
+
+    # and that is what it is for: narrower, taller
+    assert narrow.minimumSizeHint().width() < wide.minimumSizeHint().width()
+    assert narrow.grid.totalSizeHint().height() > wide.grid.totalSizeHint().height()
+
+
+def test_a_narrow_group_keeps_the_row_contract(app):
+    """`add_row` still returns caption-and-fields, and hiding one hides both.
+
+    `set_pair_row_visible` hides a whole row through that return value, and
+    a caption left beside nothing reads as a control that failed to load.
+    In narrow mode the caption is on the line above rather than the column
+    beside, and both lines have to collapse -- spacing included.
+    """
+    group = ParameterGroup("Probe", None, caption=False, narrow=True)
+    field = QToolButton(group)
+    field.setFixedHeight(theme.CHIP_HEIGHT)
+    placed = group.add_row("Pair", "", field)
+    tail = QToolButton(group)
+    tail.setFixedHeight(theme.CHIP_HEIGHT)
+    group.add_row("Speed", "", tail)
+    settle()
+
+    assert placed == [placed[0], field]  # caption first, then the fields
+    full = group.grid.totalSizeHint().height()
+    for widget in placed:
+        widget.setVisible(False)
+    settle()
+    group.grid.invalidate()
+    group.grid.activate()
+    hidden = group.grid.totalSizeHint().height()
+    # both grid lines go, and the spacing between them with them
+    assert hidden < full
+    assert full - hidden >= theme.CHIP_HEIGHT
+
+
+def test_a_narrow_row_still_lets_a_field_ask_for_the_width(app):
+    """`expanding()` is how width-is-resolution survives the stacking.
+
+    The three sliders are wrapped in `ParameterGroup.expanding` precisely
+    so they take the leftover; a narrow row hands that to the last field's
+    column by default, but never over the head of a field that asked.
+    """
+    group = ParameterGroup("Probe", None, caption=False, narrow=True)
+    slider = ParameterGroup.expanding(LogSlider(0, 48000, group))
+    spin = QToolButton(group)
+    spin.setText("1 kHz")
+    group.add_row("High-pass", "H / ⇧H", slider, spin)
+    settle()
+
+    assert ParameterGroup.wants_width(slider)
+    # the slider's column took it, not the last one
+    assert group.grid.columnStretch(0) == 1
+    assert group.grid.columnStretch(1) == 0
+    assert group.grid.columnStretch(ParameterGroup.SPACER_COLUMN) == 0
 
 
 # ------------------------------------------------------------------- width
