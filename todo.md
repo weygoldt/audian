@@ -1,114 +1,16 @@
 # Low hanging fruit
 
-- [x] `set_channels` falls back to the shown channels when the channels left
-  showing hold none of the selected ones, instead of asking an empty list for
-  its last element.  The clamp is the one that block already ran -- the
-  nearest candidate at or after the current channel, else the highest -- with
-  the candidates widened from shown-and-selected to merely shown when the
-  intersection comes out empty.  Two ordinary gestures produced it: clicking
-  lane 2 makes `[2]` the whole selection, and hiding lane 2 leaves the two
-  sets disjoint.
+- [ ] For spectrograms, keep the powerspec and the colorbar off by default. Nobody ever looks at this anyways
 
-  Not "leave the current channel where it was", which is what the guard at
-  `select_next_channel` does and was the obvious answer: `stepped_channel`
-  reads `show_channels.index(self.current_channel)`, so a current channel
-  left on a lane that has just gone is a `ValueError` on the reader's next
-  arrow key, and an `IndexError` traded for a `ValueError` two gestures later
-  is not a fix.  `set_channels` is the only place that invariant is enforced,
-  which is exactly what lets `select_next_channel` and
-  `select_previous_channel` go on leaving their own anchor alone.  With
-  nothing shown at all it does stay where it was: `current_channel` is an
-  index -- the borders, the focused spectrogram lane and the tool bar's `%d`
-  all take it -- and there is no "no channel" value to reach for.
+- [ ] Add a drop down menu for spectrogram smoothing (None, gausisan, Bicubic, etc)
 
-  The workaround in `test_hiding_the_lane_the_grips_are_on_drops_the_selection`
-  is gone with it, and a regression test in the same file takes both gestures
-  and then presses the arrow key the `ValueError` would have been waiting on.
+- [ ] Do some research on spectrogram denoising or smoothing. We could even try to add some features like synchrosqueezing from squeezepy and a way to play with the parameters to make the spectrogram representation more tunable
 
 - [ ] StartupPage is the last floor at 734 px: three fixed columns capped at
   1100. It is what stops the window going below 734, so it is next if audian
   ever has to tile into half a laptop panel.  On Qt6 that floor is 695, and
   since the side panel landed it is the floor with a session bundle loaded
   too -- the parameter bar used to take it to 797 and no longer does.
-
-- [x] `toggle_channel` names the scroll area now, and the entry this replaces
-  had the diagnosis backwards.  `DataBrowser.setFocus()` is **not** a no-op:
-  `QWidget.setFocus` ignores the focus policy -- the policy decides only what
-  a Tab or a click may focus -- so the browser took the keyboard every time
-  it was told to, `NoFocus` and all.  The old measurement that said otherwise
-  was made in a window the offscreen platform never activated, where
-  `app.focusWidget()` reads `None` whatever the code does; activated, the
-  focus really does land on the `DataBrowser`, which has no `keyPressEvent`
-  and no scroll bar, so Page Up and the arrows did nothing after every
-  channel toggle until the reader clicked the stack back.
-
-  Not removed, because the call had a job and it is one this file already
-  records for `set_side_panel`: hiding a channel hides its rail row, the rail
-  row is `StrongFocus` because it answers S and M itself, and Qt's own choice
-  for where the keyboard goes when that row is hidden is -- measured -- the
-  side panel's scroll area, across the window from the stack the reader was
-  rearranging.  So it hands it to `stack_area`, unconditionally, the way it
-  always meant to.  Two tests in `test_panelsplitter.py`, both of which read
-  the browser itself as the focus widget before the fix.
-
-- [x] `theme.restyle_tree` reads the band spec with `edges[0:1]` and
-  `edges[1:2]` now.  A slice cannot raise, and a missing edge reads as an
-  absent one -- the same answer the widget would have got had nobody
-  recorded that edge.  Defence rather than a repair: the only writer is
-  still `band()`, which always writes both digits, so nothing reachable
-  today produces a short spec.  Worth the two characters anyway, because the
-  cost of being wrong is a theme switch that stops half way through the
-  window and leaves the rest of it on the palette the reader just left.
-
-  The test asserts what happens to the widgets *after* the short one, which
-  is the actual claim -- a test that only said "does not raise" would go
-  green on a walk that restyled nothing at all.
-
-- [x] The dead assertion in
-  `test_the_span_counts_never_ask_the_parameter_bar_for_more_width` measures
-  the annotation group now, and the entry this replaces named the repair but
-  not the two traps in it.  The old line was
-  `panel.parambar.sizeHint().width() == before`, and this module's `parambar`
-  is a bare `QWidget` with no layout, so both sides were the invalid `-1`.
-
-  Re-pointing it at the group was not enough, and each of the two ways it
-  stayed dead was found by breaking the policy on purpose and watching the
-  test pass anyway.  `show_annotation_under` *elides before it assigns*, so
-  driving it leaves the label holding two characters and the group cannot
-  move whatever its policy is -- the long line has to go in with `setText`.
-  And a `QGridLayout` caches its minimum: with the policy broken to
-  `Preferred` the group still answered 88 px after the text was set, after
-  `processEvents` and after `invalidate`, and told the truth, 1034, only once
-  it had been activated.
-
-  So it reads `setText`, `invalidate`, `activate`, then measure, and it is
-  verified in both directions: `Ignored` holds the group at 81 px with the
-  whole 132 character line in the label, `Preferred` takes it to 1034.
-
-- [x] Follow the system theme, for dark and light.  A third theme
-  preference, `system`, now the default: it reads
-  `QStyleHints.colorScheme()` at startup, follows `colorSchemeChanged`
-  while running, and loads audian's own dark or daylight table accordingly.
-  Pinning a theme by hand turns the following off, because otherwise the
-  desktop's next change would undo the choice just made.
-
-  The colours stay audian's, and that was arrived at the long way round.
-  Deriving the tokens from the platform palette works and was built --
-  grounds from Window and Base, ink from WindowText, contrast-repaired
-  against audian's own 4.5:1 gate -- and the result was reverted, because
-  the two hand-made tables are designed: gated for contrast, separated for
-  colour vision deficiency, and in the daylight theme's case built for a
-  screen at 50,000 lux, which is not derivable from any desktop.  Going
-  further and dropping the application stylesheet as well -- the textbook
-  Qt way to look native -- was worse still: the metrics, radii, hairlines
-  and control heights all live in that sheet, and without it what is left
-  is stock Fusion chrome.  What the desktop gets to decide is which of the
-  two tables the reader is looking at.
-
-  `push_color_scheme` still tells Qt which scheme we are painting, so the
-  title bar, the portal file dialog and platform menus stop being light
-  around a dark application.  `Qt.ColorScheme.Unknown` maps to dark: that
-  is what the offscreen platform reports and the suite runs offscreen.
 
 - [ ] Only the light/dark bit is taken from the desktop, not its accent.
   Qt 6.6 exposes `QPalette.ColorRole.Accent` and it would be the one
@@ -125,17 +27,6 @@
   `BAND_PAD_V` is the number to reach for, and the band's own height has to
   be derived from it: the tool bar's bug was that it was not, so the layout
   paid for the shortfall out of the padding.
-
-- [x] Store user settings in .config directory.  The spectrogram colormap
-  moved out of the QSettings INI it had to itself and into settings.json
-  under a versioned `spectrogram` key, together with nfft and the overlap.
-  It is stored as a **name per theme** rather than as the index it was: the
-  two themes offer different lists, so the same index meant a different map
-  on each and an index past the end of the shorter one was silently clamped
-  to zero -- and now that the theme can follow the desktop and flip with no
-  gesture at all, that would have been a preference resetting itself twice
-  a day.  `save_setting` also became atomic; it rewrites the whole document
-  for one key, and an interrupted write took the label vocabulary with it.
 
 - [ ] The rest of the unpersisted state, if it is wanted: panel visibility
   (`show_traces`, `show_specs`, `show_powers`, `mean_spec`), the y-range
@@ -170,6 +61,7 @@
   a validity check before each touch) and it deserves its own commit and its
   own measurement. It will bite again the next time anyone adds a test
   module that opens a browser.
+  
 - [ ] The colour ramp is fitted over the **whole** frequency axis, not over
   the band on screen: `visible_block` crops in time only
   (`spectrogramplot.py`), and `estimate_noiselevels` takes its floor from
@@ -180,6 +72,7 @@
   "the new setting broke the spectrogram", and it should be settled before
   a narrow band is recommended for wideband files. Not measured -- the test
   fixture is 8 kHz and the effect needs a wideband recording.
+
 - [ ] `hover_panel` is never cleared once the pointer leaves the stack: it
   is set to None only inside `mouse_moved` (databrowser.py), which does not
   fire on a Leave. So `Ctrl++`/`Ctrl+-`, which go through
@@ -194,6 +87,7 @@
      main window is `ChannelRailRow`'s electrode label, and the owner does
      not rename channels -- numbers are enough -- so this is accepted rather
      than fixed.  Revisit only if electrode labels start being used. -->
+
 - [ ] **The large spec panel should take the MAX over channels, not the mean.** The
   complaint is right and the fix first proposed is not: a signal that only ever
   sits on one or two electrodes -- a weakly electric fish moving over the grid --
