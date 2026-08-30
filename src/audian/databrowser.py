@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QLineEdit, QToolButton
 from PySide6.QtWidgets import QSizePolicy, QSpacerItem, QAbstractSpinBox
 from PySide6.QtWidgets import QButtonGroup, QStackedLayout
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QComboBox, QMenu
+from PySide6.QtWidgets import QComboBox, QMenu, QTabWidget
 from PySide6.QtWidgets import QLabel
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog
 from PySide6.QtWidgets import QGraphicsRectItem
@@ -927,6 +927,43 @@ class SidePanel(QWidget):
         box.setContentsMargins(theme.S8, theme.S8, theme.S8, theme.S8)
         box.setSpacing(theme.S6)
         self.box = box
+        # Two regions, split so the boundary is draggable: the built-ins
+        # above, whatever the plugins registered below.  The lower one is
+        # created only when something registers -- see `plugin_region` --
+        # so with no plugins this splitter holds one child, shows no
+        # handle, and costs exactly what a plain box would.
+        self.split = QSplitter(Qt.Orientation.Vertical, self)
+        self.split.setChildrenCollapsible(False)
+        box.addWidget(self.split, 1)
+        #: the plugins' tab set, or None while no plugin has registered one
+        self.plugins = None
+
+    def plugin_region(self) -> QTabWidget:
+        """The plugin tab set, made on first use.
+
+        Text tabs where the built-ins get icons, and that is not an
+        inconsistency: the built-ins are a closed set known at build time,
+        small enough that a mark per entry is a thing a person learns.
+        Plugins are an open set -- there is no icon to invent for a plugin
+        nobody has written yet, and demanding one from every plugin author
+        is a tax on writing a plugin.
+
+        Absent entirely until something registers.  An empty box with a tab
+        bar and nothing in it is a control that says the application is
+        missing something, when what it means is that this reader has no
+        plugins.
+        """
+        if self.plugins is None:
+            self.plugins = QTabWidget(self)
+            self.plugins.setTabPosition(QTabWidget.TabPosition.North)
+            self.plugins.setDocumentMode(True)
+            self.split.addWidget(self.plugins)
+            # the built-ins keep their height and the plugins take what is
+            # going, which is the way round a reader who opened a plugin
+            # panel wants it
+            self.split.setStretchFactor(0, 0)
+            self.split.setStretchFactor(1, 1)
+        return self.plugins
 
 
 class LogSlider(QSlider):
@@ -2548,6 +2585,11 @@ class DataBrowser(QWidget):
         self.setEnabled(True)
         self.adjust_layout(self.width(), self.height())
 
+        # The plugins' own side-panel tabs, last: they are handed a browser
+        # that is finished, so a factory can read anything it needs off it
+        # rather than being called into a half-built one.
+        self.plugins.setup_panels(self)
+
         # setup analyzers:
         PlainAnalyzer(self)
         StatisticsAnalyzer(self)
@@ -2854,7 +2896,7 @@ class DataBrowser(QWidget):
         self.param_narrow = True
         self.param_tabs = ParameterTabs(self.parambar, icons=True, scroll=True)
         self.param_tabs.sigTabChanged.connect(self.parameter_tab_changed)
-        self.parambar.box.addWidget(self.param_tabs, 1)
+        self.parambar.split.addWidget(self.param_tabs)
         groups = []
 
         nyquist = self.data.rate / 2
@@ -3483,6 +3525,21 @@ class DataBrowser(QWidget):
                 f"channel rail {state} -- it stays off screen while the mean "
                 f"spectrogram does (Shift+F2)",
             )
+
+    def add_plugin_panel(self, title: str, widget: QWidget) -> None:
+        """Put one plugin's widget in the panel's lower region.
+
+        Called by `Plugins.setup_panels`, which owns the isolation: a
+        factory that raises costs its own tab and nothing else.  By the
+        time a widget reaches here it is a widget.
+        """
+        if self.parambar is None or widget is None:
+            return
+        self.parambar.plugin_region().addTab(widget, title)
+
+    def has_plugin_panels(self) -> bool:
+        """Whether any plugin registered a panel with this browser."""
+        return self.parambar is not None and self.parambar.plugins is not None
 
     def side_panel_shown(self) -> bool:
         """Whether the reader has the side panel open.

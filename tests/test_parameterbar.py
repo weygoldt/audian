@@ -38,11 +38,13 @@ from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QLabel,
     QSizePolicy,
+    QTabWidget,
     QToolButton,
 )
 
 from audian import theme  # noqa: E402
 from audian.databrowser import (  # noqa: E402
+    DataBrowser,
     LogSlider,
     ParameterGroup,
     ParameterTabs,
@@ -97,6 +99,26 @@ def danger_pixels(button, checked=False):
         for x in range(image.width())
         if image.pixel(x, y) == want
     )
+
+
+class _StubPanelBrowser:
+    """Just enough browser for `Plugins.setup_panels` to talk to.
+
+    A real one costs a window and a recording, and what is under test here
+    is the isolation around somebody else's callable -- so this is the
+    three things that path touches: a panel to put tabs in, the method that
+    puts them there, and somewhere for the notifications to go.
+    """
+
+    def __init__(self):
+        self.parambar = SidePanel()
+        self.said = []
+
+    def add_plugin_panel(self, title, widget):
+        DataBrowser.add_plugin_panel(self, title, widget)
+
+    def notify(self, level, message):
+        self.said.append((level, message))
 
 
 def chip_row(parent=None, names=CHIP_NAMES):
@@ -811,6 +833,108 @@ def test_restoring_the_panel_writes_nothing(browser):
         )
         view.side_panel_width = keep_width
         view._side_panel_saved = keep_saved
+
+
+# ------------------------------------------------------- the plugin region
+
+
+def test_the_plugin_region_is_absent_without_plugins(browser):
+    """Nobody has written one, so it costs nothing and shows nothing.
+
+    An empty box with a tab bar and no tabs in it is a control saying the
+    application is missing something, when what it means is that this
+    reader has no plugins.  So the region is not built until a factory
+    registers, and the vertical splitter that would hold it has one child
+    and shows no handle.
+    """
+    view = browser
+    assert not view.has_plugin_panels()
+    assert view.parambar.plugins is None
+    # one child, no handle, no height taken
+    assert view.parambar.split.count() == 1
+    assert view.parambar.split.widget(0) is view.param_tabs
+
+
+def test_a_plugin_panel_lands_in_its_own_region(app, tmp_path):
+    """The smallest thing that could work: one more naming convention.
+
+    `plugins.py` already discovers `audian_*traces` and `audian_*analyzer`
+    by name; a panel is `audian_*panel`, returning `(title, widget)`.  A
+    plugin author who has written a trace factory already knows how to
+    write this.
+    """
+    from PySide6.QtWidgets import QLabel
+
+    from audian.plugins import Plugins
+
+    made = []
+
+    def audian_probe_panel(browser):
+        made.append(browser)
+        return "Probe", QLabel("a plugin's own controls")
+
+    plugins = Plugins()
+    plugins.add_panel_factory(audian_probe_panel)
+    assert plugins.panel_factories == [audian_probe_panel]
+
+    view = _StubPanelBrowser()
+    plugins.setup_panels(view)
+    assert made == [view]
+    region = view.parambar.plugins
+    assert region is not None
+    assert region.count() == 1
+    assert region.tabText(0) == "Probe"
+    # text tabs, because there is no icon to invent for a plugin nobody has
+    # written yet, and asking every author for one is a tax on writing one
+    assert region.tabPosition() == QTabWidget.TabPosition.North
+
+
+def test_a_broken_plugin_panel_does_not_take_the_window_down(app):
+    """A plugin is somebody else's code on the reader's own path.
+
+    A broken one costs its own tab and nothing else -- not the panel, not
+    the plugins after it, and not the file the reader was opening when it
+    raised.  This is the one place the panel wraps a call it does not own.
+    """
+    from PySide6.QtWidgets import QLabel
+
+    from audian.plugins import Plugins
+
+    def audian_broken_panel(browser):
+        raise RuntimeError("boom")
+
+    def audian_confused_panel(browser):
+        return "not a pair"
+
+    def audian_quiet_panel(browser):
+        return None
+
+    def audian_good_panel(browser):
+        return "Good", QLabel("fine")
+
+    plugins = Plugins()
+    for factory in (
+        audian_broken_panel,
+        audian_confused_panel,
+        audian_quiet_panel,
+        audian_good_panel,
+    ):
+        plugins.add_panel_factory(factory)
+
+    view = _StubPanelBrowser()
+    plugins.setup_panels(view)
+
+    # the good one is there, and it is the only one
+    region = view.parambar.plugins
+    assert region is not None
+    assert [region.tabText(i) for i in range(region.count())] == ["Good"]
+    # and the reader was told about the two that failed, by name
+    levels = [level for level, _msg in view.said]
+    assert levels == ["error", "error"]
+    assert any("audian_broken_panel" in msg for _lvl, msg in view.said)
+    assert any("audian_confused_panel" in msg for _lvl, msg in view.said)
+    # the one that declined said nothing, because declining is not failing
+    assert not any("audian_quiet_panel" in msg for _lvl, msg in view.said)
 
 
 # ------------------------------------------------------------------ content
