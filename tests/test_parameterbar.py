@@ -34,7 +34,12 @@ sys.path.insert(0, str(REPO / "tests"))
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QIcon  # noqa: E402
-from PySide6.QtWidgets import QLabel, QSizePolicy, QToolButton  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QLabel,
+    QSizePolicy,
+    QToolButton,
+)
 
 from audian import theme  # noqa: E402
 from audian.databrowser import (  # noqa: E402
@@ -561,6 +566,116 @@ def test_a_hidden_panel_costs_the_window_no_width(browser):
         settle()
         pump(0.2)
     assert view.minimumSizeHint().width() == shown
+
+
+# ------------------------------------------------------------- the toggle
+
+
+def test_the_panel_can_be_put_away_and_brought_back(browser):
+    """The action the bar never had.
+
+    Browsing and configuring are different modes and the switch between
+    them has to be cheap, so the whole panel goes with one key.  Put away,
+    the lanes get the entire window; brought back, they get the width the
+    reader left it at rather than the default -- closing it is how a reader
+    parks it, and a lossy toggle is one nobody uses twice.
+    """
+    view = browser
+    window = view.window()
+    act = window.acts.toggle_side_panel
+    assert act.isChecked()
+    assert view.side_panel_shown()
+    wide = view.stack_area.viewport().width()
+    width = view.side_panel_width
+    try:
+        act.setChecked(False)
+        settle()
+        pump(0.3)
+        assert not view.side_panel_shown()
+        # the lanes really did get the width, not just the panel's absence
+        assert view.stack_area.viewport().width() > wide
+
+        act.setChecked(True)
+        settle()
+        pump(0.3)
+        assert view.side_panel_shown()
+        assert view.stack_area.viewport().width() == wide
+        assert view.side_split.sizes()[1] == width
+    finally:
+        act.setChecked(True)
+        settle()
+        pump(0.3)
+
+
+def test_the_menu_says_what_the_panel_is_doing(browser):
+    """One action, one panel per open file, so the action is never the store.
+
+    It is told, the way `sync_annotation_actions` says the annotation
+    switches are.  Asserted in both directions because the failure is
+    silent either way: a tick that disagrees with the panel makes the next
+    Ctrl+B appear to do nothing.
+    """
+    view = browser
+    act = view.window().acts.toggle_side_panel
+    try:
+        for wanted in (False, True, False, True):
+            view.set_side_panel(wanted)
+            view.sync_side_panel()
+            settle()
+            assert act.isChecked() == wanted == view.side_panel_shown()
+    finally:
+        view.set_side_panel(True)
+        view.sync_side_panel()
+        settle()
+
+
+def test_showing_the_panel_does_not_steal_the_keyboard(browser):
+    """The reader pressed a key while browsing and expects to keep browsing.
+
+    Measured: showing a splitter child never moves focus, even when it
+    holds the only focusable widget in the window -- so this direction is
+    free, and stays free only while the tab buttons keep `NoFocus`.
+
+    Hiding is the direction that needs code.  Qt does move focus out of a
+    widget it hides, but to the focus-chain *next*, which here is the
+    navigator's `FullTracePlot` and not the stack the reader was looking
+    at: the arrow keys would nudge something off screen.
+    """
+    view = browser
+    stack = view.stack_area
+    # `QApplication.focusWidget()` is None in a window the platform does not
+    # consider active, and offscreen no window is until it is asked -- so
+    # without this the assertions below would all read None and pass for a
+    # reason unrelated to what they claim.
+    view.window().activateWindow()
+    settle()
+    try:
+        stack.setFocus(Qt.FocusReason.OtherFocusReason)
+        settle()
+        assert QApplication.focusWidget() is stack
+
+        view.set_side_panel(False)
+        settle()
+        view.set_side_panel(True)
+        settle()
+        # showing took nothing
+        assert QApplication.focusWidget() is stack
+
+        # and a control inside the panel hands the keyboard back on the way
+        # out rather than letting Qt pick the next widget along
+        inner = view.param_tabs.buttons["Audio"]
+        inner.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        inner.setFocus(Qt.FocusReason.OtherFocusReason)
+        settle()
+        assert view.parambar.isAncestorOf(QApplication.focusWidget())
+        view.set_side_panel(False)
+        settle()
+        assert QApplication.focusWidget() is stack
+    finally:
+        view.param_tabs.buttons["Audio"].setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        view.set_side_panel(True)
+        settle()
+        pump(0.2)
 
 
 # ------------------------------------------------------------------ content

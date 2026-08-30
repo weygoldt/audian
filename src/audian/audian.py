@@ -4588,6 +4588,44 @@ class Audian(QMainWindow):
             act.setChecked(layer.layers.get(layer_id, False))
             act.blockSignals(blocked)
 
+    def toggle_side_panel(self, shown: bool) -> None:
+        """Show or hide the current browser's side panel (Ctrl+B).
+
+        The boolean comes from the action, which Qt has already flipped, so
+        this is a setter all the way down -- see the action's own comment
+        for why a flip here would move the panel twice per keystroke.
+
+        Not broadcast to the other open files.  There is no `link_panels`
+        for this, and `save_parameter_tab`'s docstring states the rule the
+        whole settings layer follows: only the browser the reader actually
+        acted on speaks for itself, or a window would overwrite the choice
+        made in the one beside it.
+        """
+        browser = self.browser()
+        if not isinstance(browser, DataBrowser) or browser.parambar is None:
+            return
+        browser.set_side_panel(shown)
+
+    def sync_side_panel(self, browser) -> None:
+        """Point the View menu's tick at what this browser's panel is doing.
+
+        One action, one panel per open file, so the action is a view of the
+        front browser and never the store -- the same rule
+        `sync_annotation_actions` states.  `blockSignals` is not tidiness:
+        without it `setChecked` emits `toggled`, and the slot would hide the
+        panel of the tab the reader has just switched to.
+        """
+        act = getattr(self.acts, "toggle_side_panel", None)
+        if act is None or browser is not self.browser():
+            # a background tab restoring its own width must not move the
+            # menu, which speaks for the tab in front
+            return
+        blocked = act.blockSignals(True)
+        act.setChecked(
+            isinstance(browser, DataBrowser) and browser.side_panel_shown()
+        )
+        act.blockSignals(blocked)
+
     def next_annotation(self):
         browser = self.require_browser()
         if browser is not None:
@@ -4800,6 +4838,36 @@ class Audian(QMainWindow):
         )
         self.acts.reset_panel_split.triggered.connect(self.reset_panel_split)
 
+        # Ctrl+B, and through `self.acts` rather than `browser.addAction`.
+        #
+        # The channel rail's F7 is built the other way (databrowser.py, in
+        # `setup_stack`) and the consequence is worth stating: the golden
+        # action inventory is built from `vars(win.acts)` and from a walk of
+        # the menus, so an action that is a bare local passed to `addAction`
+        # is in neither -- F7 is not inventoried, not swept, and not checked
+        # for key clashes.  This one is all three.
+        #
+        # Ctrl+B was verified free four ways: no `setShortcut` in src/, no
+        # entry in the golden file, no `QKeySequence.StandardKey` that
+        # expands to it on this platform (which is the real risk -- Qt binds
+        # Emacs-style keys on some X11 setups), and nothing in a live
+        # window's `findChildren(QAction)`.
+        self.acts.toggle_side_panel = QAction("&Side panel", self)
+        self.acts.toggle_side_panel.setCheckable(True)
+        self.acts.toggle_side_panel.setChecked(True)
+        self.acts.toggle_side_panel.setShortcut("Ctrl+B")
+        self.acts.toggle_side_panel.setToolTip(
+            "Take the parameters off the right edge and give the whole "
+            "window to the lanes, or put them back  (Ctrl+B)"
+        )
+        # `toggled`, and a setter rather than a flip.  `QAction.trigger`
+        # moves the check state before the slot runs and then emits both
+        # `toggled` and `triggered`, so a slot that flipped would move the
+        # panel twice for one keystroke -- and the golden inventory's sweep
+        # triggers every action blind, which is exactly where that would
+        # show up as a panel that never moves while its tick does.
+        self.acts.toggle_side_panel.toggled.connect(self.toggle_side_panel)
+
         # Shift+F2 rather than a key of its own: this mode lives inside the
         # one F2 opens, and it was the only unclaimed modifier on that key
         # (Shift+F3 resets the split, Shift+F6 and Alt+F6 are the
@@ -4969,6 +5037,10 @@ class Audian(QMainWindow):
         self.setup_label_actions(view_menu)
         self.traces_menu = view_menu.addMenu("&Traces")
         self.data_menus.append(self.traces_menu)
+        # At the top level of View rather than inside Panels: "panel" in
+        # that submenu means a row of a lane -- trace, spectrogram, power --
+        # and this is the column the whole window is divided by.
+        view_menu.addAction(self.acts.toggle_side_panel)
         view_menu.addAction(self.acts.toggle_grid)
         view_menu.addAction(self.acts.system_theme)
         view_menu.addAction(self.acts.daylight_mode)
@@ -5022,6 +5094,7 @@ class Audian(QMainWindow):
             self.spectrogram_menu.menuAction().setVisible(len(browser.spec_acts) > 1)
             self.relabel_axis_actions(browser)
             self.sync_annotation_actions(browser)
+            self.sync_side_panel(browser)
             browser.update()
         self.sync_toolbar(browser)
 

@@ -25,7 +25,8 @@ from PySide6.QtGui import QCursor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout
 from PySide6.QtWidgets import QLayout
-from PySide6.QtWidgets import QScrollArea, QSplitter, QFrame, QSlider
+from PySide6.QtWidgets import QScrollArea, QSplitter, QSplitterHandle
+from PySide6.QtWidgets import QFrame, QSlider
 from PySide6.QtWidgets import QLineEdit, QToolButton
 from PySide6.QtWidgets import QSizePolicy, QSpacerItem, QAbstractSpinBox
 from PySide6.QtWidgets import QButtonGroup, QStackedLayout
@@ -823,6 +824,42 @@ class ParameterTabs(QWidget):
             if kind:
                 button.setIcon(self.tab_icon(kind, bool(button.property("alert"))))
         self.strip.relayout()
+
+
+class SideSplitter(QSplitter):
+    """The canvas / side panel splitter, which knows when a drag has ended.
+
+    `QSplitter` has no end-of-drag signal.  With the default opaque resize
+    `splitterMoved` fires once per mouse *move* -- measured, ten emissions
+    for one drag and none on release -- so connecting it to a settings write
+    is exactly the "one drag is a hundred mouse moves" defect
+    `save_panel_split` was written to avoid.
+
+    So the handle reports its own release, which is the shape
+    `panelsplitter.PanelSplitter` already uses for the trace/spectrogram
+    boundary: move mutates, release persists.  The alternative,
+    `setOpaqueResize(False)`, does collapse a drag to one emission but
+    replaces the live drag with a rubber band, which is not how the other
+    draggable boundary in this application behaves.
+    """
+
+    def __init__(self, orientation, parent=None, on_release=None):
+        super().__init__(orientation, parent)
+        #: called with no arguments when the reader lets go of the handle
+        self.on_release = on_release
+
+    def createHandle(self):
+        return SideSplitterHandle(self.orientation(), self)
+
+
+class SideSplitterHandle(QSplitterHandle):
+    """The grab band, which tells its splitter when the gesture is over."""
+
+    def mouseReleaseEvent(self, event) -> None:
+        super().mouseReleaseEvent(event)
+        splitter = self.splitter()
+        if splitter is not None and splitter.on_release is not None:
+            splitter.on_release()
 
 
 class SidePanel(QWidget):
@@ -1657,6 +1694,12 @@ class DataBrowser(QWidget):
         self.gui = None
         self.toolbar = None
         self.parambar = None
+        #: How wide the side panel is when it is open, in pixels.
+        #:
+        #: Kept while it is shut, and that is deliberate: closing the panel
+        #: is how a reader parks it, and reopening on the default rather
+        #: than on the width they chose would make the toggle lossy.
+        self.side_panel_width = DataBrowser.SIDE_PANEL_WIDTH
         # panel and channel the pointer is currently over, for the
         # axis-agnostic zoom gestures (see axis_under_pointer):
         self.hover_panel = None
@@ -2409,8 +2452,14 @@ class DataBrowser(QWidget):
         self.setup_parameter_bar()
         self.side_split.addWidget(self.parambar)
         self.side_split.setStretchFactor(1, 0)
-        width = DataBrowser.SIDE_PANEL_WIDTH
+        width = self.side_panel_width
         self.side_split.setSizes([max(1, self.width() - width), width])
+        # The menu's tick is told here and not left to `adapt_menu`.  A tab
+        # change fires that while the browser is still being built -- the
+        # panel does not exist until this line -- so the tick would read
+        # "hidden" beside a panel that is on screen, and the reader's first
+        # Ctrl+B would appear to do nothing.
+        self.sync_side_panel()
 
         # full data (navigator), docked below the channel stack:
         self.datafig = FullTracePlot(
@@ -2583,7 +2632,9 @@ class DataBrowser(QWidget):
         # `finish_side_panel_drag` turns a zero width into a real hide --
         # a child merely collapsed to zero still charges the window its
         # whole minimum width.
-        self.side_split = QSplitter(Qt.Orientation.Horizontal, self)
+        self.side_split = SideSplitter(
+            Qt.Orientation.Horizontal, self, self.finish_side_panel_drag
+        )
         self.side_split.addWidget(self.splitter)
         self.side_split.setStretchFactor(0, 1)
         self.side_split.setCollapsible(0, False)
@@ -3383,6 +3434,105 @@ class DataBrowser(QWidget):
                 f"channel rail {state} -- it stays off screen while the mean "
                 f"spectrogram does (Shift+F2)",
             )
+
+    def side_panel_shown(self) -> bool:
+        """Whether the reader has the side panel open.
+
+        `isHidden` and not `isVisible`, which is the same distinction
+        `test_labels` draws about stacked pages.  `isVisible` is False for
+        any widget whose ancestors are not on screen yet, so during `open()`
+        -- before the window is shown -- it answers "hidden" for a panel
+        nobody has hidden, and the menu's tick would come up out of step
+        with the panel beside it.  `isHidden` is the widget's own state and
+        says only what was asked of it.
+        """
+        return self.parambar is not None and not self.parambar.isHidden()
+
+    def finish_side_panel_drag(self) -> None:
+        """End of the gesture: read the width off the splitter, once.
+
+        Called from the handle's release and from nowhere else.  The width
+        is read here rather than tracked per move because `splitterMoved`
+        fires once per mouse move and the only position worth keeping is
+        the one the reader let go on.
+
+        A drag to the edge is a close, and has to be a real one: a splitter
+        child collapsed to zero is still visible and still charges the
+        window its whole minimum width, so leaving it collapsed would keep
+        the laptop floor paying for a panel that is not there.
+        """
+        sizes = self.side_split.sizes()
+        if len(sizes) < 2:
+            return
+        if sizes[1] <= 0:
+            self.set_side_panel(False)
+            self.sync_side_panel()
+            return
+        self.side_panel_width = sizes[1]
+
+    def sync_side_panel(self) -> None:
+        """Tell the window's menu what this browser's panel is doing.
+
+        There is one action for the window and one panel per open file, so
+        the action is a view of the front browser and never the store --
+        the rule `sync_annotation_actions` states for the same reason.
+        """
+        gui = self.gui
+        if gui is None or not hasattr(gui, "sync_side_panel"):
+            return
+        gui.sync_side_panel(self)
+
+    def set_side_panel(self, shown: bool) -> None:
+        """Show or hide the side panel (Ctrl+B).
+
+        A setter and not a flip.  The action is checkable, so Qt has
+        already moved the tick before this runs and hands the new state in;
+        a slot that flipped instead would move the panel twice for one
+        keystroke on the way through `QAction.trigger`, and the panel would
+        never appear to move at all while the tick did.
+
+        Hidden means `setVisible(False)` and not a splitter collapsed to
+        zero.  A collapsed child is *visible at width zero* and Qt still
+        charges its whole minimum to the splitter -- measured, 524 px
+        against the 300 the same splitter reports once the child is really
+        hidden -- so a rail left behind would keep the laptop floor charged
+        for a panel the reader believes is gone.
+
+        Focus is the half that needs code, and only in one direction.
+        Showing a splitter child never moves focus, measured, even when the
+        child holds the only focusable widget in the window -- and the tab
+        buttons keep `NoFocus` so that stays true.  Hiding one does move it,
+        but to the focus-chain *next*, which here is the navigator: measured,
+        focus went to the `FullTracePlot` rather than to the stack the
+        reader was browsing, so the next arrow key nudged nothing they were
+        looking at.  Hence the explicit hand-back.
+        """
+        if self.parambar is None:
+            return
+        shown = bool(shown)
+        if shown == self.side_panel_shown():
+            return
+        if shown:
+            self.parambar.setVisible(True)
+            # Ask for the width the reader left it at; the splitter honours
+            # the canvas's own minimum, so there is nothing to clamp here.
+            # `size_splitter`'s guard: an idempotent setSizes is a no-op
+            # rather than a relayout.
+            width = max(self.side_panel_width, SidePanel.MIN_WIDTH)
+            sizes = [max(1, self.width() - width), width]
+            if self.side_split.sizes() != sizes:
+                self.side_split.setSizes(sizes)
+        else:
+            # Hand the keyboard back BEFORE hiding, not after.  Hiding a
+            # widget that holds the focus makes Qt move it along the focus
+            # chain itself, and a `setFocus` afterwards lands in a window
+            # that no longer has a focus widget to replace -- measured, it
+            # left `QApplication.focusWidget()` at None.  Moving first means
+            # there is nothing for Qt to move.
+            if self.parambar.isAncestorOf(QApplication.focusWidget() or self.parambar):
+                target = self.stack_area if self.stack_area is not None else self
+                target.setFocus(Qt.FocusReason.OtherFocusReason)
+            self.parambar.setVisible(False)
 
     # --- which channels are on screen -------------------------------------
 

@@ -1002,6 +1002,16 @@
     "path": "View \u203a Panels",
     "text": "Toggle power"
   },
+  "toggle_side_panel": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+B"
+    ],
+    "path": "View",
+    "text": "Side panel"
+  },
   "toggle_spectrograms": {
     "checkable": true,
     "checked": false,
