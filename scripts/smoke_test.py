@@ -288,9 +288,9 @@ def main(argv=None):
     )
     ap.add_argument(
         "--theme",
-        choices=["dark", "light"],
-        help="switch to this theme AFTER the window is built, exercising the "
-        "live re-theme path rather than only the startup path",
+        choices=["system", "dark", "light"],
+        help="switch to this theme preference AFTER the window is built, "
+        "exercising the live re-theme path rather than only the startup path",
     )
     ap.add_argument(
         "--audio-pair",
@@ -424,10 +424,13 @@ def main(argv=None):
     if args.theme:
         from audian import theme as _theme
 
-        main_win.set_app_theme(args.theme)
+        main_win.set_theme_preference(args.theme)
         pump(app, 2.0)
-        if _theme.current_theme() != args.theme:
+        wanted = _theme.resolve_theme(args.theme)
+        if _theme.current_theme() != wanted:
             faults.append(f"--theme: still on {_theme.current_theme()}")
+        if main_win.theme_preference != args.theme:
+            faults.append(f"--theme: preference is {main_win.theme_preference}")
 
     if args.audio_pair:
         from audian.databrowser import DataBrowser

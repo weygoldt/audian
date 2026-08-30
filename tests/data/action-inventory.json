@@ -816,6 +816,14 @@
     "path": "View \u203a Envelope",
     "text": "Show envelope"
   },
+  "system_theme": {
+    "checkable": true,
+    "checked": true,
+    "in_menus": true,
+    "keys": [],
+    "path": "View",
+    "text": "Follow system theme"
+  },
   "time_down": {
     "checkable": false,
     "checked": false,

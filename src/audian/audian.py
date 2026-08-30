@@ -932,6 +932,28 @@ def settings() -> dict:
     return {}
 
 
+def theme_preference(stored) -> str:
+    """Read the stored theme preference.  Never raises.
+
+    Three legal values -- ``'system'``, ``'dark'``, ``'light'``.  A settings
+    file written by an older audian holds one of the two theme names, which
+    are still legal and still mean "pin this one", so nothing has to be
+    migrated.  Anything else, including a missing key on a first run, means
+    follow the desktop: that is the choice a reader who has never expressed
+    one is best served by.
+
+    The key is a bare string rather than the versioned dict the other five
+    settings use.  Widening its value domain is therefore not guarded, and an
+    older audian reading ``'system'`` will fall through its own membership
+    test and open dark.  That is the one direction this breaks, it is silent,
+    and it is survivable -- which is why the key was left alone rather than
+    reshaped and made unreadable to every older audian instead.
+    """
+    if stored in theme.THEME_PREFERENCES:
+        return stored
+    return theme.THEME_SYSTEM
+
+
 def save_setting(key: str, value) -> None:
     """Update one preference in place.  Never raises."""
     values = settings()
@@ -1492,6 +1514,7 @@ class Audian(QMainWindow):
         unwrap,
         unwrap_clip,
         events_path=None,
+        theme_pref=None,
     ):
         super().__init__()
 
@@ -1557,6 +1580,16 @@ class Audian(QMainWindow):
         self.readout_box = None
         self.palette_dialog = None
         self.cheatsheet_dialog = None
+
+        # how the theme is chosen, which is not the same thing as which theme
+        # is painted: audian_cli has already resolved and applied one, and
+        # this is the rule that produced it.
+        self.theme_preference = theme_preference(
+            theme_pref if theme_pref is not None else settings().get("theme")
+        )
+        QGuiApplication.styleHints().colorSchemeChanged.connect(
+            self.system_theme_changed
+        )
 
         # window: size is a hint only, nothing is persisted or restored -
         # on a tiling compositor the window manager owns the geometry.
@@ -1646,7 +1679,81 @@ class Audian(QMainWindow):
             self.show_startup()
 
     def set_app_theme(self, name: str) -> None:
-        """Switch the whole application between the dark and daylight themes.
+        """Pin the application to one theme, and stop following the desktop.
+
+        Picking a theme by hand is a statement that this one is wanted, so it
+        also turns the *follow the system* preference off -- otherwise the
+        next time the desktop changed its mind it would silently undo the
+        choice just made.
+        """
+        if name not in (theme.THEME_DARK, theme.THEME_LIGHT):
+            return
+        self.set_theme_preference(name)
+
+    def set_theme_preference(self, preference: str) -> None:
+        """Store how the theme is chosen, then paint what that resolves to.
+
+        The preference is one of ``'system'``, ``'dark'``, ``'light'``; the
+        *theme* is only ever ``'dark'`` or ``'light'``.  Keeping the two apart
+        is what lets ``'system'`` survive a restart: storing the resolved name
+        instead would pin the desktop's mood at the moment it was chosen.
+        """
+        if preference not in theme.THEME_PREFERENCES:
+            return
+        self.theme_preference = preference
+        # Native chrome -- title bar, portal file dialog, platform menus --
+        # is painted by the desktop, not by our stylesheet, so tell it which
+        # scheme we are in.  Under 'system' this hands the choice back.
+        theme.push_color_scheme(preference)
+        save_setting("theme", preference)
+        self.sync_theme_actions()
+        self.apply_app_theme(theme.resolve_theme(preference))
+
+    def follow_system_theme(self, follow: bool) -> None:
+        """Menu entry point: start or stop following the desktop's choice.
+
+        Turning it off pins whatever is currently on screen rather than
+        jumping to a default -- the reader is switching off the automatism,
+        not asking for a different colour.
+        """
+        self.set_theme_preference(
+            theme.THEME_SYSTEM if follow else theme.current_theme()
+        )
+
+    def system_theme_changed(self) -> None:
+        """The desktop switched between light and dark while we were running.
+
+        Only acts under the ``'system'`` preference: a reader who pinned a
+        theme has said the desktop does not get a vote.  The repaint is
+        deferred to the next turn of the loop because the walk it runs
+        rebuilds StartupPage and re-polishes every widget, and Qt is part way
+        through delivering a platform-theme change when this arrives.
+        """
+        if getattr(self, "theme_preference", None) != theme.THEME_SYSTEM:
+            return
+        wanted = theme.system_theme()
+        if wanted == theme.current_theme():
+            return
+        QTimer.singleShot(0, lambda: self.apply_app_theme(theme.system_theme()))
+
+    def sync_theme_actions(self) -> None:
+        """Point the two theme checkboxes at the current preference."""
+        following = getattr(self, "theme_preference", None) == theme.THEME_SYSTEM
+        for act, checked in (
+            (getattr(self.acts, "system_theme", None), following),
+            (
+                getattr(self.acts, "daylight_mode", None),
+                theme.current_theme() == theme.THEME_LIGHT,
+            ),
+        ):
+            if act is None:
+                continue
+            blocked = act.blockSignals(True)
+            act.setChecked(checked)
+            act.blockSignals(blocked)
+
+    def apply_app_theme(self, name: str) -> None:
+        """Repaint the whole application in *name*.  Does not persist anything.
 
         ``theme.apply()`` only reaches the Qt chrome -- palette, font and
         stylesheet.  The plots are a pyqtgraph graphics scene whose pens and
@@ -1680,12 +1787,19 @@ class Audian(QMainWindow):
         # last: every stylesheet and icon is in place, so recompute the
         # geometry they imply
         self.repolish()
-        self.acts.daylight_mode.setChecked(name == theme.THEME_LIGHT)
-        save_setting("theme", name)
+        self.sync_theme_actions()
+        following = (
+            " - following the system"
+            if getattr(self, "theme_preference", None) == theme.THEME_SYSTEM
+            else ""
+        )
         self.statusBar().showMessage(
-            "Daylight theme - high contrast for outdoor use"
-            if name == theme.THEME_LIGHT
-            else "Dark theme",
+            (
+                "Daylight theme - high contrast for outdoor use"
+                if name == theme.THEME_LIGHT
+                else "Dark theme"
+            )
+            + following,
             2500,
         )
 
@@ -4569,6 +4683,17 @@ class Audian(QMainWindow):
         )
         self.acts.daylight_mode.triggered.connect(self.toggle_daylight)
 
+        self.acts.system_theme = QAction("Follow s&ystem theme", self)
+        self.acts.system_theme.setCheckable(True)
+        self.acts.system_theme.setChecked(
+            getattr(self, "theme_preference", None) == theme.THEME_SYSTEM
+        )
+        self.acts.system_theme.setToolTip(
+            "Take the light or dark choice from the desktop, and follow it "
+            "when it changes"
+        )
+        self.acts.system_theme.triggered.connect(self.follow_system_theme)
+
         self.acts.maximize_window = QAction("Toggle &maximize", self)
         self.acts.maximize_window.setShortcut("Ctrl+Shift+M")
         self.acts.maximize_window.triggered.connect(self.toggle_maximize)
@@ -4587,6 +4712,7 @@ class Audian(QMainWindow):
         self.traces_menu = view_menu.addMenu("&Traces")
         self.data_menus.append(self.traces_menu)
         view_menu.addAction(self.acts.toggle_grid)
+        view_menu.addAction(self.acts.system_theme)
         view_menu.addAction(self.acts.daylight_mode)
         view_menu.addAction(self.acts.maximize_window)
         self.addAction(self.acts.next_file)
@@ -5048,9 +5174,10 @@ def audian_cli(cargs=[], plugins=None):
         "--theme",
         dest="theme",
         default=None,
-        choices=["dark", "light"],
+        choices=["system", "dark", "light"],
         help="colour theme; 'light' is the high-contrast daylight theme for "
-        "outdoor use (default: whatever was last chosen, else dark)",
+        "outdoor use, 'system' takes the choice from the desktop and follows "
+        "it (default: whatever was last chosen, else system)",
     )
     parser.add_argument(
         "files",
@@ -5101,11 +5228,14 @@ def audian_cli(cargs=[], plugins=None):
         files = args.files
 
     app = QApplication(sys.argv[:1] + qt_args)
-    # the command line wins for this run; otherwise restore the last choice
-    theme_name = args.theme or settings().get("theme", theme.THEME_DARK)
-    if theme_name not in (theme.THEME_DARK, theme.THEME_LIGHT):
-        theme_name = theme.THEME_DARK
-    theme.apply(app, theme_name)
+    # the command line wins for this run; otherwise restore the last choice.
+    # --theme is not written back: it says how to open this run, not what to
+    # remember, which is the rule it has always followed.
+    preference = theme_preference(args.theme or settings().get("theme"))
+    # tell the platform before the first widget is built, so the title bar
+    # and any native dialog come up in the scheme we are about to paint
+    theme.push_color_scheme(preference)
+    theme.apply(app, theme.resolve_theme(preference))
     main = Audian(
         files,
         load_kwargs,
@@ -5116,6 +5246,7 @@ def audian_cli(cargs=[], plugins=None):
         args.unwrap,
         args.unwrap_clip,
         args.events_path,
+        preference,
     )
     main.show()
     app.exec()

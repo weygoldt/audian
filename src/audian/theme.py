@@ -83,6 +83,7 @@ from PySide6.QtGui import (
     QFont,
     QFontDatabase,
     QFontMetrics,
+    QGuiApplication,
     QPalette,
     QPen,
 )
@@ -97,6 +98,11 @@ __all__ = [
     # themes
     "THEME_DARK",
     "THEME_LIGHT",
+    "THEME_SYSTEM",
+    "THEME_PREFERENCES",
+    "system_theme",
+    "resolve_theme",
+    "push_color_scheme",
     "THEMES",
     "TOKENS",
     "set_theme",
@@ -284,6 +290,15 @@ GRID_ALPHA = 0.35
 THEME_DARK = "dark"
 THEME_LIGHT = "light"
 
+#: Not a theme -- a *preference* meaning "whichever of the two the desktop is
+#: currently asking for".  It never reaches :data:`THEMES`, :func:`set_theme`
+#: or :func:`current_theme`; :func:`resolve_theme` turns it into one of the two
+#: real names and everything downstream keeps seeing only ``'dark'``/``'light'``.
+THEME_SYSTEM = "system"
+
+#: The preference values the settings file and ``--theme`` accept.
+THEME_PREFERENCES: tuple[str, ...] = (THEME_SYSTEM, THEME_DARK, THEME_LIGHT)
+
 #: The dark token table.  Dotted names -> hex.  This is the reference theme.
 DARK_TOKENS: dict[str, str] = {
     "bg.base": BG_BASE,
@@ -420,6 +435,70 @@ _CACHE: dict[str, Any] = {}
 def current_theme() -> str:
     """Return the name of the active theme, ``'dark'`` or ``'light'``."""
     return _ACTIVE["name"]
+
+
+def system_theme() -> str:
+    """Which of the two themes the desktop is currently asking for.
+
+    Reads ``QStyleHints.colorScheme()``, which Qt fills from the platform
+    theme -- on this Linux desktop from ``~/.config/kdeglobals``, on Windows
+    and macOS from the OS preference directly.
+
+    ``Qt.ColorScheme.Unknown`` maps to :data:`THEME_DARK`.  That is not a
+    guess about taste, it is the value the offscreen platform reports, and
+    the test suite runs offscreen: mapping it to dark keeps every contrast
+    and geometry assertion measured against the theme it was written for.
+    Without a ``QGuiApplication`` there is nothing to ask, and the answer is
+    the same default.
+    """
+    app = QGuiApplication.instance()
+    if app is None:
+        return THEME_DARK
+    if QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Light:
+        return THEME_LIGHT
+    return THEME_DARK
+
+
+def resolve_theme(preference: str | None) -> str:
+    """Turn a stored preference into the theme name to actually paint.
+
+    ``'system'`` becomes whatever :func:`system_theme` reports; ``'dark'`` and
+    ``'light'`` pass through; anything else -- a hand-edited settings file, a
+    preference written by a future audian -- falls back to :data:`THEME_DARK`
+    rather than raising, because this runs on the startup path.
+    """
+    if preference == THEME_SYSTEM:
+        return system_theme()
+    if preference in THEMES:
+        return preference
+    return THEME_DARK
+
+
+def push_color_scheme(preference: str) -> None:
+    """Tell Qt which scheme we are painting, so native chrome agrees.
+
+    The window title bar, the native file dialog and portal menus are drawn by
+    the platform, not by our stylesheet.  Without this they stay light around
+    a dark application.  Under the ``'system'`` preference we hand the choice
+    back rather than pinning it, so the desktop stays in charge.
+
+    ``setColorScheme`` is asynchronous on xcb -- reading ``colorScheme()`` back
+    in the same block still returns the old value -- so nothing here reads it
+    back.  The theme we paint comes from *preference*, never from the round
+    trip.  Older Qt builds without the setter simply do without.
+    """
+    if QGuiApplication.instance() is None:
+        return
+    hints = QGuiApplication.styleHints()
+    try:
+        if preference == THEME_SYSTEM:
+            hints.unsetColorScheme()
+        elif preference == THEME_LIGHT:
+            hints.setColorScheme(Qt.ColorScheme.Light)
+        else:
+            hints.setColorScheme(Qt.ColorScheme.Dark)
+    except (AttributeError, TypeError):  # Qt < 6.8
+        pass
 
 
 def set_theme(name: str = THEME_DARK) -> None:
@@ -2010,6 +2089,12 @@ def palette() -> QPalette:
         QPalette.ColorRole.Mid: "border",
         QPalette.ColorRole.Dark: "border.hi",
         QPalette.ColorRole.Shadow: "bg.base",
+        # Accent (Qt 6.6) is the one role the docstring's "every role" claim
+        # used to miss.  A bare QPalette() seeds unset roles from the running
+        # application, so leaving it out let the desktop's accent leak in and
+        # be cached under our theme's name: measured, both audian themes came
+        # out carrying KDE Breeze's #308cc6, the daylight theme included.
+        QPalette.ColorRole.Accent: "primary",
     }
     for role, name in roles.items():
         p.setColor(role, qcolor(name))
