@@ -86,7 +86,7 @@ def pump(app, seconds, deadline_note=""):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         app.processEvents()
-        app.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         time.sleep(0.005)
     if deadline_note:
         sys.stderr.write(f"[pump] {deadline_note}\n")
@@ -259,9 +259,9 @@ def redirect_persistence(scratch: Path) -> None:
     import audian.audian as A
 
     A.settings_path = lambda: scratch / "settings.json"
-    QSettings.setDefaultFormat(QSettings.IniFormat)
-    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
-        for scope in (QSettings.UserScope, QSettings.SystemScope):
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
             QSettings.setPath(fmt, scope, os.fspath(scratch))
 
 
@@ -473,7 +473,7 @@ def main(argv=None):
         from PySide6.QtWidgets import QLabel
 
         for _ in range(5):
-            app.sendPostedEvents(None, QEvent.DeferredDelete)
+            app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             app.processEvents()
         tops = QApplication.topLevelWidgets()
         visible = [w for w in tops if w.isVisible()]
@@ -523,7 +523,7 @@ def main(argv=None):
 
     main_win.close()
     pump(app, 0.5)
-    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     if faults:
         sys.stderr.write("\nFAULTS:\n")
