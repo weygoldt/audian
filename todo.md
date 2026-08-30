@@ -11,9 +11,63 @@
   1100. It is what stops the window going below 734, so it is next if audian
   ever has to tile into half a laptop panel.
 
-- [ ] Follow native system theme (colors, fonts, icons) instead of building a whole coustom theme from scratch. I like how the two themes currently look, they are beautiful. But I think following the system is just better practice.
+- [x] Follow native system theme (colors, fonts, icons).  Done as a third
+  theme preference, `system`, which is now the default.  It takes the
+  desktop's palette, its UI font and its icon pack, and follows
+  `colorSchemeChanged` live.  The standard Qt way turned out to be *stop
+  overriding*: while it is on, audian forces no style, sets no palette and
+  applies no application stylesheet, and `tint`/`frame`/`band` use
+  setPalette / QFrame shapes / setBackgroundRole instead of per-widget
+  sheets.  Pinning dark or light still loads the two hand-made tables.
 
-- [ ] Store user settings in .config directory. Currently, this is already done for some settings I think, like theme preference and spectrogram y-axis limits. But for example, the spec nfft, the cmap, etc. should also live there.
+  What is still ours, and has to be: pyqtgraph resolves pens at
+  construction, so the plot layer needs explicit colours and a QPalette has
+  no opinion about what colour a filtered trace is.  Those tokens are
+  derived from the platform palette where a role exists and kept from the
+  matching hand-made table where none does -- the data series, the
+  annotation hues, the spectrogram colormaps.  Derived tokens are then
+  pushed away from their ground until they clear 4.5:1, because a desktop
+  is under no obligation to: measured here, Breeze's accent scores 3.71 on
+  the window ground and arrives as #4f9dcf rather than #308cc6.
+
+- [ ] Seven toolbar glyphs have no freedesktop name -- spectrogram, trace,
+  meanspec, colorbar, navigator, channels, play-region -- so in system mode
+  the bar mixes the desktop's icon pack with seven drawn glyphs of our own.
+  They agree on ink, since the drawn ones use the derived tokens, but not
+  on drawing style.  Either find names that exist across the common packs
+  or accept the mix; it is visible in the tool bar and nowhere else.
+
+- [ ] The absolute pixel metrics were tuned to Inter 10pt and system mode
+  now runs them against whatever face and size the desktop has -- 9pt Sans
+  Serif here.  TOOLBAR_HEIGHT 36, CHANNEL_DENSE_HEIGHT 34,
+  TOOLBAR_BUTTON_BOX 30, RAIL_NUMBER_HEIGHT 14, CONTROL_HEIGHT 26 and
+  CHIP_HEIGHT 22 are the ones that would have to become QFontMetrics
+  expressions before a reader with a 12pt desktop font is safe: at that
+  size five of sixteen channels go below the scroll, which is the failure
+  CHANNEL_DENSE_HEIGHT's own comment records.  Not hit here because the
+  desktop font is smaller than Inter, not larger.
+
+- [x] Store user settings in .config directory.  The spectrogram colormap
+  moved out of the QSettings INI it had to itself and into settings.json
+  under a versioned `spectrogram` key, together with nfft and the overlap.
+  It is stored as a **name per theme** rather than as the index it was: the
+  two themes offer different lists, so the same index meant a different map
+  on each and an index past the end of the shorter one was silently clamped
+  to zero -- and now that the theme can follow the desktop and flip with no
+  gesture at all, that would have been a preference resetting itself twice
+  a day.  `save_setting` also became atomic; it rewrites the whole document
+  for one key, and an interrupted write took the label vocabulary with it.
+
+- [ ] The rest of the unpersisted state, if it is wanted: panel visibility
+  (`show_traces`, `show_specs`, `show_powers`, `mean_spec`), the y-range
+  policy, the grid mode, the cross hair, rail visibility, the audio group
+  and the eight cross-tab `link_*` switches.  Filter cutoffs are the
+  awkward ones and were left alone deliberately: `BufferedFilter.open`
+  resets all three unconditionally, so the only correct place to restore
+  them is `DataBrowser.open` after the loader, which is where -f/-l already
+  land -- so persisting them means deciding the CLI-versus-settings
+  precedence, and that is a decision rather than a mechanism.  Channel
+  selection is per-file and needs the clamp `open()` already applies.
 
 # Spec stuff 
 
