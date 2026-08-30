@@ -122,7 +122,10 @@ class JoinBrowser(DataBrowser):
         )
 
     def __del__(self):
-        # DataBrowser.__del__ closes a recording this browser never opened
+        # Kept, though DataBrowser.__del__ that it used to shadow is gone.
+        # Run on its own this module segfaults at session teardown with or
+        # without it, and did so before any of the shutdown work, so nothing
+        # here says which way is safe.  Left alone rather than changed blind.
         pass
 
     def notify(self, level, message):

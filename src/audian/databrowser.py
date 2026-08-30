@@ -45,6 +45,7 @@ from .panels import Panel, Panels
 from .panelsplitter import PanelSplitter
 from .plotranges import PlotRanges
 from .bufferedspectrogram import BufferedSpectrogram
+from .tasks.compute import ComputeJob, plan_chain
 from .fulltraceplot import (
     MODE_ALL,
     MODE_SINGLE,
@@ -1312,8 +1313,21 @@ class DataBrowser(QWidget):
         self.envelope_timer.setSingleShot(True)
         self.envelope_timer.timeout.connect(self.apply_envelope)
         self.pending_envelope = None
+        self.resolution_timer = QTimer(self)
+        self.resolution_timer.setSingleShot(True)
+        self.resolution_timer.timeout.connect(self.apply_resolution)
+        self.pending_nfft = None
+        self.pending_overlap = None
         self.overview_timer = QTimer(self)
         self.overview_timer.timeout.connect(self.report_overview_progress)
+        #: the application's `TaskManager`, adopted in `open()`.  None means
+        #: no worker thread is available and every recompute runs inline --
+        #: which is what a browser built without a main window gets.
+        self.tasks = None
+        self._tasks_connected = False
+        #: trace whose recompute has been asked for and not yet applied, so
+        #: that a scroll cancelling it does not simply lose it
+        self._pending_recompute = None
 
         # y-range policy:
         self.y_mode = DataBrowser.y_shared
@@ -1445,9 +1459,6 @@ class DataBrowser(QWidget):
         self.datafig = None
         # colors and fonts are owned by theme.apply()
 
-    def __del__(self):
-        self.close()
-
     @staticmethod
     def read_color_map_setting() -> int:
         """Spectrogram colormap index as stored by a previous session."""
@@ -1542,13 +1553,152 @@ class DataBrowser(QWidget):
         panel_name = self.data[trace_name].panel
         self.panels[panel_name].add_item(plot_item, channel, False)
 
+    def trace_plot_items(self, name):
+        """Every plot item drawing trace `name`, over all panels and lanes.
+
+        The traces used to be reachable the other way round, from
+        `BufferedData.plot_items` -- which put live `QGraphicsItem`s inside
+        the data layer and made a threaded recompute impossible.  The items
+        live where they are drawn; showing and hiding them is the browser's
+        business, and the data layer only reads the bool flags they mirror
+        back (see `dataitem.VisibleChannelMirror`).
+        """
+        wanted = str(name).lower()
+        items = []
+        for panel in self.panels.values():
+            for ax in panel.axs:
+                for item in getattr(ax, "data_items", []):
+                    data = getattr(item, "data", None)
+                    if data is not None and str(data.name).lower() == wanted:
+                        items.append(item)
+        return items
+
+    def set_trace_visible(self, name, show) -> bool:
+        """Show or hide every item drawing trace `name`. True if anything moved."""
+        changed = False
+        for item in self.trace_plot_items(name):
+            if item.isVisible() != show:
+                changed = True
+            item.setVisible(show)
+        return changed
+
+    # --- recomputing traces off the GUI thread ---------------------------
+
+    def adopt_task_manager(self, tasks) -> None:
+        """Route this browser's recomputes through `tasks`, or inline."""
+        self.tasks = tasks
+        if tasks is None or self._tasks_connected:
+            return
+        worker = tasks.worker("compute")
+        if worker is not None:
+            worker.sigResultReady.connect(self.apply_compute_result)
+            self._tasks_connected = True
+
+    def request_recompute(self, trace, **params) -> bool:
+        """Apply `params` to `trace` and recompute it and everything derived.
+
+        Returns True when the work was handed to a worker thread.
+
+        The `cancel_and_wait()` first is not a formality.  `process()` reads
+        the trace's own parameters -- `sos`, `nfft`, `hop` -- while it runs,
+        so changing one under a job in flight would filter the second half
+        of a buffer with a different filter than the first.  Joining first
+        makes that impossible, and the join is bounded by one chunk: about
+        11 ms, against the 407 ms freeze it replaces.
+        """
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
+        if not trace.prepare_update(**params):
+            # nothing to recompute, but the caller still asked for a redraw
+            self.redraw_recomputed()
+            return False
+        return self.submit_recompute(trace)
+
+    def submit_recompute(self, trace) -> bool:
+        """Plan and dispatch a recompute of `trace`, with no parameter work.
+
+        Split from `request_recompute` so that a recompute a buffer move had
+        to abandon can be started again without re-applying the parameters
+        -- see `resume_recompute`.
+        """
+        steps = plan_chain(trace)
+        if self.tasks is None or not steps:
+            self._pending_recompute = None
+            trace.recompute_all()
+            self.redraw_recomputed()
+            return False
+        self._pending_recompute = trace
+        epoch, token = self.tasks.bump()
+        self.tasks.submit(ComputeJob(epoch, token, tuple(steps), self))
+        return True
+
+    def resume_recompute(self) -> None:
+        """Start again what a buffer move had to abandon.
+
+        Panning cancels whatever is in flight, because `update_times` shifts
+        the arrays a worker is reading.  Without this the cancelled work
+        would simply be lost: `align_buffer` recycles the overlapping part
+        of a moved buffer rather than recomputing it, so a filter change
+        followed quickly by a scroll would leave most of the trace filtered
+        with the *previous* cutoffs, and leave it that way.
+        """
+        trace = self._pending_recompute
+        if trace is not None and self.tasks is not None:
+            self.submit_recompute(trace)
+
+    def apply_compute_result(self, result) -> None:
+        """Swap in what the worker produced, or drop it. GUI thread only.
+
+        Three things get dropped: a result for another tab, a result whose
+        epoch has been superseded by a later request, and one that was
+        cancelled.  Dropping is the whole of the stale-result policy -- the
+        arrays go with the result object.
+        """
+        if result.owner is not self:
+            return
+        if result.error is not None:
+            log.warning("recompute failed:\n%s", result.error)
+            return
+        if result.cancelled or not self.tasks.is_current(result.epoch):
+            return
+        for update in result.updates:
+            update.trace.apply_update(update)
+        self._pending_recompute = None
+        self.redraw_recomputed()
+
+    def redraw_recomputed(self) -> None:
+        """Put the recomputed buffers on screen.
+
+        Called from wherever the recompute actually finished, which on the
+        threaded path is a later turn of the event loop than the gesture
+        that asked for it.  `apply_filter` used to draw *before* the
+        recompute it had just scheduled on a zero-delay timer, so a filter
+        change did not reach the traces until the next pan -- checked on the
+        two channel file: the drawn arrays were byte-identical before and
+        after a cutoff change.
+
+        `setting` is raised for the same reason the callers that used to do
+        this inline raised it: `setData` informs the view of new bounds, and
+        an auto-ranging viewbox answers with `sigRangeChanged`, which would
+        bounce straight back into `set_times`.  Saved and restored rather
+        than set and cleared, because the inline path is already inside
+        `updating()`.
+        """
+        was_setting = self.setting
+        self.setting = True
+        try:
+            self.panels.update_plots()
+            self.plot_ranges.set_powers()
+        finally:
+            self.setting = was_setting
+
     def toggle_trace(self, checked, name):
-        self.data.set_visible(name, checked)
+        self.set_trace_visible(name, checked)
         self.adjust_layout(self.width(), self.height())
         self.sigTraceChanged.emit(self, checked, name)
 
     def set_trace(self, checked, name):
-        self.data.set_visible(name, checked)
+        self.set_trace_visible(name, checked)
         for act in self.trace_acts:
             if act.text() == name:
                 act.blockSignals(True)
@@ -1560,6 +1710,7 @@ class DataBrowser(QWidget):
         # the progress slot all live on it, and a browser is not always the
         # child of the window it belongs to while tabs are being moved.
         self.gui = gui
+        self.adopt_task_manager(getattr(gui, "tasks", None))
         # load data:
         self.data.open(unwrap, unwrap_clip)
         if self.data.data is None:
@@ -2185,7 +2336,7 @@ class DataBrowser(QWidget):
             self.nfftw.setEditable(False)
             self.set_nfft_widget(spectrogram.nfft)
             self.nfftw.currentIndexChanged.connect(
-                lambda i: self.set_resolution(nfft=self.nfftw.itemData(i))
+                lambda i: self.update_resolution(nfft=self.nfftw.itemData(i))
             )
             group.add_row("Window", "R / ⇧R", self.nfftw)
 
@@ -2197,7 +2348,7 @@ class DataBrowser(QWidget):
             self.ofracw.setTickInterval(25)
             self.ofracw.setValue(int(round(100 * spectrogram.overlap_frac)))
             self.ofracw.valueChanged.connect(
-                lambda v: self.set_resolution(overlap_frac=0.01 * v)
+                lambda v: self.update_resolution(overlap_frac=0.01 * v)
             )
             self.ofraclabelw = QLabel()
             self.ofraclabelw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
@@ -3187,9 +3338,51 @@ class DataBrowser(QWidget):
         if datas is None or times is None or len(times) != len(datas):
             self.notify("error", "overview unavailable")
 
-    def close(self):
+    def shutdown(self):
+        """Release the recording and everything derived from it.
+
+        Named `shutdown` rather than `close` because a `QWidget` already has
+        a `close`, and a browser that overrides it makes `widget.close()`
+        mean "let go of the file" to this class and "close the window" to
+        every caller who has only ever seen Qt's.
+
+        The timers are stopped first, and the order is the point rather than
+        tidiness.  `audio_timer` fires every 50 ms into `mark_audio`, which
+        calls `stop()` on the playback device the window is about to close,
+        and `scroll_timer` walks the very recording the next two lines
+        release.  A timer left running is a read of something that is gone,
+        somewhere between the last tick and the process ending.
+
+        Looked up by name so a subclass whose `__init__` stopped before it
+        built them is a no-op rather than an `AttributeError` raised out of a
+        teardown, and `stop()` is guarded because Qt may already have
+        destroyed the C++ timer under a wrapper Python still holds.
+        """
+        for name in (
+            "scroll_timer",
+            "audio_timer",
+            "resize_timer",
+            "filter_timer",
+            "envelope_timer",
+            "resolution_timer",
+            "overview_timer",
+        ):
+            timer = getattr(self, name, None)
+            if timer is None:
+                continue
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
+        # A tab can close without the window closing, so this is the other
+        # place a worker can be left reading a recording that is about to be
+        # released.  `Audian.teardown` shuts the manager down for good; this
+        # only drains it.
+        self._pending_recompute = None
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
         if self.datafig is not None:
-            self.datafig.close()
+            self.datafig.shutdown()
         if self.data is not None:
             self.data.close()
 
@@ -3616,11 +3809,11 @@ class DataBrowser(QWidget):
     def flush_labels(self) -> None:
         """Write any pending labels before this browser goes away.
 
-        There is no `closeEvent` anywhere in audian and `Audian.quit` never
-        goes through Qt's close machinery at all, so both exit paths call
-        this by hand.  A queued zero-timer save would otherwise be dropped
-        with the event loop, and the last label of a session is exactly the
-        one a reader has not written down anywhere else.
+        A queued zero-timer save would otherwise be dropped with the event
+        loop, and the last label of a session is exactly the one a reader has
+        not written down anywhere else.  `Audian.closeEvent` calls this for
+        every browser when the window goes; `Audian.close_tab` calls it for
+        the one tab that goes without the window.
         """
         if self.labels.dirty or self.label_save_pending:
             self.save_labels()
@@ -7028,6 +7221,10 @@ class DataBrowser(QWidget):
     def set_times(self, toffset=None, twindow=None):
         if self.setting:
             return
+        # `update_times` shifts the loader's buffer in place, so no worker
+        # may be reading it. Bounded by one chunk, ~11 ms at 16 channels.
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
         with self.updating():
             trange = self.plot_ranges[Panel.times[0]]
             trange.set_ranges(toffset, None, twindow, None, True)
@@ -7035,6 +7232,7 @@ class DataBrowser(QWidget):
             self.sigFilenameChanged.emit(self, fn)
             self.panels.update_plots()
             self.plot_ranges.set_powers()
+        self.resume_recompute()
         self.update_levels()
         if not self.y_locked:
             self.auto_fit_y()
@@ -7098,6 +7296,37 @@ class DataBrowser(QWidget):
                 ].z()
             self.set_resolution()
 
+    def update_resolution(self, nfft=None, overlap_frac=None) -> None:
+        """Debounced entry point for the Fourier window and the overlap.
+
+        The last expensive control in the parameter bar with no coalescing.
+        Dragging the overlap slider emits one `valueChanged` per integer
+        percent, and each one reallocates a three-dimensional buffer and
+        re-runs the whole transform -- 447 ms of it at 16 channels -- so a
+        drag across twenty values paid for twenty transforms of which
+        nineteen were obsolete before they finished.
+
+        Same shape as `update_filter`: stash the value, restart the timer,
+        and let `apply_resolution` run once when the burst stops.  The
+        keyboard steps read the *pending* value so that holding R down keeps
+        doubling instead of stepping off the same settled window each time.
+        """
+        if nfft is not None:
+            self.pending_nfft = int(nfft)
+        if overlap_frac is not None:
+            self.pending_overlap = float(overlap_frac)
+        self.resolution_timer.start(200)
+
+    def apply_resolution(self) -> None:
+        """Set the resolution from the stashed window and overlap."""
+        nfft = self.pending_nfft
+        overlap_frac = self.pending_overlap
+        self.pending_nfft = None
+        self.pending_overlap = None
+        if nfft is None and overlap_frac is None:
+            return
+        self.set_resolution(nfft=nfft, overlap_frac=overlap_frac)
+
     def set_resolution(
         self, nfft=None, overlap_frac=None, dispatch: bool = True
     ) -> None:
@@ -7113,9 +7342,7 @@ class DataBrowser(QWidget):
             return
         spectrogram = self.data[self.spectrogram]
         with self.updating():
-            spectrogram.update(nfft, overlap_frac)
-            self.panels.update_plots()
-            self.plot_ranges.set_powers()
+            self.request_recompute(spectrogram, nfft=nfft, overlap_frac=overlap_frac)
             if self.nfftw is not None:
                 self.set_nfft_widget(spectrogram.nfft)
                 T = spectrogram.nfft / self.data.rate
@@ -7144,23 +7371,38 @@ class DataBrowser(QWidget):
         if dispatch:
             self.sigResolutionChanged.emit()
 
+    def current_nfft(self) -> int:
+        """The window the next step should be taken from.
+
+        A pending value if there is one, so that holding R down keeps
+        doubling rather than stepping off the same settled value each time.
+        """
+        if self.pending_nfft is not None:
+            return self.pending_nfft
+        return self.data[self.spectrogram].nfft
+
+    def current_overlap(self) -> float:
+        if self.pending_overlap is not None:
+            return self.pending_overlap
+        return self.data[self.spectrogram].overlap_frac
+
     def freq_resolution_down(self):
         if self.spectrogram in self.data:
-            self.set_resolution(nfft=self.data[self.spectrogram].nfft // 2)
+            self.update_resolution(nfft=self.current_nfft() // 2)
 
     def freq_resolution_up(self):
         if self.spectrogram in self.data:
-            self.set_resolution(nfft=2 * self.data[self.spectrogram].nfft)
+            self.update_resolution(nfft=2 * self.current_nfft())
 
     def overlap_frac_up(self):
         if self.spectrogram in self.data:
-            hop_frac = 1 - self.data[self.spectrogram].overlap_frac
-            self.set_resolution(overlap_frac=1 - hop_frac / 2)
+            hop_frac = 1 - self.current_overlap()
+            self.update_resolution(overlap_frac=1 - hop_frac / 2)
 
     def overlap_frac_down(self):
         if self.spectrogram in self.data:
-            hop_frac = 1 - self.data[self.spectrogram].overlap_frac
-            self.set_resolution(overlap_frac=1 - hop_frac * 2)
+            hop_frac = 1 - self.current_overlap()
+            self.update_resolution(overlap_frac=1 - hop_frac * 2)
 
     def set_color_map(self, color_map=None, dispatch: bool = True) -> None:
         """Apply a perceptually uniform spectrogram colormap and remember it."""
@@ -7231,12 +7473,7 @@ class DataBrowser(QWidget):
             for ax in self.panels["spectrogram"].axs:
                 ax.set_filter_handles(filtered.highpass_cutoff, filtered.lowpass_cutoff)
             self.set_filter_widgets(filtered.highpass_cutoff, filtered.lowpass_cutoff)
-            if hasattr(filtered, "request_update"):
-                filtered.request_update(0)
-            else:
-                filtered.update()
-            self.panels.update_plots()
-            self.plot_ranges.set_powers()
+            self.request_recompute(filtered)
         # the navigator resolves raw-vs-filtered from the live cutoffs, so it
         # has to be told the moment they change or the strip stays cyan for a
         # whole interaction while the stack above has already gone amber:
@@ -7291,12 +7528,8 @@ class DataBrowser(QWidget):
         with self.updating():
             envelope.envelope_cutoff = self.pending_envelope
             self.pending_envelope = None
-            if hasattr(envelope, "request_update"):
-                envelope.request_update(0)
-            else:
-                envelope.update()
             self.data.set_need_update()
-            self.panels.update_plots()
+            self.request_recompute(envelope)
             if self.envfw is not None:
                 blocked = self.envfw.blockSignals(True)
                 self.envfw.setValue(envelope.envelope_cutoff)
@@ -7595,11 +7828,14 @@ class DataBrowser(QWidget):
             self.datafig.setVisible(self.show_fulldata)
         self.adjust_layout(self.width(), self.height())
         self.data.set_need_update()
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
         trange = self.plot_ranges[Panel.times[0]]
         fn = self.data.update_times(trange.r0[0], trange.r1[0])
         self.sigFilenameChanged.emit(self, fn)
         self.panels.update_plots()
         self.plot_ranges.set_powers()
+        self.resume_recompute()
 
     def toggle_traces(self):
         self.show_traces = not self.show_traces

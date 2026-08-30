@@ -558,10 +558,13 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
         axis.setHeight(0)
         return axis
 
-    def __del__(self):
-        self.close()
+    def shutdown(self):
+        """Stop the navigator's timers and let the worker pool go.
 
-    def close(self):
+        Named `shutdown` for the same reason `DataBrowser.shutdown` is: this
+        is a `QWidget`, and shadowing `close` turns every `widget.close()` in
+        the tree into something the caller did not ask for.
+        """
         try:
             for timer in (self._timer, self._align_timer):
                 if timer is not None:

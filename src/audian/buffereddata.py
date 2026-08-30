@@ -1,13 +1,32 @@
 """Base class for computed data."""
 
-import inspect
-
 import numpy as np
 from audioio import BufferedArray
 from math import ceil, floor
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Signal
 
 from . import theme
+
+
+#: Source bytes a chunked kernel works on at a time.
+#:
+#: Chunking exists for interruptibility -- the cancel token is polled
+#: between chunks, so a superseded refilter releases the CPU within one
+#: chunk instead of after a whole 27 s buffer.  It is not paid for: the
+#: chunk stays in cache, so it is *faster* than the single call.  Measured
+#: on the 16 channel, 20 kHz, 27 s buffer (70 MB) against 133 ms for one
+#: `sosfilt`: 16 MB +7.4%, 8 MB +5.5%, 4 MB -4.0%, 2 MB -21.9%,
+#: 1 MB -24.0%, 0.5 MB -26.6%, 0.25 MB -28.3%.  1 MB is 1.4 ms of work per
+#: chunk -- far finer than a frame, and most of the speedup.
+CHUNK_BYTES = 1_000_000
+
+
+def chunk_frames(source, chunk_bytes: int = CHUNK_BYTES) -> int:
+    """How many frames of `source` fit in one chunk. At least one."""
+    row = source.itemsize
+    for n in source.shape[1:]:
+        row *= n
+    return max(1, chunk_bytes // max(1, row))
 
 
 class _Notifier(QObject):
@@ -15,9 +34,12 @@ class _Notifier(QObject):
 
     `BufferedData` cannot inherit from `QObject` without dragging the sip
     metaclass into `BufferedArray`'s hierarchy, so the one signal it needs
-    lives on a plain helper object instead.
+    lives on a plain helper object instead.  It is also why a trace cannot
+    be `moveToThread`'d, and why the compute worker hands *values* back
+    rather than being given the trace to own.
     """
 
+    #: emitted with a `tasks.TraceUpdate` once a new buffer is in place
     sigUpdated = Signal(object)
 
 
@@ -45,7 +67,12 @@ class BufferedData(BufferedArray):
         self.tafter = 0
         self.panel = panel
         self.panel_type = panel_type
-        self.plot_items = []
+        #: per channel, is anything actually drawing this trace right now?
+        #: Written by the plot items (see `dataitem.VisibleChannelMirror`),
+        #: read here.  A plain array rather than the items themselves, so
+        #: that deciding whether a recompute is worth doing never touches a
+        #: widget -- and so a worker thread may read it.
+        self.visible_channels = np.zeros(0, dtype=bool)
         self.color = theme.trace_color(name) if color is None else color
         self.lw_thin = theme.LW_THIN if lw_thin is None else lw_thin
         self.lw_thick = theme.LW_THICK if lw_thick is None else lw_thick
@@ -59,12 +86,9 @@ class BufferedData(BufferedArray):
         # bumped whenever buffer content is (re)loaded, so that a single
         # shared pyramid rebuild can be triggered from any plot item:
         self.buffer_generation = 0
-        # debounced recompute, see request_update():
+        # how a finished recompute is announced, see apply_update():
         self._notifier = _Notifier()
         self.sigUpdated = self._notifier.sigUpdated
-        self._update_timer = None
-        self._update_params = {}
-        self._update_pending = False
 
     def expand_times(self, tbefore, tafter):
         self.tbefore += tbefore
@@ -102,7 +126,7 @@ class BufferedData(BufferedArray):
         self.rate = self.source.rate
         self.buffer_changed = np.zeros(self.channels, dtype=bool)
         self.buffer = np.zeros((0, self.channels), dtype=self.dtype)
-        self.plot_items = [None] * self.channels
+        self.visible_channels = np.zeros(self.channels, dtype=bool)
         self.buffer_generation = 0
         self.mip_pyramid = MinMaxPyramid() if more_shape is None else None
         self.update_step(step, more_shape)
@@ -144,13 +168,18 @@ class BufferedData(BufferedArray):
         self.move_buffer(offset, nframes)
         self.bufferframes = len(self.buffer)
 
-    def load_buffer(self, offset, nframes, buffer):
-        if self.verbose > 0:
-            print(
-                f"load {self.name} {offset / self.rate:.3f} - "
-                f"{(offset + nframes) / self.rate:.3f}"
-            )
-        self.buffer_generation += 1
+    def source_window(self, offset, nframes, source_offset, source_frames):
+        """Where `[offset, offset+nframes)` comes from in a source buffer.
+
+        Returns `(start, stop, nbefore)` -- the slice to read, and how many
+        of its leading frames are filter warm-up that the kernel computes
+        and then throws away.
+
+        Split out of `load_buffer` because the compute worker needs the same
+        arithmetic against a buffer that is *not* `self.source.buffer`: for
+        the second and later traces of a chain the source is the array the
+        previous step just produced.
+        """
         # transform to rate of source buffer:
         soffset = floor(offset * self.source.rate / self.rate)
         snframes = ceil((offset + nframes) * self.source.rate / self.rate) - soffset
@@ -164,38 +193,96 @@ class BufferedData(BufferedArray):
         snframes += nbefore
         nafter = ceil(self.source_tafter * self.source.rate)
         snframes += nafter
-        soffset -= self.source.offset
+        soffset -= source_offset
         if soffset < 0:
             nbefore += soffset
             snframes += soffset
             soffset = 0
-        if soffset + snframes > len(self.source.buffer):
-            snframes = len(self.source.buffer) - soffset
-        source = self.source.buffer[soffset : soffset + snframes]
-        self.process(source, buffer, nbefore)
+        if soffset + snframes > source_frames:
+            snframes = source_frames - soffset
+        return soffset, soffset + snframes, nbefore
+
+    def load_buffer(self, offset, nframes, buffer):
+        if self.verbose > 0:
+            print(
+                f"load {self.name} {offset / self.rate:.3f} - "
+                f"{(offset + nframes) / self.rate:.3f}"
+            )
+        self.buffer_generation += 1
+        i0, i1, nbefore = self.source_window(
+            offset, nframes, self.source.offset, len(self.source.buffer)
+        )
+        extra = self.process(self.source.buffer[i0:i1], buffer, nbefore)
+        if extra:
+            self.apply_extra(extra)
+        self.after_load()
+
+    def after_load(self) -> None:
+        """Hook for what a trace derives from its own settled buffer.
+
+        Runs on the GUI thread on both paths -- after `process()` here, and
+        after the swap in `apply_update()`.  A subclass that needs the *new*
+        buffer's extent (the spectrogram does) computes it here rather than
+        inside `process()`, where `self.buffer` is still the old array the
+        screen is being painted from.
+        """
+
+    def apply_extra(self, extra: dict) -> None:
+        """Adopt the scalars a `process()` derived along with the buffer.
+
+        `process()` returns them rather than assigning them, because it also
+        runs on a worker thread, where writing straight into the live trace
+        would race whatever the GUI is painting from it.  On the synchronous
+        path this is called one statement later and nothing changes.
+        """
+        for key, value in extra.items():
+            setattr(self, key, value)
 
     def recompute(self):
         if len(self.source.buffer) > 0:
             self.allocate_buffer()
         self.reload_buffer()
 
-    def is_visible(self):
-        for pi in self.plot_items:
-            if pi is not None and pi.isVisible():
-                return True
-        return False
+    def planned_frames(self) -> int:
+        """How long a buffer `recompute()` would produce.
 
-    def set_visible(self, show):
-        for pi in self.plot_items:
-            if pi is not None:
-                pi.setVisible(show)
+        Exactly what `recompute()` ends up with: `allocate_buffer()` clamps
+        `bufferframes` to the trace length and reallocates to it, and
+        `reload_buffer()` then fills `len(self.buffer)`.  Splitting the
+        answer out lets the compute worker allocate its own output while the
+        clamping -- a write to this object -- stays on the GUI thread.
+        """
+        if len(self.source.buffer) > 0:
+            if self.bufferframes > self.frames:
+                self.bufferframes = self.frames
+                self.backframes = 0
+            if self.bufferframes > 0:
+                return self.bufferframes
+        return len(self.buffer)
+
+    def apply_update(self, update) -> None:
+        """Adopt a buffer a worker computed. GUI thread only.
+
+        The swap is one assignment, so a repaint that lands between two
+        traces of a chain sees a whole buffer of one and a whole buffer of
+        the other -- never a half-filled one, which is what writing into the
+        live buffer would have given.
+        """
+        self.buffer = update.buffer
+        self.offset = update.offset
+        self.bufferframes = len(update.buffer)
+        self.buffer_generation += 1
+        self.buffer_changed[:] = True
+        if update.extra:
+            self.apply_extra(update.extra)
+        self.after_load()
+        self.sigUpdated.emit(update)
+
+    def is_visible(self):
+        return bool(self.visible_channels.any())
 
     def set_need_update(self):
-        self.need_update = False
-        for pi in self.plot_items:
-            if pi is not None and pi.isVisible():
-                self.need_update = True
-                break
+        self.need_update = bool(self.visible_channels.any())
         for d in self.dests:
             d.set_need_update()
         # end of dependency chain:
@@ -213,66 +300,21 @@ class BufferedData(BufferedArray):
             for d in self.dests:
                 d.recompute_all()
 
-    # --- debounced recompute -------------------------------------------
+    def prepare_update(self) -> bool:
+        """Apply changed parameters. True if a recompute is now wanted.
 
-    def _update_signature(self):
-        """Names of the keyword parameters `update()` accepts."""
-        cls = type(self)
-        names = cls.__dict__.get("_update_param_names")
-        if names is None:
-            try:
-                params = inspect.signature(self.update).parameters
-            except (TypeError, ValueError):
-                params = {}
-            names = frozenset(params)
-            cls._update_param_names = names
-        return names
-
-    def request_update(self, delay_ms: int = 200, **params) -> None:
-        """Schedule a debounced recompute of this trace.
-
-        Key auto-repeat on a filter cutoff used to run the whole chain
-        synchronously per keystroke: 258 ms of sosfilt plus 857 ms of
-        spectrogram plus 424 ms of decibel plus ~350 ms of setImage, on the
-        GUI thread, for every repeat.  Collapsing a burst into one recompute
-        is what makes the control usable.
-
-        `params` are applied to `update()` if it declares them and set as
-        attributes otherwise, so `request_update(highpass_cutoff=300)` and
-        `request_update(nfft=512)` both do the right thing.  Completion is
-        announced by `sigUpdated`, which is also where a future QThreadPool
-        implementation would emit from -- no signature change needed.
+        Split out of `update()` so that the parameter work -- which writes
+        to this object and therefore belongs on the GUI thread -- can happen
+        without the recompute, which does not.  `update()` is still the
+        synchronous whole; `DataBrowser.request_recompute` is the other
+        caller.
         """
-        self._update_params.update(params)
-        if self._update_timer is None:
-            self._update_timer = QTimer()
-            self._update_timer.setSingleShot(True)
-            self._update_timer.timeout.connect(self.flush_update)
-        self._update_pending = True
-        self._update_timer.start(max(0, int(delay_ms)))
-
-    def flush_update(self) -> None:
-        """Run a pending `request_update()` right now."""
-        if self._update_timer is not None:
-            self._update_timer.stop()
-        if not self._update_pending:
-            return
-        self._update_pending = False
-        params = self._update_params
-        self._update_params = {}
-        accepted = self._update_signature()
-        kwargs = {}
-        for key, value in params.items():
-            if key in accepted:
-                kwargs[key] = value
-            else:
-                setattr(self, key, value)
-        self.update(**kwargs)
-        self.sigUpdated.emit(self)
+        return True
 
     def update(self):
         """Recompute this trace. Subclasses add their own parameters."""
-        self.recompute_all()
+        if self.prepare_update():
+            self.recompute_all()
 
 
 class MinMaxPyramid:

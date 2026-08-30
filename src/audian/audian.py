@@ -38,6 +38,8 @@ from .eventoverlay import SURFACE_LABELS, SURFACE_ORDER
 from .fulltraceplot import OVERVIEW_ACTIVITY, secs_to_str
 from .plugins import Plugins
 from .panels import Panel
+from .tasks.compute import ComputeWorker
+from .tasks.manager import TaskManager
 
 
 log = logging.getLogger("audian")
@@ -1523,6 +1525,15 @@ class Audian(QMainWindow):
         self.events_path = events_path
 
         self.audio = PlayAudio()
+        # One task manager for the whole window, not one per tab: the
+        # pipeline is serial by design (the kernels do not parallelise, see
+        # tasks/compute.py), so five open recordings should share one worker
+        # thread rather than start ten.  Every browser adopts it in
+        # `DataBrowser.open`.
+        self.tasks = TaskManager(self)
+        self.tasks.add_worker("compute", ComputeWorker(self.tasks))
+        # `closeEvent` may fire twice; `teardown` reads this to run once
+        self._torn_down = False
 
         self.link_timezoom = True
         self.link_timescroll = False
@@ -1574,7 +1585,7 @@ class Audian(QMainWindow):
         # connect the BAR, not the QTabWidget: the widget only forwards its
         # bar's tabCloseRequested while setTabsClosable(True), and the close
         # marks here are painted by VerticalTabBar rather than by Qt.
-        self.tabs.tabBar().tabCloseRequested.connect(self.close)
+        self.tabs.tabBar().tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self.adapt_menu)
 
         # page 0 is the empty state, page 1 the browser tabs.  The empty
@@ -1633,10 +1644,6 @@ class Audian(QMainWindow):
             self.hide_startup()
         else:
             self.show_startup()
-
-    def __del__(self):
-        if self.audio is not None:
-            self.audio.close()
 
     def set_app_theme(self, name: str) -> None:
         """Switch the whole application between the dark and daylight themes.
@@ -2876,7 +2883,7 @@ class Audian(QMainWindow):
 
         self.acts.close = QAction("&Close tab", self)
         self.acts.close.setShortcut("Ctrl+W")
-        self.acts.close.triggered.connect(lambda x: self.close(None))
+        self.acts.close.triggered.connect(lambda x: self.close_tab(None))
 
         self.acts.quit = QAction("&Quit", self)
         self.acts.quit.setShortcuts(QKeySequence.Quit)
@@ -4847,35 +4854,115 @@ class Audian(QMainWindow):
 <b>Audian</b>, version {__version__}<br>(c) {__year__}""",
         )
 
-    def close(self, index=None):
+    def close_tab(self, index=None):
+        """Close one recording, leaving the window and the other tabs up.
+
+        Named `close_tab` rather than `close` because `QMainWindow` already
+        has a `close` and this used to shadow it.  That shadow made
+        `self.close()` inside this class mean "close a tab", so `closeEvent`
+        below would have been unreachable from `quit`, and it made
+        `window.close()` in tests/conftest.py, in three fixtures and in
+        scripts/smoke_test.py mean something none of them asked for.
+
+        `flush_labels` is called by hand here because a tab can go without
+        the window going, so the close event is not on this path.
+
+        `deleteLater` because `removeTab` does not destroy the page: measured,
+        the browser stays a child of the tab widget's internal
+        `QStackedWidget`, hidden and off the tab bar but alive with its fifty
+        plots, for as long as the window lives.  `shutdown` had already given
+        the recording back, so what accumulated was widgets rather than file
+        handles -- and never anything `smoke_test --census` could report,
+        since that counts *parentless* top-level widgets and this one keeps a
+        parent.  The `del w` that used to sit here only unbound a local.
+        """
         if self.tabs.count() > 0:
             if index is None:
                 index = self.tabs.currentIndex()
             w = self.tabs.widget(index)
             if isinstance(w, DataBrowser):
-                # By hand, and in both exit paths: there is no closeEvent
-                # anywhere in audian, and `quit` below never goes through
-                # QWidget's close machinery at all, so a label saved by a
-                # queued zero-timer would go with the event loop.  Note that
-                # this method SHADOWS QWidget.close -- `self.close()`
-                # elsewhere in this class closes a tab, not the window.
                 w.flush_labels()
                 if w in self.browsers:
                     self.browsers.remove(w)
                 self.tabs.removeTab(index)
-                w.close()
-                del w
+                w.shutdown()
+                w.deleteLater()
         if self.tabs.count() == 0:
             self.show_startup()
 
-    def quit(self):
-        for w in self.browsers:
+    def teardown(self) -> None:
+        """Release everything the window owns, at most once.
+
+        Idempotent because a window can be asked to close twice -- Ctrl+Q
+        after the title bar's X, or Qt re-delivering on quit -- and the
+        second pass would otherwise flush labels through a browser that has
+        already let go of its recording.
+
+        The attributes are read with `getattr` rather than directly because
+        this runs from `closeEvent`, and Qt delivers a close event to any
+        window it is asked to close, including a subclass whose `__init__`
+        never reached the end -- tests/test_annotationpanel.py builds one.
+        Raising out of the close gesture is the failure this exists to
+        remove, not a diagnostic worth keeping.
+
+        `PlayAudio` is closed here and not in `DataBrowser.shutdown` because
+        one device is shared by every tab.
+        """
+        if getattr(self, "_torn_down", False):
+            return
+        self._torn_down = True
+        # First, before any browser lets go of its recording: the compute
+        # worker is reading that recording's buffers, and a QThread nobody
+        # joins is a crash at exit.  `shutdown` cancels, quits and waits with
+        # a bounded timeout, and never calls terminate().
+        tasks = getattr(self, "tasks", None)
+        if tasks is not None:
+            stuck = tasks.shutdown()
+            if stuck:
+                log.warning("worker threads did not stop: %s", ", ".join(stuck))
+        for w in list(getattr(self, "browsers", ())):
             w.flush_labels()
-            index = self.tabs.indexOf(w)
-            self.tabs.removeTab(index)
-            w.close()
-            del w
-        QApplication.quit()
+            if getattr(w, "annotation_save_pending", False):
+                w.save_annotation_settings()
+            w.shutdown()
+        audio = getattr(self, "audio", None)
+        if audio is not None:
+            audio.close()
+
+    def closeEvent(self, event):
+        """Run the teardown on the gesture that used to have none.
+
+        `QWidget::close` is not virtual, so the window manager's button
+        arrives here and nowhere else; before this existed it ran no label
+        flush, released no recording and closed no audio device.
+
+        Deliberately no `removeTab` loop: leaving the browsers parented lets
+        Qt destroy the tree in its own order, and avoids the
+        `currentChanged -> adapt_menu` storm the old `quit` body set off
+        across browsers it had already torn down.  Deliberately no modal
+        prompt either -- a dialog here would block every headless run,
+        including the whole test suite.
+
+        The event arrives already accepted, so `accept()` is a statement of
+        the decision not to veto rather than a necessity; it is also the
+        line a future "unsaved work?" prompt would turn into `ignore()`, at
+        which point `quit` below stops quitting, which is the point.
+        """
+        self.teardown()
+        event.accept()
+        super().closeEvent(event)
+
+    def quit(self):
+        """Ctrl+Q, routed through the same close machinery as the title bar.
+
+        `self.close()` is `QWidget.close` again now that the tab version is
+        called `close_tab`, so this delivers a close event and runs exactly
+        the teardown the window manager's button runs.  One exit path, not
+        two kept in step by hand.  It returns False if `closeEvent` ever
+        vetoes, and the application then stays up.
+        """
+        if self.close():
+            QApplication.quit()
 
 
 def audian_cli(cargs=[], plugins=None):

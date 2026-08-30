@@ -132,11 +132,6 @@ class PanelBrowser(DataBrowser):
         self.parambar = QWidget(self)
         self.param_groups = [self.setup_annotation_group()]
 
-    def __del__(self):
-        # DataBrowser.__del__ closes a recording and fifty plots; this one has
-        # neither, and letting it try raises out of the garbage collector
-        pass
-
     def notify(self, level, message):
         self.said.append((level, message))
 
@@ -995,9 +990,6 @@ class MenuHost(audian_app.Audian):
         browser.setParent(self)
         self.menu = QMenu(self)
         self.annotation_menu = self.setup_annotation_actions(self.menu)
-
-    def __del__(self):
-        pass
 
     def browser(self):
         return self.panel
