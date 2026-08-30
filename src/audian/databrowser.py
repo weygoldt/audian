@@ -1313,6 +1313,11 @@ class DataBrowser(QWidget):
         self.envelope_timer.setSingleShot(True)
         self.envelope_timer.timeout.connect(self.apply_envelope)
         self.pending_envelope = None
+        self.resolution_timer = QTimer(self)
+        self.resolution_timer.setSingleShot(True)
+        self.resolution_timer.timeout.connect(self.apply_resolution)
+        self.pending_nfft = None
+        self.pending_overlap = None
         self.overview_timer = QTimer(self)
         self.overview_timer.timeout.connect(self.report_overview_progress)
         #: the application's `TaskManager`, adopted in `open()`.  None means
@@ -2331,7 +2336,7 @@ class DataBrowser(QWidget):
             self.nfftw.setEditable(False)
             self.set_nfft_widget(spectrogram.nfft)
             self.nfftw.currentIndexChanged.connect(
-                lambda i: self.set_resolution(nfft=self.nfftw.itemData(i))
+                lambda i: self.update_resolution(nfft=self.nfftw.itemData(i))
             )
             group.add_row("Window", "R / ⇧R", self.nfftw)
 
@@ -2343,7 +2348,7 @@ class DataBrowser(QWidget):
             self.ofracw.setTickInterval(25)
             self.ofracw.setValue(int(round(100 * spectrogram.overlap_frac)))
             self.ofracw.valueChanged.connect(
-                lambda v: self.set_resolution(overlap_frac=0.01 * v)
+                lambda v: self.update_resolution(overlap_frac=0.01 * v)
             )
             self.ofraclabelw = QLabel()
             self.ofraclabelw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
@@ -3359,6 +3364,7 @@ class DataBrowser(QWidget):
             "resize_timer",
             "filter_timer",
             "envelope_timer",
+            "resolution_timer",
             "overview_timer",
         ):
             timer = getattr(self, name, None)
@@ -7290,6 +7296,37 @@ class DataBrowser(QWidget):
                 ].z()
             self.set_resolution()
 
+    def update_resolution(self, nfft=None, overlap_frac=None) -> None:
+        """Debounced entry point for the Fourier window and the overlap.
+
+        The last expensive control in the parameter bar with no coalescing.
+        Dragging the overlap slider emits one `valueChanged` per integer
+        percent, and each one reallocates a three-dimensional buffer and
+        re-runs the whole transform -- 447 ms of it at 16 channels -- so a
+        drag across twenty values paid for twenty transforms of which
+        nineteen were obsolete before they finished.
+
+        Same shape as `update_filter`: stash the value, restart the timer,
+        and let `apply_resolution` run once when the burst stops.  The
+        keyboard steps read the *pending* value so that holding R down keeps
+        doubling instead of stepping off the same settled window each time.
+        """
+        if nfft is not None:
+            self.pending_nfft = int(nfft)
+        if overlap_frac is not None:
+            self.pending_overlap = float(overlap_frac)
+        self.resolution_timer.start(200)
+
+    def apply_resolution(self) -> None:
+        """Set the resolution from the stashed window and overlap."""
+        nfft = self.pending_nfft
+        overlap_frac = self.pending_overlap
+        self.pending_nfft = None
+        self.pending_overlap = None
+        if nfft is None and overlap_frac is None:
+            return
+        self.set_resolution(nfft=nfft, overlap_frac=overlap_frac)
+
     def set_resolution(
         self, nfft=None, overlap_frac=None, dispatch: bool = True
     ) -> None:
@@ -7334,23 +7371,38 @@ class DataBrowser(QWidget):
         if dispatch:
             self.sigResolutionChanged.emit()
 
+    def current_nfft(self) -> int:
+        """The window the next step should be taken from.
+
+        A pending value if there is one, so that holding R down keeps
+        doubling rather than stepping off the same settled value each time.
+        """
+        if self.pending_nfft is not None:
+            return self.pending_nfft
+        return self.data[self.spectrogram].nfft
+
+    def current_overlap(self) -> float:
+        if self.pending_overlap is not None:
+            return self.pending_overlap
+        return self.data[self.spectrogram].overlap_frac
+
     def freq_resolution_down(self):
         if self.spectrogram in self.data:
-            self.set_resolution(nfft=self.data[self.spectrogram].nfft // 2)
+            self.update_resolution(nfft=self.current_nfft() // 2)
 
     def freq_resolution_up(self):
         if self.spectrogram in self.data:
-            self.set_resolution(nfft=2 * self.data[self.spectrogram].nfft)
+            self.update_resolution(nfft=2 * self.current_nfft())
 
     def overlap_frac_up(self):
         if self.spectrogram in self.data:
-            hop_frac = 1 - self.data[self.spectrogram].overlap_frac
-            self.set_resolution(overlap_frac=1 - hop_frac / 2)
+            hop_frac = 1 - self.current_overlap()
+            self.update_resolution(overlap_frac=1 - hop_frac / 2)
 
     def overlap_frac_down(self):
         if self.spectrogram in self.data:
-            hop_frac = 1 - self.data[self.spectrogram].overlap_frac
-            self.set_resolution(overlap_frac=1 - hop_frac * 2)
+            hop_frac = 1 - self.current_overlap()
+            self.update_resolution(overlap_frac=1 - hop_frac * 2)
 
     def set_color_map(self, color_map=None, dispatch: bool = True) -> None:
         """Apply a perceptually uniform spectrogram colormap and remember it."""
