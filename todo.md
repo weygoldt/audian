@@ -1,3 +1,40 @@
+# State of play
+
+Twelve commits on `qt6-handoff`, ahead of master and not pushed.  What
+landed, newest first:
+
+* the navigator draws its overview **over** its annotations rather than
+  under them, so a densely annotated stretch is still readable
+* an input box for the overlap, beside the slider it already had
+* **peaking**: the top of the colour ramp marks what it has stopped telling
+  apart
+* the colour scale has three rows that can be typed into as well as dragged
+  -- max, min and power -- and the six keys still drive them
+* a switch for the filter cutoff lines
+* `F11` full screen
+* a **smoothing** menu for the spectrogram: none, bilinear, box and two
+  gaussians, with bicubic and median measured and rejected on cost
+* the colour bar opens **off**, as the power spectrum already did
+
+Fifteen items are open below.  Three are worth doing before the rest, in
+the order a reader would feel them:
+
+1. **The suite can write `~/.config/audian/settings.json`.**  It already
+   has, and it then makes `test_panelsplitter` fail intermittently for
+   ever after.  The only open item that is currently breaking something,
+   and it also skews how the reader's own audian opens.
+2. **The colour ramp is fitted over the whole frequency axis**, so a
+   wideband recording opened at a narrow band is coloured by statistics
+   nobody can see.  Most likely of these to be reported as "the
+   spectrogram is broken", and it is the oldest unaddressed one.
+3. **F2 is a one-way door**: its first press forces the spectrogram on,
+   and the state the window opens in cannot be reached with that key
+   again.
+
+The rest are either measured-and-parked -- the `collect_orphan_widgets`
+segfault, the mean-versus-max reduction, the chrome margins -- or
+genuinely large: the plugin interface and a torch spectrogram backend.
+
 # Low hanging fruit
 
 - [x] For spectrograms, keep the powerspec and the colorbar off by default.
@@ -346,6 +383,18 @@ action that leaves state behind has to join them.
   `QSettings` once, for the whole run, instead of three fixtures taking
   turns -- and an assertion at the end of the session that the real file
   was not touched.
+
+- [ ] **`scripts/smoke_test.py --interact` edits a tracked file.**  The
+  sweep drags and edits labels on `data/Gryllus_campestris.wav` and the
+  browser flushes them, so a run leaves
+  `data/Gryllus_campestris-editable-labels.csv` modified in the working
+  tree -- three spans nudged by a few milliseconds and a few hundred Hz.
+  Hit twice in one session; both times it had to be `git checkout --`'d
+  back out of a commit that was otherwise ready, and it is invisible to
+  anyone who runs `git add -A` without looking.  The harness already points
+  *persistence* at a scratch directory (`redirect_persistence`) for exactly
+  this reason and stops short of the recording; either sweep a temp copy of
+  the wav, or restore the sidecar afterwards.
 
 - [ ] **F2 is a one-way door.**  Low priority, and *not* the bug it was
   found under: the report was "I cannot toggle off the spec", and F3
