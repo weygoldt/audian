@@ -16,7 +16,7 @@ landed, newest first:
   gaussians, with bicubic and median measured and rejected on cost
 * the colour bar opens **off**, as the power spectrum already did
 
-Fifteen items are open below.  Three are worth doing before the rest, in
+Sixteen items are open below.  Three are worth doing before the rest, in
 the order a reader would feel them:
 
 1. **The suite can write `~/.config/audian/settings.json`.**  It already
@@ -72,6 +72,30 @@ genuinely large: the plugin interface and a torch spectrogram backend.
   up to 50.7 dB apart, the worst of it at the chirp onsets a reader points
   at.  A sigma slider is the small end of this and would fit beside the
   dropdown; `smoothing.METHODS` is where a new entry goes.
+
+- [ ] **Denoising on the trace itself**, not only on the spectrogram.  The
+  reader's own words, and until now recorded nowhere but an uncommitted
+  line in the main checkout: "Add a drop down menu for spectrogram
+  smoothing (None, gausisan, Bicubic, etc) **and also denoising on the
+  trace itself**".  The spectrogram half shipped; this half is untouched,
+  and it is a different problem rather than the same one applied to
+  another panel.
+
+  `smoothing` is a *display* filter: it is recomputed per view, thrown
+  away on the next pan, and `SpecItem.get_power` was changed so that even
+  the readout follows the pixels rather than the buffer.  Nothing
+  downstream can mistake it for the recording.  A denoised **trace** is
+  not like that -- it is the thing the reader then measures, labels, and
+  plays -- so the first decision is whether it is a view (cheap,
+  reversible, and visibly not the data) or a derived stage (its own
+  buffer, its own name in the trace menu, and something the label overlay
+  and the audio path have to be told about).
+
+  If it is a stage, the machinery exists and should be copied rather than
+  reinvented: `buffereddata.py` holds the base, `bufferedfilter.py` is the
+  worked example of a stage whose parameters the side panel drives, and
+  `bufferedenvelope.py` is the smaller one.  `data.py` is where a stage is
+  registered and `traceitem.py` draws the result.
 
 - [ ] StartupPage is the last floor at 734 px: three fixed columns capped at
   1100. It is what stops the window going below 734, so it is next if audian
