@@ -167,34 +167,51 @@ action that leaves state behind has to join them.
   mirrors to the other tabs under the same `Link power` (`Alt+P`) switch
   the keys are gated on, as an absolute pair rather than a step.
 
-- [ ] **Peaking: show what is clipped at the top of the colour ramp.**  A
-  checkbox and a key, after focus peaking in a camera: the reader wants to
-  see which bins sit at or above the top of the current ramp, because
-  those are the ones whose differences the picture has stopped showing.
-  The top end only -- half the panel is at or below the floor by
-  construction (`fit_levels`), so marking the floor would mark everything.
+- [x] **Peaking: show what is clipped at the top of the colour ramp.**  A
+  `Clipping` / `Peaking` checkbox on the Spectrogram page and the `X` key,
+  which are **one object** -- the button takes the action as its default
+  action, so there is nothing to keep in step.  The colour map is the
+  implementation and not a mask: `PeakingColorMap` (panels.py) replaces
+  the **last LUT entry**, which `pg.ImageItem.setLevels` maps everything at
+  or above `zmax` onto, so it marks exactly the clipped pixels at no
+  per-frame cost.  Measured on data/Gryllus_campestris.wav at 1600x1000
+  with the ramp pushed to -110..-70 so 0.89 % of the bins clip: turning it
+  on changes **5954 pixels inside the stack and every one of them is the
+  mark colour** -- nothing else in the picture moves.  Every LUT entry but
+  the last is byte for byte the plain map's, at nPts 256 and 512, with and
+  without alpha.
 
-  The colour map is the cheap correct implementation, not a mask.
-  `pg.ImageItem.setLevels((zmin, zmax))` maps everything at or above
-  `zmax` onto the **last LUT entry**, so a map whose final stop is a
-  warning colour marks exactly the clipped pixels at no per-frame cost.
-  With a 256 entry LUT that entry also covers the top 0.4 % of the ramp,
-  which is what a video scope's zebra does and is the wanted behaviour
-  anyway.
+  Applied in `DataBrowser.set_color_map`, which is the sink `Shift+C`, the
+  dropdown, `apply_theme` and the switch itself all end in, and pushed
+  again at the end of `open` because `SpectrogramPlot.__init__` builds its
+  colour bar before the browser has anything to push.  All three paths are
+  driven in the tests.
 
-  It has to be applied where the map is applied, or `Shift+C` or a theme
-  switch will quietly drop it.  `Panel.set_colormap` (panels.py) pushes to
-  `self.axcs`, the colour bars, and `pg.ColorBarItem` forwards the LUT to
-  the image it was handed by `setImageItem`.  `resolve_colormap`
-  (panels.py) is the one place a name, an index and a `pg.ColorMap` all
-  become a `pg.ColorMap`, so a "and then redden the top stop" wrapper
-  belongs beside it.  `DataBrowser.apply_theme` re-pushes the map after a
-  theme change, and is the path that catches a version which only applied
-  it once.
+  **The colour is measured, not chosen.**  `spec.clip` = `#26DAFF`, one
+  value for both themes, scored as CIEDE2000 under the worst of four
+  vision kinds against three things: the top 5 % of every ramp both themes
+  offer (what surrounds the mark), the bottom 5 % (half a panel is at or
+  below the floor by construction, and a mark that looks like the floor
+  reads as a hole), and the four colours a lane already paints on the
+  spectrogram -- `primary` (the cutoff lines and the rubber band), `accent`
+  (the playback cursor) and the two annotation hues.  Worst of the six
+  numbers: **15.91**, against `MIN_CATEGORY_SEPARATION`'s 15.0.  Red scores
+  8.71 and orange 3.84, because the hot end of half these ramps *is* red or
+  orange, and `primary` scores 0.71 because the daylight maps run white to
+  blue.  Asking for separation from the *whole* ramp is unachievable for
+  any colour -- a sequential map passes through 255 of them.
 
-  Take the warning colour from `theme` rather than writing a literal: the
-  two pages have different grounds, and the whole point is a colour that
-  cannot be mistaken for a hot bin of the ramp itself.
+  `X`, and the letter is a decision: peaking's own initials are all spent
+  (`P` plays a region, `C` centres the amplitude, `Shift+C` cycles the
+  map), and `Alt+K` -- which would have read as "the other thing about the
+  top of the ramp, whose key is `K`" -- was rejected because every one of
+  the six `Alt+<letter>` bindings this application has means "link this
+  across tabs".  Checkable, and safely so: it opens from the settings file,
+  which `test_actioninventory` sandboxes, so the tick frozen into the
+  golden file is the same on a desktop and headless.
+
+  Persisted as `peaking` at the **unchanged** version 1 and dispatched to
+  every tab, like the cutoff lines above.
 
 # Spec stuff 
 

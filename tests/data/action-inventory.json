@@ -1002,6 +1002,16 @@
     "path": "View \u203a Panels",
     "text": "Toggle mean spectrogram"
   },
+  "toggle_peaking": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "X"
+    ],
+    "path": "Spectrogram",
+    "text": "Peaking"
+  },
   "toggle_power": {
     "checkable": true,
     "checked": false,

@@ -42,7 +42,7 @@ from thunderlab.datawriter import available_formats, write_data
 
 from . import smoothing, theme
 from .data import Data
-from .panels import Panel, Panels
+from .panels import Panel, Panels, peaking_colormap
 from .panelsplitter import PanelSplitter
 from .plotranges import PlotRanges
 from .bufferedspectrogram import BufferedSpectrogram
@@ -1674,6 +1674,7 @@ class DataBrowser(QWidget):
     sigColorMapChanged = Signal()
     sigSmoothingChanged = Signal()
     sigCutoffLinesChanged = Signal()
+    sigPeakingChanged = Signal()
     sigLevelsChanged = Signal(float, float)
     sigFilterChanged = Signal()
     sigEnvelopeChanged = Signal()
@@ -2007,6 +2008,11 @@ class DataBrowser(QWidget):
         self.show_cutoff_lines = self.read_cutoff_lines_setting()
         #: the checkbox that shows it; see `smoothw` for why it is named here
         self.cutoffsw = None
+        #: is the top of the colour ramp marked?  See `set_peaking`.
+        self.spec_peaking = self.read_peaking_setting()
+        #: the checkbox that shows it, which is bound to the action so the
+        #: key and the box cannot disagree
+        self.peakingw = None
         #: The three rows that follow the colour scale, and the pair of
         #: numbers last written into them.  They *follow* the mapping and do
         #: not own it -- see `sync_level_widgets` -- so the memo is what
@@ -2151,6 +2157,17 @@ class DataBrowser(QWidget):
         """
         saved = DataBrowser.spectrogram_settings().get("cutoff-lines")
         return saved if isinstance(saved, bool) else True
+
+    @staticmethod
+    def read_peaking_setting() -> bool:
+        """Is the top of the colour ramp marked?  Default no.
+
+        Read the same way as `read_cutoff_lines_setting` and defaulting the
+        other way, for the same reason: what a reader who has never chosen
+        gets is the picture this application has always drawn.
+        """
+        saved = DataBrowser.spectrogram_settings().get("peaking")
+        return saved if isinstance(saved, bool) else False
 
     @contextmanager
     def updating(self):
@@ -2632,6 +2649,13 @@ class DataBrowser(QWidget):
         # choosing, which is the rule `set_color_map` states.
         self.set_spec_smoothing(dispatch=False, save=False)
         self.set_cutoff_lines(dispatch=False, save=False)
+        # And peaking, which reaches the panels the same way -- through
+        # `set_color_map`, the sink every colour map push ends in.  The
+        # colour bars were built with the plain map, because `__init__`
+        # runs before the browser's own state can be pushed down; without
+        # this line a reader who had peaking on would open every new
+        # recording unmarked and wonder which of the two was lying.
+        self.set_peaking(dispatch=False, save=False)
         self.side_split.addWidget(self.parambar)
         self.side_split.setStretchFactor(1, 0)
         opened = self.restore_side_panel()
@@ -3242,6 +3266,20 @@ class DataBrowser(QWidget):
                 self._level_widgets_shown = None
                 self.sync_level_widgets()
 
+            # Peaking, directly under the three rows it is about: it marks
+            # what they have pushed off the top of the ramp.  The button
+            # takes the action as its default action rather than carrying a
+            # `toggled` connection of its own, so the key and the box are
+            # one object and cannot disagree -- the shape `hetbuttonw`
+            # already uses for `use_heterodyne`.
+            act = getattr(self.acts, "toggle_peaking", None)
+            if act is not None:
+                self.peakingw = QToolButton(self.parambar)
+                self.peakingw.setDefaultAction(act)
+                self.peakingw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+                self.peakingw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+                group.add_row("Clipping", "X", self.peakingw)
+
             # The band a spectrogram opens at.  Appended after the two
             # appearance rows rather than squeezed beside the Window combo
             # box: `add_row` only ever appends and there is no insert API,
@@ -3350,6 +3388,7 @@ class DataBrowser(QWidget):
             self.zminsliderw = None
             self.zmidw = None
             self.zmidsliderw = None
+            self.peakingw = None
 
         # envelope:
         if "envelope" in self.data:
@@ -8117,6 +8156,7 @@ class DataBrowser(QWidget):
                 # block on a version it does not know, so a bump takes every
                 # reader's colormap, window and overlap away.
                 "cutoff-lines": self.show_cutoff_lines,
+                "peaking": self.spec_peaking,
             },
         )
 
@@ -8717,9 +8757,17 @@ class DataBrowser(QWidget):
             self.color_map = int(color_map)
         if self.color_map < 0 or self.color_map >= len(theme.spectrogram_maps()):
             self.color_map = theme.DEFAULT_SPECTROGRAM_MAP
+        # The peaking mark is applied HERE, where a map is pushed, and not
+        # where one is chosen.  This is the sink `Shift+C`, the dropdown,
+        # the peaking switch and `apply_theme` all end in, so a version that
+        # marked the map once would have had it silently dropped by the next
+        # theme change or the next press of `Shift+C`.
+        marked = peaking_colormap(
+            theme.spectrogram_maps()[self.color_map], self.spec_peaking
+        )
         for panel in self.panels.values():
             if panel.is_spectrogram():
-                panel.set_colormap(theme.spectrogram_maps()[self.color_map])
+                panel.set_colormap(marked)
         if self.cmapw is not None and self.cmapw.currentIndex() != self.color_map:
             blocked = self.cmapw.blockSignals(True)
             self.cmapw.setCurrentIndex(self.color_map)
@@ -8731,6 +8779,39 @@ class DataBrowser(QWidget):
 
     def color_map_cycler(self) -> None:
         self.set_color_map((self.color_map + 1) % len(theme.spectrogram_maps()))
+
+    def set_peaking(self, on=None, dispatch: bool = True, save: bool = True) -> None:
+        """Mark the bins the colour ramp has stopped telling apart.
+
+        Focus peaking, after the camera: the reader wants to see which bins
+        sit at or above the top of the current mapping, because those are
+        the ones whose differences the picture is no longer showing.  The
+        top end only -- see `PeakingColorMap` for why marking the floor
+        would mark half of every panel.
+
+        It costs nothing per frame.  Nothing is masked and no second image
+        is drawn: the switch changes one entry of the lookup table and
+        `set_color_map` pushes the map again, which is the same work
+        `Shift+C` already does.
+
+        The tick lives on the action, not on a widget of this browser's own.
+        The checkbox in the parameter bar takes the action as its default
+        action, so the key and the box are one object and cannot disagree,
+        and a browser that is not the one on screen still has its own state
+        pushed down to its own panels.
+        """
+        if on is not None:
+            self.spec_peaking = bool(on)
+        act = getattr(self.acts, "toggle_peaking", None)
+        if act is not None and act.isChecked() != self.spec_peaking:
+            blocked = act.blockSignals(True)
+            act.setChecked(self.spec_peaking)
+            act.blockSignals(blocked)
+        self.set_color_map(dispatch=False, save=False)
+        if save:
+            self.schedule_spectrogram_save()
+        if dispatch:
+            self.sigPeakingChanged.emit()
 
     def set_spec_smoothing(
         self, key=None, dispatch: bool = True, save: bool = True

@@ -126,6 +126,8 @@ INTERACTIONS = [
     ("frequency resolution up", "frequency_resolution_up"),
     ("frequency resolution down", "frequency_resolution_down"),
     ("overlap up", "overlap_up"),
+    ("peaking on", "toggle_peaking"),
+    ("peaking off", "toggle_peaking"),
     ("cheat sheet", "cheat_sheet"),
     ("command palette", "command_palette"),
 ]

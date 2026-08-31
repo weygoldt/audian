@@ -322,6 +322,7 @@ def test_a_hand_edited_file_never_raises(store, app, junk):
     assert 0 <= index < len(theme.spectrogram_maps())
     assert DataBrowser.read_smoothing_setting() in smoothing.keys()
     assert DataBrowser.read_cutoff_lines_setting() is True
+    assert DataBrowser.read_peaking_setting() is False
 
 
 # --- the smoothing ---------------------------------------------------------
@@ -457,6 +458,67 @@ def test_the_cutoff_lines_ride_in_the_same_block_as_the_map(store, app):
     assert DataBrowser.read_color_map_setting() == 2
     assert DataBrowser.read_smoothing_setting() == "gaussian"
     assert DataBrowser.read_cutoff_lines_setting() is False
+
+
+# --- peaking ---------------------------------------------------------------
+
+
+def test_nothing_stored_does_not_mark_the_top_of_the_ramp(store, app):
+    """A reader who has never chosen gets the picture audian always drew."""
+    from audian.databrowser import DataBrowser
+
+    assert DataBrowser.read_peaking_setting() is False
+
+
+@pytest.mark.parametrize("stored", [True, False])
+def test_the_peaking_switch_survives_the_round_trip(store, app, stored):
+    from audian.databrowser import DataBrowser
+
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {"version": DataBrowser.SPECTROGRAM_SETTING_VERSION, "peaking": stored},
+    )
+    assert DataBrowser.read_peaking_setting() is stored
+
+
+@pytest.mark.parametrize("junk", ["on", 0, 1, None, [], {}])
+def test_a_peaking_value_of_the_wrong_shape_does_not_mark(store, app, junk):
+    """Only a real bool; see the cutoff lines' own test for why `0` and `1`
+    are the interesting entries."""
+    from audian.databrowser import DataBrowser
+
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {"version": DataBrowser.SPECTROGRAM_SETTING_VERSION, "peaking": junk},
+    )
+    assert DataBrowser.read_peaking_setting() is False
+
+
+def test_all_five_spectrogram_preferences_ride_in_one_block(store, app):
+    """One key, one version.  Adding the fifth must not have cost the first."""
+    from audian.databrowser import DataBrowser
+
+    theme.set_theme(theme.THEME_DARK)
+    name = theme.spectrogram_maps()[2]
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {
+            "version": DataBrowser.SPECTROGRAM_SETTING_VERSION,
+            "colormap": {theme.THEME_DARK: name},
+            "nfft": 512,
+            "overlap": 0.75,
+            "smoothing": "box",
+            "cutoff-lines": False,
+            "peaking": True,
+        },
+    )
+    saved = DataBrowser.spectrogram_settings()
+    assert saved["nfft"] == 512
+    assert saved["overlap"] == 0.75
+    assert DataBrowser.read_color_map_setting() == 2
+    assert DataBrowser.read_smoothing_setting() == "box"
+    assert DataBrowser.read_cutoff_lines_setting() is False
+    assert DataBrowser.read_peaking_setting() is True
 
 
 # --- the write itself ------------------------------------------------------

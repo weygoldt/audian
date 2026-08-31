@@ -3985,6 +3985,20 @@ class Audian(QMainWindow):
             if b is not self.browser():
                 b.set_spec_smoothing(key, dispatch=False, save=False)
 
+    def toggle_peaking(self, checked: bool) -> None:
+        """The `X` key and the Spectrogram page's checkbox, which are one
+        object -- the box takes this action as its default action."""
+        browser = self.browser()
+        if browser is not None and hasattr(browser, "set_peaking"):
+            browser.set_peaking(checked)
+
+    def dispatch_peaking(self):
+        """Every tab agrees about peaking; see `dispatch_smoothing`."""
+        on = self.browser().spec_peaking
+        for b in self.browsers:
+            if b is not self.browser():
+                b.set_peaking(on, dispatch=False, save=False)
+
     def dispatch_levels(self, zmin, zmax):
         """Mirror a colour scale typed or dragged on the Spectrogram page.
 
@@ -4057,6 +4071,32 @@ class Audian(QMainWindow):
         self.acts.color_map_cycler.triggered.connect(
             lambda x: self.browser().color_map_cycler()
         )
+
+        # `X`, and the letter is a decision.  Peaking's own initials are all
+        # spent -- `P` plays a region, `C` centres the amplitude, `Shift+C`
+        # cycles the colour map -- and `Alt+K`, which would have read as
+        # "the other thing about the top of the ramp, whose key is `K`", was
+        # rejected: every one of the six `Alt+<letter>` bindings this
+        # application has means "link this across tabs", and a seventh that
+        # meant something else would break the only pattern that family has.
+        # So a free plain letter, beside the plain letters of the six colour
+        # scale keys it belongs to.
+        #
+        # Checkable, and safely so: it opens from the settings file, which
+        # `tests/test_actioninventory` sandboxes, so the tick this action
+        # carries into the golden file is the same on a desktop and in a
+        # headless run.  That is what `fullscreen_window` cannot promise --
+        # a tiling compositor may refuse it -- and why that one is not
+        # checkable.
+        self.acts.toggle_peaking = QAction("Pea&king", self)
+        self.acts.toggle_peaking.setShortcut("X")
+        self.acts.toggle_peaking.setCheckable(True)
+        self.acts.toggle_peaking.setChecked(DataBrowser.read_peaking_setting())
+        self.acts.toggle_peaking.setToolTip(
+            "Mark the bins at the top of the colour scale, whose differences "
+            "the picture has stopped showing"
+        )
+        self.acts.toggle_peaking.toggled.connect(self.toggle_peaking)
 
         self.acts.link_power = QAction("Link &power", self)
         self.acts.link_power.setShortcut("Alt+P")
@@ -4135,6 +4175,7 @@ class Audian(QMainWindow):
         spec_menu.addAction(self.acts.overlap_up)
         spec_menu.addAction(self.acts.overlap_down)
         spec_menu.addAction(self.acts.color_map_cycler)
+        spec_menu.addAction(self.acts.toggle_peaking)
         spec_menu.addSeparator()
         spec_menu.addAction(self.acts.link_power)
         spec_menu.addAction(self.acts.power_up)
@@ -5287,6 +5328,7 @@ class Audian(QMainWindow):
             browser.sigSmoothingChanged.connect(self.dispatch_smoothing)
             browser.sigCutoffLinesChanged.connect(self.dispatch_cutoff_lines)
             browser.sigLevelsChanged.connect(self.dispatch_levels)
+            browser.sigPeakingChanged.connect(self.dispatch_peaking)
             browser.sigFilterChanged.connect(self.dispatch_filter)
             browser.sigEnvelopeChanged.connect(self.dispatch_envelope)
             browser.sigTraceChanged.connect(self.dispatch_trace)

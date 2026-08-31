@@ -256,7 +256,7 @@ def test_every_action_survives_being_triggered(window):
         failures
     )
     # A sweep that silently stopped finding actions would pass forever.
-    assert fired >= 100, f"only {fired} actions fired; the inventory has 127"
+    assert fired >= 100, f"only {fired} actions fired; the inventory has 128"
     assert theme.current_theme() == theme_before, "the sweep left the theme switched"
     assert window.windowState() == state_before, (
         f"the sweep left the window in {window.windowState()!r}, not {state_before!r}"

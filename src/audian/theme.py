@@ -359,6 +359,34 @@ DARK_TOKENS: dict[str, str] = {
     # therefore already told from `run` by form.
     "ann.trial": "#FF253C",
     "ann.pulse": "#009A88",
+    # The peaking mark: the colour the last entry of a spectrogram colour
+    # map is replaced by, so that the bins the ramp has stopped telling
+    # apart say so.  See :func:`panels.peaking_colormap`.
+    #
+    # One value for both themes, which is the measured outcome rather than
+    # a shortcut.  Three constraints, each of them able to sink a colour:
+    #
+    # * it has to be told from the TOP of every ramp, because the pixels it
+    #   marks are surrounded by the ones just below the ceiling;
+    # * it has to be told from the FLOOR of every ramp, because half of a
+    #   panel is at or below the floor by construction (`fit_levels`) and a
+    #   mark that looks like the floor reads as a hole;
+    # * and it has to be told from the four colours a lane already paints
+    #   ON the spectrogram -- `primary` (the two filter cutoff lines and
+    #   the rubber band), `accent` (the playback cursor) and the two
+    #   annotation hues.  A fill the colour of the cutoff line is a fill
+    #   that reads as a cutoff line.
+    #
+    # Scored as CIEDE2000 against the top and bottom 5 % of the 256 entry
+    # LUT of every map both themes offer, under the worst of the four
+    # vision kinds, over a 36 x 3 x 4 grid of hues.  This value's worst of
+    # the six numbers is 15.91 (the dark theme's top slice), against
+    # MIN_CATEGORY_SEPARATION's 15.0.  What it beat, worst-of-six: red
+    # scores 8.71 and orange 3.84, because the hot end of half these ramps
+    # IS red or orange, and `primary` scores 0.71 -- the daylight maps run
+    # white to blue.  Per theme: dark top 18.73, floor 41.76, overlays
+    # 15.91; daylight top 41.39, floor 17.29, overlays 29.81.
+    "spec.clip": "#26DAFF",
 }
 
 #: The light token table -- a **daylight** theme, not a polite inversion.
@@ -407,6 +435,13 @@ LIGHT_TOKENS: dict[str, str] = {
     # further per unit of alpha than #007B6C does.
     "ann.trial": "#B60023",
     "ann.pulse": "#007B6C",
+    # The same cyan as the dark theme's, and measured to be the right answer
+    # in both -- see the note beside it there.  It is not a neutral choice
+    # here: the daylight maps run from a near-white floor to a dark hot end,
+    # so a mark has to survive being surrounded by dark AND not be mistaken
+    # for the white the floor is.  This one scores 41.39 against the top and
+    # 17.29 against the floor, worst of four vision kinds.
+    "spec.clip": "#26DAFF",
 }
 
 #: All selectable themes, by name.

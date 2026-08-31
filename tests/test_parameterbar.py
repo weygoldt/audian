@@ -1724,3 +1724,133 @@ def test_a_refit_moves_the_rows_with_nothing_having_been_typed(levels):
     pump(0.3)
     assert browser.level_range() != (-90.0, -40.0)
     assert widgets_agree(browser)
+
+
+# --- peaking ---------------------------------------------------------------
+
+
+def colorbar_maps(browser):
+    for panel in browser.panels.values():
+        if panel.is_spectrogram() and not panel.is_power():
+            return [cbar.colorMap() for cbar in panel.axcs]
+    return []
+
+
+def clip_mark():
+    value = theme.token("spec.clip").lstrip("#")
+    return [int(value[i : i + 2], 16) for i in (0, 2, 4)]
+
+
+def is_marked(cmap):
+    return list(cmap.getLookupTable(nPts=256)[-1][:3]) == clip_mark()
+
+
+@pytest.fixture
+def peaking_off(browser):
+    """Leave the stack unmarked, whatever the test did to it."""
+    yield browser
+    browser.set_peaking(False, dispatch=False, save=False)
+    settle()
+
+
+def test_the_key_and_the_checkbox_are_one_object(browser):
+    """Two controls for one switch is two things that can disagree.
+
+    The button takes the action as its default action, so the tick it draws
+    IS the action's -- there is nothing to keep in step.
+    """
+    act = browser.window().acts.toggle_peaking
+    assert act.isCheckable()
+    assert act.shortcut().toString() == "X"
+    assert browser.peakingw is not None
+    assert browser.peakingw.defaultAction() is act
+    assert browser.peakingw.isChecked() == act.isChecked()
+
+
+def test_peaking_marks_the_last_entry_of_every_colour_bar(peaking_off):
+    """Every lane, not just the one that owns the level fit: the reader is
+    looking at a stack, and a marked lane beside an unmarked one is worse
+    than no mark at all."""
+    browser = peaking_off
+    maps = colorbar_maps(browser)
+    assert maps and not any(is_marked(m) for m in maps)
+    browser.peakingw.click()
+    settle()
+    pump(0.4)
+    assert browser.spec_peaking
+    assert all(is_marked(m) for m in colorbar_maps(browser))
+    browser.peakingw.click()
+    settle()
+    pump(0.4)
+    assert not browser.spec_peaking
+    assert not any(is_marked(m) for m in colorbar_maps(browser))
+
+
+def test_nothing_but_the_last_entry_moves(peaking_off):
+    """The claim the whole implementation rests on, asked of the map that
+    actually reached the colour bar rather than of a freshly built one."""
+    browser = peaking_off
+    plain = colorbar_maps(browser)[0].getLookupTable(nPts=256).copy()
+    browser.set_peaking(True, dispatch=False, save=False)
+    settle()
+    pump(0.4)
+    marked = colorbar_maps(browser)[0].getLookupTable(nPts=256)
+    assert (marked[:-1] == plain[:-1]).all()
+    assert list(marked[-1][:3]) == clip_mark()
+
+
+def test_setting_peaking_with_no_argument_pushes_what_is_already_held(peaking_off):
+    """The call `DataBrowser.open` makes once the panels exist.
+
+    `SpectrogramPlot.__init__` builds its colour bar from the plain map --
+    it runs before the browser has anything to push -- so a reader who has
+    peaking stored would open every new recording unmarked while the box
+    said otherwise.  Pinned through the state rather than through a second
+    window: `todo.md` records that another browser in this process is what
+    `theme.collect_orphan_widgets` segfaults on.
+    """
+    browser = peaking_off
+    browser.spec_peaking = True  # what the constructor leaves behind
+    assert not any(is_marked(m) for m in colorbar_maps(browser))
+    browser.set_peaking(dispatch=False, save=False)
+    settle()
+    pump(0.4)
+    assert all(is_marked(m) for m in colorbar_maps(browser))
+    assert browser.window().acts.toggle_peaking.isChecked()
+
+
+def test_cycling_the_colour_map_does_not_drop_the_mark(peaking_off):
+    """`Shift+C` is a `set_color_map`, and a version that marked the map
+    once rather than on every push loses it here."""
+    browser = peaking_off
+    window = browser.window()
+    browser.set_peaking(True, dispatch=False, save=False)
+    settle()
+    before = browser.color_map
+    window.acts.color_map_cycler.trigger()
+    settle()
+    pump(0.4)
+    assert browser.color_map != before, "the map did not cycle"
+    assert all(is_marked(m) for m in colorbar_maps(browser))
+
+
+def test_a_theme_switch_does_not_drop_the_mark(peaking_off):
+    """The other path that re-pushes the map, and the one a reader takes
+    without meaning to -- the desktop changing at sunset does it."""
+    browser = peaking_off
+    window = browser.window()
+    before = theme.current_theme()
+    try:
+        browser.set_peaking(True, dispatch=False, save=False)
+        settle()
+        other = theme.THEME_LIGHT if before == theme.THEME_DARK else theme.THEME_DARK
+        window.set_app_theme(other)
+        settle()
+        pump(0.6)
+        assert theme.current_theme() == other
+        # the mark is the new page's colour, not the one it was applied in
+        assert all(is_marked(m) for m in colorbar_maps(browser))
+    finally:
+        window.set_app_theme(before)
+        settle()
+        pump(0.6)

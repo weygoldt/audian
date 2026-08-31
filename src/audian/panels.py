@@ -36,6 +36,89 @@ def resolve_colormap(color_map):
     return theme.spectrogram_colormap(theme.DEFAULT_SPECTROGRAM_MAP)
 
 
+class PeakingColorMap(pg.ColorMap):
+    """A colour map whose LAST lookup-table entry is a warning colour.
+
+    Peaking -- focus peaking in a camera, a zebra on a video scope -- marks
+    the bins the picture has stopped telling apart.
+    `pg.ImageItem.setLevels((zmin, zmax))` maps everything at or above
+    `zmax` onto the last entry of the lookup table, so replacing that one
+    entry marks exactly the clipped pixels and costs nothing per frame:
+    there is no mask, no second image and no work in `update_plot`.
+
+    With the 256 entry table both `ImageItem` and `pg.ColorBarItem` ask for,
+    that entry also covers the top 0.4 % of the ramp -- 0.25 dB of a 65 dB
+    scale.  That is what a scope's zebra does and it is the wanted
+    behaviour: a bin one part in 256 below the ceiling is not being told
+    apart from the ceiling either.
+
+    The top end only.  Half of a panel is at or below the floor by
+    construction -- `SpectrogramPlot.fit_levels` anchors it on the median --
+    so marking the floor would mark half the picture.
+
+    A subclass, and the mark applied in `getLookupTable`, because that is
+    the only form that is exact.  Measured against every map both themes
+    offer: every entry but the last is byte for byte the base map's, at
+    nPts 256 and 512, with and without alpha.  Moving the base map's last
+    *stop* instead would have blended the warning colour back across the
+    whole final segment of the ramp, which is a picture in which the loud
+    bins are gradually the wrong colour rather than one in which the
+    clipped bins are marked.
+
+    It has to be a real ``pg.ColorMap``: `ImageItem.setColorMap` raises
+    ``TypeError`` on anything else, and `ColorBarItem` hands the object it
+    was given straight to it.
+    """
+
+    def __init__(self, base, mark):
+        # `base.color` is float RGBA in 0..1 and `pg.ColorMap.__init__`
+        # feeds every entry through `mkColor`, which reads a 4-tuple as
+        # bytes -- so the stops go over as bytes.  Verified round trip: the
+        # reconstructed map's table equals the base's everywhere but the
+        # entry this class exists to replace.
+        colors = (np.clip(base.color, 0.0, 1.0) * 255).round().astype(int)
+        super().__init__(
+            base.pos,
+            [tuple(int(v) for v in row) for row in colors],
+            mapping=base.mapping_mode,
+            name=f"{base.name}+peaking",
+        )
+        self.mark = pg.mkColor(mark).getRgbF()
+
+    def getLookupTable(self, *args, **kwargs):
+        table = super().getLookupTable(*args, **kwargs)
+        # `mode=QCOLOR` hands back a list of QColor rather than an array.
+        # Nothing here asks for it, and a wrong answer is worse than the
+        # unmarked one, so it is left alone rather than guessed at.
+        if not isinstance(table, np.ndarray) or table.size == 0:
+            return table
+        table = table.copy()
+        scale = 255.0 if table.dtype.kind in "ui" else 1.0
+        table[-1, :3] = [round(c * scale) for c in self.mark[:3]]
+        return table
+
+
+def peaking_colormap(color_map, peaking: bool):
+    """Resolve a colour map, and mark its top with `theme`'s warning colour.
+
+    Called wherever a map is *applied* and never where one is chosen, so
+    that `Shift+C` and a theme switch cannot quietly drop the mark.  There
+    is one caller, `DataBrowser.set_color_map`, and it is the sink both of
+    those paths end in -- which is the whole reason this sits beside
+    `resolve_colormap` rather than inside it: resolving happens in places
+    that have no browser to ask.
+
+    The colour comes from the token table and is not written here: the two
+    themes have different grounds and different ramps, and the whole point
+    of the mark is a colour that cannot be mistaken for a hot bin of the
+    ramp itself.  See ``spec.clip``.
+    """
+    color_map = resolve_colormap(color_map)
+    if not peaking:
+        return color_map
+    return PeakingColorMap(color_map, theme.token("spec.clip"))
+
+
 class Panel(object):
     times = "t"
     amplitudes = "xyu"
