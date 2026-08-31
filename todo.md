@@ -213,7 +213,66 @@ action that leaves state behind has to join them.
   Persisted as `peaking` at the **unchanged** version 1 and dispatched to
   every tab, like the cutoff lines above.
 
+- [ ] **An input box for the overlap, not just a slider.**  Every other
+  number on this page can now be typed into; the Overlap row still cannot.
+  It is a `QSlider` in whole percent (`ofracw`) beside a **read-only
+  `QLabel`** (`ofraclabelw`).  Wanted: the shape the three level rows and
+  the two filter cutoffs already have -- the slider keeps the coarse grab
+  and the label becomes a `pg.SpinBox`.
+
+  Two things make it more than a swap.
+
+  The slider quantises and the box must not.  `overlap_frac` is a float
+  that `BufferedSpectrogram.prepare_update` clamps to `0.0 .. 0.99999`,
+  while `ofracw` runs 0..99 in whole percent.  A 62.5 % typed into the box
+  and round-tripped through the slider comes back 62, so the box has to be
+  the precise writer and the slider must not overwrite it with its own
+  rounding.  That is the "one number, several writers" problem the level
+  rows just solved, in miniature; their memo is the worked example, and so
+  is the reason it has to be dropped before a widget-driven write.
+
+  And the recompute is debounced on purpose.  `update_resolution` stashes
+  the value and starts `resolution_timer` (200 ms) because
+  respectrogramming sixteen channels costs about 1.5 s, so a box typed into
+  has to go through that debounce rather than recomputing per keystroke.
+  `set_resolution` already writes the slider back inside a `blockSignals`
+  sandwich when `O` / `Shift+O` move it; the box joins it there.
+
 # Spec stuff 
+
+- [ ] **Annotation marks hide the navigator's own waveform.**  Reported by
+  the reader: in densely annotated stretches the overview is completely
+  invisible, covered by the vertical annotation lines.  It is a z-order,
+  and every number is already written down.  The navigator stacks the
+  waveform at **10** (`fulltraceplot.build_channel`: `line.setZValue(10)`,
+  the activity overview at 11, the zero line at 20), the window-selection
+  region at **50**, event marks at `eventoverlay.NAV_MARK_Z` = **60** and
+  label boxes at `labeloverlay.LABEL_NAV_Z` = **65**.  `SURFACE_NAVIGATOR`
+  drops caps and labels but keeps full-lane geometry, so every annotation
+  is a full-height line over the waveform and a dense stretch is a picket
+  fence.
+
+  **Do not simply lower the marks.**  They sit at 60/65 to clear the
+  translucent selection region at 50, and `LABEL_NAV_Z` carries the
+  measurement: a box edge samples (223, 113, 134) under the region against
+  (255, 107, 107), its own colour, above it -- and it is wrong precisely
+  inside the stretch of session the reader is working in.  Putting the
+  marks under the trace puts them under the region too, and undoes that.
+
+  The order wanted is the reader's own words, "putting them behind the
+  trace plot in the overview", and the way to get it without losing the
+  above is to **raise the navigator's waveform above the marks** rather
+  than to lower the marks.  One consequence has to be looked at rather than
+  assumed: a waveform above 65 is also above the region at 50, so the
+  region's wash would tint the ground and no longer the trace.  That is
+  probably the better picture and it is what a minimap usually does, but it
+  is a visible change nobody asked for -- screenshot it both ways and say
+  which is which.
+
+  If it turns out worse, the fallback is to leave the z alone and make a
+  navigator mark cheaper instead: a thinner pen, a lower alpha, or one
+  density band rather than one line per event.  That attacks the dense case
+  directly and touches no measured ordering.
 
 - [ ] **`theme.collect_orphan_widgets` can segfault the test suite.** It
   walks a snapshot of `QApplication.topLevelWidgets()` and calls
