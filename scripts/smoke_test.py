@@ -103,6 +103,8 @@ INTERACTIONS = [
     ("toggle color bars back", "toggle_cbars"),
     ("hide navigator", "toggle_fulldata"),
     ("show navigator", "toggle_fulldata"),
+    ("full screen", "fullscreen_window"),
+    ("leave full screen", "fullscreen_window"),
     ("navigator: all channels", "navigator_all_channels"),
     ("navigator: single channel", "navigator_all_channels"),
     ("next channel", "next_channel"),

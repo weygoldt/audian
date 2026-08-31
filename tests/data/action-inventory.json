@@ -244,6 +244,16 @@
     "path": "View \u203a Frequency",
     "text": "Move up"
   },
+  "fullscreen_window": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "F11"
+    ],
+    "path": "View",
+    "text": "Full screen"
+  },
   "hide_deselected_channels": {
     "checkable": false,
     "checked": false,

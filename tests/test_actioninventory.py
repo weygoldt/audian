@@ -45,7 +45,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from PySide6.QtCore import QEvent, QSettings  # noqa: E402
+from PySide6.QtCore import QEvent, QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
@@ -219,6 +219,12 @@ def test_every_action_survives_being_triggered(window):
     failures = []
     fired = 0
     theme_before = theme.current_theme()
+    # The window state is put back for the same reason the theme is: the
+    # sweep fires `maximize_window` and `fullscreen_window`, and a window
+    # left full screen is a different size for every test after this one --
+    # in this module and, through the shared QApplication, in the geometry
+    # a later module measures.
+    state_before = window.windowState()
 
     for name, act in sorted(vars(window.acts).items()):
         if name.startswith("__") or not hasattr(act, "trigger"):
@@ -242,13 +248,19 @@ def test_every_action_survives_being_triggered(window):
     if theme.current_theme() != theme_before:
         window.set_app_theme(theme_before)
         app.processEvents()
+    if window.windowState() != state_before:
+        window.setWindowState(state_before)
+        app.processEvents()
 
     assert not failures, f"{len(failures)} of {fired} actions raised:\n  " + "\n  ".join(
         failures
     )
     # A sweep that silently stopped finding actions would pass forever.
-    assert fired >= 100, f"only {fired} actions fired; the inventory has 124"
+    assert fired >= 100, f"only {fired} actions fired; the inventory has 127"
     assert theme.current_theme() == theme_before, "the sweep left the theme switched"
+    assert window.windowState() == state_before, (
+        f"the sweep left the window in {window.windowState()!r}, not {state_before!r}"
+    )
 
 
 def test_every_bound_key_is_unique_within_its_context(window):
@@ -270,3 +282,76 @@ def test_every_bound_key_is_unique_within_its_context(window):
             else:
                 seen[key] = name
     assert not clashes, "keys bound twice:\n  " + "\n  ".join(clashes)
+
+
+# --- full screen -----------------------------------------------------------
+
+
+def test_full_screen_puts_the_window_back_the_way_it_was(window):
+    """F11 twice is a round trip, from maximized as well as from normal.
+
+    The trap this pins is `showNormal()`, which is the obvious way to
+    write the second half and the wrong one: measured on Qt 6.11, it
+    clears `WindowMaximized` along with `WindowFullScreen`, so a maximized
+    window comes back merely restored and the reader who pressed F11 twice
+    has lost the size they started with.  Flipping the one bit -- what
+    `Audian.toggle_fullscreen` does -- leaves the other alone.
+
+    Offscreen reflects both flags back, so this is a real assertion here
+    and not a statement about the platform plugin.
+    """
+    app = QApplication.instance()
+    act = window.acts.fullscreen_window
+    before = window.windowState()
+    try:
+        for maximized in (False, True):
+            window.setWindowState(
+                (before | Qt.WindowState.WindowMaximized)
+                if maximized
+                else (before & ~Qt.WindowState.WindowMaximized)
+            )
+            app.processEvents()
+            start = window.windowState()
+            assert not window.isFullScreen()
+
+            act.trigger()
+            app.processEvents()
+            assert window.isFullScreen(), "F11 did not reach full screen"
+            assert bool(window.windowState() & Qt.WindowState.WindowMaximized) is (
+                maximized
+            ), "going full screen changed the maximized state"
+
+            act.trigger()
+            app.processEvents()
+            assert not window.isFullScreen(), "F11 did not leave full screen"
+            assert window.windowState() == start, (
+                f"from maximized={maximized}, the round trip landed in "
+                f"{window.windowState()!r} rather than {start!r}"
+            )
+    finally:
+        window.setWindowState(before)
+        app.processEvents()
+
+
+def test_the_way_out_of_full_screen_is_said_on_the_way_in(window):
+    """With no title bar there is no close button, so the key is stated.
+
+    The status bar is the only chrome that can carry it -- the reader has
+    just asked for the window's own to go away.
+    """
+    app = QApplication.instance()
+    before = window.windowState()
+    try:
+        window.messages.clear()
+        window.acts.fullscreen_window.trigger()
+        app.processEvents()
+        said = " ".join(message for _level, message in window.messages)
+        assert "F11" in said, f"entering full screen said {said!r}"
+
+        window.messages.clear()
+        window.acts.fullscreen_window.trigger()
+        app.processEvents()
+        assert not window.messages, "leaving full screen should say nothing"
+    finally:
+        window.setWindowState(before)
+        app.processEvents()

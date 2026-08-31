@@ -5038,6 +5038,19 @@ class Audian(QMainWindow):
         self.acts.maximize_window.setShortcut("Ctrl+Shift+M")
         self.acts.maximize_window.triggered.connect(self.toggle_maximize)
 
+        # Not checkable, for the reason its sibling is not: the tick would
+        # be a record of what was *asked* for, and a window manager may
+        # refuse.  `test_actioninventory` freezes `checked` into a golden
+        # file, so a tick that followed the compositor would also be a
+        # golden that differed between a desktop and a headless run.
+        self.acts.fullscreen_window = QAction("&Full screen", self)
+        self.acts.fullscreen_window.setShortcut("F11")
+        self.acts.fullscreen_window.setToolTip(
+            "Fill the screen, without the window manager's title bar; "
+            "F11 again puts the window back the way it was"
+        )
+        self.acts.fullscreen_window.triggered.connect(self.toggle_fullscreen)
+
         view_menu = menu.addMenu("&View")
         self.setup_time_actions(view_menu)
         self.setup_amplitude_actions(view_menu)
@@ -5059,6 +5072,7 @@ class Audian(QMainWindow):
         view_menu.addAction(self.acts.system_theme)
         view_menu.addAction(self.acts.daylight_mode)
         view_menu.addAction(self.acts.maximize_window)
+        view_menu.addAction(self.acts.fullscreen_window)
         self.addAction(self.acts.next_file)
         self.addAction(self.acts.previous_file)
 
@@ -5311,6 +5325,35 @@ class Audian(QMainWindow):
             self.setWindowState(state & ~Qt.WindowState.WindowMaximized)
         else:
             self.setWindowState(state | Qt.WindowState.WindowMaximized)
+
+    def toggle_fullscreen(self):
+        """Fill the screen, without the window manager's title bar.
+
+        The same shape as `toggle_maximize` and for the same reason: the
+        state is read back rather than remembered, because the request can
+        be refused and nothing may depend on the outcome.
+
+        One bit is flipped rather than calling `showFullScreen()` and
+        `showNormal()`, which is what makes leaving put the window back the
+        way it was: `WindowMaximized` rides alongside `WindowFullScreen` in
+        the same flags, so a window that was maximized before F11 is
+        maximized again after it, and one that was not is not.
+        `showNormal()` clears both, so a maximized window would come back
+        merely restored -- the one thing a reader who pressed F11 twice did
+        not ask for.
+
+        The way out is said in the status bar on the way in.  With no title
+        bar there is no close button and no window menu to find it in, and
+        the reader has just made every other affordance smaller; the menu
+        bar is still there, which is why this is a reminder rather than a
+        rescue.
+        """
+        state = self.windowState()
+        if state & Qt.WindowState.WindowFullScreen:
+            self.setWindowState(state & ~Qt.WindowState.WindowFullScreen)
+        else:
+            self.setWindowState(state | Qt.WindowState.WindowFullScreen)
+            self.notify("info", "Full screen -- F11 to leave")
 
     def shortcuts(self):
         # parented, WA_DeleteOnClose and explicitly non-modal: the old
