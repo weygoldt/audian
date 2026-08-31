@@ -315,6 +315,44 @@ action that leaves state behind has to join them.
   `set_handles_movable` has to switch off.  A test presses at y=0, where the
   envelope is solid, and asserts the region moved.
 
+- [ ] **F2 is a one-way door.**  Low priority, and *not* the bug it was
+  found under: the report was "I cannot toggle off the spec", and F3
+  (`toggle_spectrograms`) does exactly that, from the mean mode too --
+  measured, from ``traces=0 specs=1 mean=1`` it gives ``1/0/0``.  That part
+  was a misremembered key, Shift+F2 being `toggle_mean_spec`.
+
+  Driving the three keys to check it turned up something that is not a
+  misremembering.  From the opening state, printing
+  `show_traces` / `show_specs` / `mean_spec` after each press:
+
+  ====================  =====================================================
+  key, pressed 4x       states, from ``traces=1 specs=0 mean=0``
+  ====================  =====================================================
+  F2                    ``0/1/0``, ``1/1/0``, ``0/1/0``, ``1/1/0``
+  F3                    ``1/1/0``, ``1/0/0``, ``1/1/0``, ``1/0/0``
+  Shift+F2              ``0/1/1``, ``1/1/0``, ``0/1/1``, ``1/1/0``
+  ====================  =====================================================
+
+  **F2 never comes back.**  Its first press turns the traces off, and
+  `toggle_traces` forces `show_specs = 1` so the lanes are not left empty;
+  from then on F2 oscillates between "spectrograms only" and "both", and
+  the opening state -- traces alone -- is unreachable with that key.  A
+  reader who pressed F2 once has a spectrogram they did not ask for, and
+  getting back to where they were needs a different key.
+
+  The fix that fits what is already here is to make F2 a round trip the way
+  Shift+F2 already is one: `set_mean_spectrogram` remembers
+  `traces_before_mean` and restores it, and `toggle_traces` wants the same
+  memo for the spectrogram it switched on.  Then F2 is traces-only ->
+  spectrograms-only -> traces-only, F3 stays the explicit switch, and no new
+  key is spent.
+
+  One inconsistency to settle while in there: the "never leave the stack
+  empty" rule lives in the *toggles* and not in `set_panels`, so it is not
+  an invariant.  Measured, `set_panels(traces=False, specs=0)` returns
+  ``0/0/0`` and draws the empty stack the toggles exist to prevent --
+  reachable from a plugin, from a linked tab, or from a settings file.
+
 - [ ] **`theme.collect_orphan_widgets` can segfault the test suite.** It
   walks a snapshot of `QApplication.topLevelWidgets()` and calls
   `setParent(holder)` inside that same loop, so a reparent can make Qt
