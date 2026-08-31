@@ -70,6 +70,110 @@
   precedence, and that is a decision rather than a mechanism.  Channel
   selection is per-file and needs the clamp `open()` already applies.
 
+# Spectrogram controls
+
+Three additions to the Spectrogram page of the side panel, asked for
+together and best done together: they share a `ParameterGroup`, and two of
+them have to keep agreeing with keys that already work.
+
+The page is built in `DataBrowser.setup_parameter_bar` (databrowser.py);
+the row helper is `ParameterGroup.add_row(caption, shortcut, *widgets)`,
+which only ever appends -- there is no insert API, so the order of the
+rows is the order they are added.  Every combo box in this group goes
+through `narrow_combo`, because this page already sets the width of the
+whole side panel and a control that publishes a wide size hint widens the
+window's minimum with it.
+
+`Smoothing` is the worked example for all three: state on `DataBrowser`, a
+setter shaped like `set_color_map` with `dispatch` and `save` flags,
+persistence in the `spectrogram` settings block, a `sig...Changed` signal
+so every tab agrees, and the choice pushed down through `Panel` to the
+items.  **Do not bump `SPECTROGRAM_SETTING_VERSION`** to add a key:
+`spectrogram_settings` drops the whole block on a version it does not
+recognise, so a bump takes every reader's colormap, window and overlap
+away to add a preference they have not set yet.
+
+Two harnesses will complain, both by design.  `tests/test_actioninventory.py`
+freezes every action into `tests/data/action-inventory.json`, so a new key
+means regenerating it in the same commit -- `AUDIAN_REGENERATE_GOLDEN=1
+.venv-qt6/bin/python -m pytest tests/test_actioninventory.py` -- and the
+diff is the review.  Its sweep also fires every action on a loaded
+recording, and puts the theme and the window state back afterwards; a new
+action that leaves state behind has to join them.
+
+- [ ] **A checkbox for the filter cutoff lines.**  `SpectrogramPlot` draws
+  `highpass_handle` and `lowpass_handle` (spectrogramplot.py:214-229), two
+  movable `pg.InfiniteLine`s, whenever `"filtered" in browser.data`, and
+  there is no way to turn them off.  They earn their place while filtering
+  and they are two lines across every lane while reading, so this is a
+  visibility switch and not a removal.
+
+  Not to be confused with `set_handles_movable`, which already exists and
+  answers a different question -- whether the handle or the lane gets the
+  mouse -- and whose docstring carries the measurement for it.  A hidden
+  handle should be non-interactive too: an invisible line that still
+  swallows a rubber-band drag is worse than a visible one.
+
+- [ ] **Sliders for power, max and min.**  Six keys drive the colour scale
+  and none of them can be given a number: `D`/`Shift+D` (`power_down` /
+  `power_up`, both ends together), `K`/`Shift+K` (`max_power_down` /
+  `max_power_up`) and `J`/`Shift+J` (`min_power_down` / `min_power_up`).
+  They run `Audian.apply_power_ranges(name)` -> `apply_ranges(name,
+  browser.spectrogram_power)` -> `PlotRange.step_up` / `max_up` / `min_up`
+  and their opposites (plotranges.py:371-436), each one `rstep` followed by
+  `set_ranges`.
+
+  Wanted: the shape the filter cutoffs already have -- a slider and a
+  `pg.SpinBox` on one row, the slider wrapped in
+  `ParameterGroup.expanding(...)`; see the High-pass and Low-pass rows.
+  Two rows is probably right, **Max** and **Min** as the two ends in dB,
+  with **Power** as the pair moving together -- but three sliders in a
+  group that is already the widest page is a layout question worth
+  measuring before it is a code question.
+
+  The hard part is not the widgets.  It is that the number then has three
+  writers: the keys, the sliders, and `fit_levels`, which refits the ramp
+  whenever a panel is shown or the smoothing changes.  So the widgets have
+  to *follow* the range and not own it.  The sink every path ends in is
+  `SpectrogramPlot.setZRange`; `_applying_levels` and
+  `_cbar_levels_changed` beside it record why "the widget changed, so the
+  reader changed it" is wrong, and `set_color_map` and
+  `set_spec_smoothing` show the `blockSignals` sandwich to write a widget
+  back with.
+
+  `LogSlider` (databrowser.py) is the filter's slider and is logarithmic
+  in Hz.  dB is already logarithmic, so these want a plain `QSlider` over
+  `rmin..rmax`, not that class.
+
+- [ ] **Peaking: show what is clipped at the top of the colour ramp.**  A
+  checkbox and a key, after focus peaking in a camera: the reader wants to
+  see which bins sit at or above the top of the current ramp, because
+  those are the ones whose differences the picture has stopped showing.
+  The top end only -- half the panel is at or below the floor by
+  construction (`fit_levels`), so marking the floor would mark everything.
+
+  The colour map is the cheap correct implementation, not a mask.
+  `pg.ImageItem.setLevels((zmin, zmax))` maps everything at or above
+  `zmax` onto the **last LUT entry**, so a map whose final stop is a
+  warning colour marks exactly the clipped pixels at no per-frame cost.
+  With a 256 entry LUT that entry also covers the top 0.4 % of the ramp,
+  which is what a video scope's zebra does and is the wanted behaviour
+  anyway.
+
+  It has to be applied where the map is applied, or `Shift+C` or a theme
+  switch will quietly drop it.  `Panel.set_colormap` (panels.py) pushes to
+  `self.axcs`, the colour bars, and `pg.ColorBarItem` forwards the LUT to
+  the image it was handed by `setImageItem`.  `resolve_colormap`
+  (panels.py) is the one place a name, an index and a `pg.ColorMap` all
+  become a `pg.ColorMap`, so a "and then redden the top stop" wrapper
+  belongs beside it.  `DataBrowser.apply_theme` re-pushes the map after a
+  theme change, and is the path that catches a version which only applied
+  it once.
+
+  Take the warning colour from `theme` rather than writing a literal: the
+  two pages have different grounds, and the whole point is a colour that
+  cannot be mistaken for a hot bin of the ramp itself.
+
 # Spec stuff 
 
 - [ ] **`theme.collect_orphan_widgets` can segfault the test suite.** It
