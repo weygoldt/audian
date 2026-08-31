@@ -315,6 +315,38 @@ action that leaves state behind has to join them.
   `set_handles_movable` has to switch off.  A test presses at y=0, where the
   envelope is solid, and asserts the region moved.
 
+- [ ] **The suite can write the developer's real `~/.config/audian/settings.json`,
+  and `test_panelsplitter` poisons itself with it.**  Found while verifying
+  an unrelated change; the code under test is innocent.
+
+  Symptom: `test_a_lane_opens_with_the_spectrogram_at_the_height_it_grew_the_lane_by[roomy_browser]`
+  fails `assert 251.9143413367943 == 120` -- the lane opens on a *restored*
+  split instead of `theme.SPECTROGRAM_MIN_HEIGHT`.  It is intermittent:
+  measured, the same module failed at 22:56 and passed 152/152 at 23:04
+  with the same tree and the same settings file, and the failing run is the
+  one whose mtime shows it wrote `~/.config/audian/settings.json`.  Proof
+  it is the settings file and not the code: with `XDG_CONFIG_HOME` pointed
+  at an empty directory all three parameters pass, and the real file holds
+  `panel-split = {"version": 3, "scale": 2.4833333333333334}` written
+  during a test run rather than by the reader.
+
+  The mechanism is that the redirect is a **shared module global mutated by
+  three module-scoped generator fixtures**.  `open_stack` saves
+  `audian_app.settings_path`, `build_window` overwrites it, and the fixture
+  restores it on teardown -- but `browser`, `roomy_browser` and
+  `wide_browser` are created lazily and torn down in reverse, so which
+  directory is active when a `save_panel_split` fires depends on which
+  tests asked for which fixture in which order.  Once a write lands in the
+  real file, every later run reads it back in `DataBrowser.__init__` and
+  the height assertion fails until somebody clears the key by hand.
+
+  That is the hazard `tests/test_settings.py` names in its own docstring
+  and `tests/test_joinmarkers.py` records having already happened once.  It
+  is worth an autouse session fixture that redirects `settings_path` and
+  `QSettings` once, for the whole run, instead of three fixtures taking
+  turns -- and an assertion at the end of the session that the real file
+  was not touched.
+
 - [ ] **F2 is a one-way door.**  Low priority, and *not* the bug it was
   found under: the report was "I cannot toggle off the spec", and F3
   (`toggle_spectrograms`) does exactly that, from the mean mode too --
