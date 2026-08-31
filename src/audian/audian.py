@@ -3985,6 +3985,13 @@ class Audian(QMainWindow):
             if b is not self.browser():
                 b.set_spec_smoothing(key, dispatch=False, save=False)
 
+    def dispatch_cutoff_lines(self):
+        """Every tab agrees about the cutoff lines; see `dispatch_smoothing`."""
+        on = self.browser().show_cutoff_lines
+        for b in self.browsers:
+            if b is not self.browser():
+                b.set_cutoff_lines(on, dispatch=False, save=False)
+
     def toggle_link_power(self):
         for s in Panel.powers:
             self.link_ranges[s] = not self.link_ranges[s]
@@ -5263,6 +5270,7 @@ class Audian(QMainWindow):
             browser.sigResolutionChanged.connect(self.dispatch_resolution)
             browser.sigColorMapChanged.connect(self.dispatch_colormap)
             browser.sigSmoothingChanged.connect(self.dispatch_smoothing)
+            browser.sigCutoffLinesChanged.connect(self.dispatch_cutoff_lines)
             browser.sigFilterChanged.connect(self.dispatch_filter)
             browser.sigEnvelopeChanged.connect(self.dispatch_envelope)
             browser.sigTraceChanged.connect(self.dispatch_trace)

@@ -1450,3 +1450,98 @@ def test_the_window_fits_a_laptop(browser):
     assert window.toolbar.minimumSizeHint().width() < floor
     assert window.statusBar().minimumSizeHint().width() < floor
     assert browser.parambar.minimumSizeHint().width() < floor
+
+
+# --- the filter cutoff lines -----------------------------------------------
+
+
+def cutoff_handles(browser):
+    """Every filter handle of the stack, both ends of every lane."""
+    return [
+        handle
+        for ax in browser.spectrogram_plots()
+        for handle in (ax.highpass_handle, ax.lowpass_handle)
+    ]
+
+
+def restore_cutoffs(browser):
+    """Put the switch and the region mode back, whatever the test did."""
+    browser.set_region_mode(DataBrowser.MODE_ZOOM)
+    browser.set_cutoff_lines(True, dispatch=False, save=False)
+    settle()
+
+
+def test_the_spectrogram_page_carries_the_cutoff_switch(browser):
+    """And it starts on: the lines have always been drawn."""
+    assert browser.cutoffsw is not None
+    assert browser.cutoffsw.isCheckable()
+    assert browser.cutoffsw.isChecked()
+    assert browser.show_cutoff_lines
+    page = next(g for g in browser.param_groups if g.title == "Spectrogram")
+    assert browser.cutoffsw in page.findChildren(QToolButton)
+    handles = cutoff_handles(browser)
+    assert len(handles) == 2 * len(list(browser.spectrogram_plots()))
+    assert all(h.isVisible() for h in handles)
+
+
+def test_unchecking_the_switch_takes_the_lines_off_every_lane(browser):
+    """A four channel stack has eight of them, and all eight go."""
+    try:
+        browser.cutoffsw.setChecked(False)
+        settle()
+        assert not browser.show_cutoff_lines
+        assert not any(h.isVisible() for h in cutoff_handles(browser))
+        browser.cutoffsw.setChecked(True)
+        settle()
+        assert browser.show_cutoff_lines
+        assert all(h.isVisible() for h in cutoff_handles(browser))
+    finally:
+        restore_cutoffs(browser)
+
+
+def test_a_hidden_cutoff_line_does_not_keep_the_mouse(browser):
+    """An invisible line that still swallows a rubber-band drag is worse
+    than a visible one: nothing on screen explains what took the drag.
+
+    `SpectrogramPlot.set_handles_movable` measures what a movable handle
+    costs a drag started on it -- zero region signals against one.
+    """
+    try:
+        assert all(h.movable for h in cutoff_handles(browser))
+        browser.set_cutoff_lines(False, dispatch=False, save=False)
+        settle()
+        assert not any(h.movable for h in cutoff_handles(browser))
+        browser.set_cutoff_lines(True, dispatch=False, save=False)
+        settle()
+        assert all(h.movable for h in cutoff_handles(browser))
+    finally:
+        restore_cutoffs(browser)
+
+
+def test_the_switch_and_the_region_mode_do_not_overwrite_each_other(browser):
+    """Two owners write movability and neither may clear the other's word.
+
+    Label mode takes the mouse from the cutoffs for as long as it lasts
+    (`DataBrowser.set_region_mode`); the checkbox takes it away for as long
+    as the lines are hidden.  Leaving label mode must not hand the mouse
+    back to a line nobody can see, and showing a line while labelling must
+    not take the drag back from the labels.
+    """
+    try:
+        browser.set_cutoff_lines(False, dispatch=False, save=False)
+        browser.set_region_mode(DataBrowser.MODE_LABEL)
+        settle()
+        assert not any(h.movable for h in cutoff_handles(browser))
+        # showing them again while labelling: seen, but still not grabbing
+        browser.set_cutoff_lines(True, dispatch=False, save=False)
+        settle()
+        assert all(h.isVisible() for h in cutoff_handles(browser))
+        assert not any(h.movable for h in cutoff_handles(browser))
+        # hidden again, then out of label mode: still not grabbing
+        browser.set_cutoff_lines(False, dispatch=False, save=False)
+        browser.set_region_mode(DataBrowser.MODE_ZOOM)
+        settle()
+        assert not any(h.movable for h in cutoff_handles(browser))
+        assert not any(h.isVisible() for h in cutoff_handles(browser))
+    finally:
+        restore_cutoffs(browser)

@@ -147,6 +147,8 @@ def run_interactions(app, main_win):
         steps += [
             ("hide channel rail", lambda: browser.toggle_rail()),
             ("show channel rail", lambda: browser.toggle_rail()),
+            ("hide the filter cutoff lines", lambda: browser.set_cutoff_lines(False)),
+            ("show the filter cutoff lines", lambda: browser.set_cutoff_lines(True)),
             ("solo channel 0", lambda: browser.toggle_solo(0)),
             ("un-solo channel 0", lambda: browser.toggle_solo(0)),
             ("maximise channel 0", lambda: browser.toggle_maximize(0)),

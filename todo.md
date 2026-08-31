@@ -101,18 +101,30 @@ diff is the review.  Its sweep also fires every action on a loaded
 recording, and puts the theme and the window state back afterwards; a new
 action that leaves state behind has to join them.
 
-- [ ] **A checkbox for the filter cutoff lines.**  `SpectrogramPlot` draws
-  `highpass_handle` and `lowpass_handle` (spectrogramplot.py:214-229), two
-  movable `pg.InfiniteLine`s, whenever `"filtered" in browser.data`, and
-  there is no way to turn them off.  They earn their place while filtering
-  and they are two lines across every lane while reading, so this is a
-  visibility switch and not a removal.
+- [x] **A checkbox for the filter cutoff lines.**  `Filter` / `Cutoff lines`,
+  last row of the Spectrogram page, in the shape the Filter page's `Linked
+  band` already has -- a checkable `QToolButton`, which carries its label
+  without the indicator column a `QCheckBox` would add to the width of the
+  widest page in the bar.  Measured on `data/Gryllus_campestris.wav` at
+  1600x1000, traces off, both lanes on screen, cutoffs at 2000 and 3500 Hz
+  of a 96 kHz recording: hiding them changes 11537 of 1600000 pixels, all
+  of them between rows 400 and 805 and columns 114 and 1347 -- inside the
+  two lanes -- and moves no number at all.  Showing them again is pixel for
+  pixel the picture from before.
 
-  Not to be confused with `set_handles_movable`, which already exists and
-  answers a different question -- whether the handle or the lane gets the
-  mouse -- and whose docstring carries the measurement for it.  A hidden
-  handle should be non-interactive too: an invisible line that still
-  swallows a rubber-band drag is worse than a visible one.
+  A hidden handle is non-interactive too, and the two states are kept apart
+  rather than folded together: the region mode writes movability and the
+  checkbox writes visibility, and either may write while the other is off.
+  `SpectrogramPlot._apply_handle_state` is where they meet, and the
+  regression test drives all four corners of the pair.
+
+  Persisted beside the colormap, as `cutoff-lines` at the **unchanged**
+  version 1, and dispatched to every open tab.  It says what a spectrogram
+  should look like rather than what this file is, which is the same reason
+  `Smoothing` is a preference -- a reader who has just cleared two lines
+  off sixteen lanes did not ask for them back on the next recording.  Only
+  a real `bool` is believed, so a `0` or a `1` a hand-edited file offers is
+  an unset preference and the lines are drawn.
 
 - [ ] **Sliders for power, max and min.**  Six keys drive the colour scale
   and none of them can be given a number: `D`/`Shift+D` (`power_down` /

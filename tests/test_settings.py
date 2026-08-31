@@ -321,6 +321,7 @@ def test_a_hand_edited_file_never_raises(store, app, junk):
     index = DataBrowser.read_color_map_setting()
     assert 0 <= index < len(theme.spectrogram_maps())
     assert DataBrowser.read_smoothing_setting() in smoothing.keys()
+    assert DataBrowser.read_cutoff_lines_setting() is True
 
 
 # --- the smoothing ---------------------------------------------------------
@@ -394,6 +395,68 @@ def test_the_smoothing_rides_in_the_same_block_as_the_map(store, app):
     )
     assert DataBrowser.read_color_map_setting() == 2
     assert DataBrowser.read_smoothing_setting() == smoothing.DEFAULT
+
+
+# --- the filter cutoff lines -----------------------------------------------
+
+
+def test_nothing_stored_draws_the_cutoff_lines(store, app):
+    """The lines have always been there, so never having chosen means yes."""
+    from audian.databrowser import DataBrowser
+
+    assert DataBrowser.read_cutoff_lines_setting() is True
+
+
+@pytest.mark.parametrize("stored", [True, False])
+def test_the_cutoff_line_switch_survives_the_round_trip(store, app, stored):
+    from audian.databrowser import DataBrowser
+
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {
+            "version": DataBrowser.SPECTROGRAM_SETTING_VERSION,
+            "cutoff-lines": stored,
+        },
+    )
+    assert DataBrowser.read_cutoff_lines_setting() is stored
+
+
+@pytest.mark.parametrize("junk", ["off", 0, 1, None, [], {}])
+def test_a_cutoff_line_value_of_the_wrong_shape_draws_them(store, app, junk):
+    """Only a real bool is believed; anything else is an unset preference.
+
+    `0` and `1` are the interesting entries: they are what a hand-edited
+    file or a JSON writer of another language produces, they compare equal
+    to the booleans, and reading them as such would let a `1` written for
+    something else switch a picture.
+    """
+    from audian.databrowser import DataBrowser
+
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {"version": DataBrowser.SPECTROGRAM_SETTING_VERSION, "cutoff-lines": junk},
+    )
+    assert DataBrowser.read_cutoff_lines_setting() is True
+
+
+def test_the_cutoff_lines_ride_in_the_same_block_as_the_map(store, app):
+    """Same block, same version -- see the smoothing's own test above."""
+    from audian.databrowser import DataBrowser
+
+    theme.set_theme(theme.THEME_DARK)
+    name = theme.spectrogram_maps()[2]
+    store.save_setting(
+        DataBrowser.SPECTROGRAM_SETTING,
+        {
+            "version": DataBrowser.SPECTROGRAM_SETTING_VERSION,
+            "colormap": {theme.THEME_DARK: name},
+            "smoothing": "gaussian",
+            "cutoff-lines": False,
+        },
+    )
+    assert DataBrowser.read_color_map_setting() == 2
+    assert DataBrowser.read_smoothing_setting() == "gaussian"
+    assert DataBrowser.read_cutoff_lines_setting() is False
 
 
 # --- the write itself ------------------------------------------------------

@@ -1673,6 +1673,7 @@ class DataBrowser(QWidget):
     sigResolutionChanged = Signal()
     sigColorMapChanged = Signal()
     sigSmoothingChanged = Signal()
+    sigCutoffLinesChanged = Signal()
     sigFilterChanged = Signal()
     sigEnvelopeChanged = Signal()
     sigTraceChanged = Signal(object, object, object)
@@ -1998,6 +1999,13 @@ class DataBrowser(QWidget):
         #: every tab and a tab whose file is still loading has been
         #: constructed but not opened.
         self.smoothw = None
+        #: are the two filter cutoff lines drawn over the spectrograms?
+        #: A preference and not a per-recording state, which is why it is
+        #: read from the settings file beside the colormap rather than
+        #: defaulting to True -- see `set_cutoff_lines`.
+        self.show_cutoff_lines = self.read_cutoff_lines_setting()
+        #: the checkbox that shows it; see `smoothw` for why it is named here
+        self.cutoffsw = None
         #: window and overlap the reader has asked for this run, or None
         #: while both are still whatever the recording opened on.  Only a
         #: number that came from a gesture is ever written.
@@ -2116,6 +2124,20 @@ class DataBrowser(QWidget):
         """
         saved = DataBrowser.spectrogram_settings().get("smoothing")
         return smoothing.resolve(saved if isinstance(saved, str) else None)
+
+    @staticmethod
+    def read_cutoff_lines_setting() -> bool:
+        """Are the filter cutoff lines shown?  Default yes.
+
+        Only a real `bool` is believed.  The key can have been written by
+        another audian, and `spectrogram_settings` has already thrown out
+        anything whose version this one does not know, so what is left to
+        guard against is a value of the wrong shape -- which resolves to the
+        drawn state rather than the hidden one, because a reader who has
+        never chosen should see the lines that have always been there.
+        """
+        saved = DataBrowser.spectrogram_settings().get("cutoff-lines")
+        return saved if isinstance(saved, bool) else True
 
     @contextmanager
     def updating(self):
@@ -2596,6 +2618,7 @@ class DataBrowser(QWidget):
         # dispatched nor saved -- a browser being built is not a reader
         # choosing, which is the rule `set_color_map` states.
         self.set_spec_smoothing(dispatch=False, save=False)
+        self.set_cutoff_lines(dispatch=False, save=False)
         self.side_split.addWidget(self.parambar)
         self.side_split.setStretchFactor(1, 0)
         opened = self.restore_side_panel()
@@ -3185,6 +3208,33 @@ class DataBrowser(QWidget):
             # slider and its readout.
             self.fminw.setToolTip(self.spec_band_tooltip(nyquist))
             group.add_row("Opens at", "", self.fminw, self.fmaxw)
+
+            # The one overlay switch on this page, and last on it: every row
+            # above says how the picture is computed or how it is coloured,
+            # and this one says what is drawn on top of it.  Only offered
+            # when there is a filter to have cutoffs -- with no `filtered`
+            # trace `SpectrogramPlot` builds no handles, so the checkbox
+            # would be a switch with nothing on the other end.
+            #
+            # A checkable `QToolButton` and not a `QCheckBox`, which is what
+            # the Filter page's "Linked band" already is: the two read as
+            # the same kind of control, and the tool button carries its
+            # label without the indicator column a check box adds to the
+            # width of the widest page in the bar.
+            if "filtered" in self.data:
+                self.cutoffsw = QToolButton(self.parambar)
+                self.cutoffsw.setText("Cutoff lines")
+                self.cutoffsw.setCheckable(True)
+                self.cutoffsw.setChecked(self.show_cutoff_lines)
+                self.cutoffsw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+                self.cutoffsw.setToolTip(
+                    "Draw the high-pass and low-pass cutoffs over every "
+                    "spectrogram; hidden, they also stop taking the mouse"
+                )
+                self.cutoffsw.toggled.connect(lambda on: self.set_cutoff_lines(on))
+                group.add_row("Filter", "", self.cutoffsw)
+            else:
+                self.cutoffsw = None
             groups.append(group)
         else:
             self.nfftw = None
@@ -3194,6 +3244,7 @@ class DataBrowser(QWidget):
             self.smoothw = None
             self.fmaxw = None
             self.fminw = None
+            self.cutoffsw = None
 
         # envelope:
         if "envelope" in self.data:
@@ -7955,6 +8006,12 @@ class DataBrowser(QWidget):
                 # a preference -- either the one that was read back at
                 # start-up or the one just chosen.
                 "smoothing": self.spec_smoothing,
+                # Written unconditionally for the same reason, and under a
+                # key an older audian simply ignores.  The version is NOT
+                # bumped to add it: `spectrogram_settings` drops the whole
+                # block on a version it does not know, so a bump takes every
+                # reader's colormap, window and overlap away.
+                "cutoff-lines": self.show_cutoff_lines,
             },
         )
 
@@ -8602,6 +8659,39 @@ class DataBrowser(QWidget):
             self.schedule_spectrogram_save()
         if dispatch:
             self.sigSmoothingChanged.emit()
+
+    def set_cutoff_lines(
+        self, on=None, dispatch: bool = True, save: bool = True
+    ) -> None:
+        """Draw the two filter cutoff lines over the spectrograms, or do not.
+
+        The same shape as `set_color_map`, and a preference rather than a
+        per-recording state for the same reason `Smoothing` is one: it says
+        what a spectrogram should look like, not what this file is.  So it
+        persists, and so it reaches the other tabs -- a reader who has just
+        cleared two lines off sixteen lanes did not ask for them back on the
+        next recording.
+
+        Not to be confused with `SpectrogramPlot.set_handles_movable`, which
+        answers whether the handle or the lane gets the mouse.  A hidden line
+        is made non-interactive too, but that is decided down there, where
+        the two states meet -- see `set_handles_visible`.
+        """
+        if on is not None:
+            self.show_cutoff_lines = bool(on)
+        for ax in self.spectrogram_plots():
+            ax.set_handles_visible(self.show_cutoff_lines)
+        if (
+            self.cutoffsw is not None
+            and self.cutoffsw.isChecked() != self.show_cutoff_lines
+        ):
+            blocked = self.cutoffsw.blockSignals(True)
+            self.cutoffsw.setChecked(self.show_cutoff_lines)
+            self.cutoffsw.blockSignals(blocked)
+        if save:
+            self.schedule_spectrogram_save()
+        if dispatch:
+            self.sigCutoffLinesChanged.emit()
 
     def update_filter(self, highpass_cutoff=None, lowpass_cutoff=None):
         """Called when filter cutoffs were changed by key shortcuts or handles

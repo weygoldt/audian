@@ -122,6 +122,12 @@ class SpectrogramPlot(TimePlot):
     _refit_pending = False
     _applying_levels = False
 
+    #: The two writers of the filter handles' state, kept apart -- see
+    #: `set_handles_visible`.  Class level for the same reason as the flags
+    #: above, and both default to what the handles are built as.
+    _handles_movable = True
+    _handles_shown = True
+
     # The y axis here is frequency, with a hard Nyquist ceiling.  Padding
     # above it would only add an empty strip, so the caption headroom that
     # TimePlot reserves for an amplitude axis is switched off.
@@ -268,9 +274,44 @@ class SpectrogramPlot(TimePlot):
         `DataBrowser.set_region_mode` hands the pixels to whichever the
         reader is currently in.
         """
+        self._handles_movable = bool(movable)
+        self._apply_handle_state()
+
+    def set_handles_visible(self, visible: bool) -> None:
+        """Show or hide the two filter cutoff lines.
+
+        They earn their place while the reader is filtering and they are two
+        lines across every lane while the reader is looking at the picture.
+        Measured on ``data/Gryllus_campestris.wav`` -- 1600x1000, traces
+        off, both spectrogram lanes on screen, cutoffs at 2000 and 3500 Hz
+        of a 96 kHz recording: hiding them changes 11537 of the window's
+        1600000 pixels, all of them between rows 400 and 805 and columns 114
+        and 1347, which is inside the two lanes, and moves no number at all.
+        Showing them again is pixel for pixel the picture from before.
+
+        A hidden handle is also made non-interactive, which is the whole
+        reason this is not one `setVisible` loop.  `set_handles_movable`
+        records what a movable `pg.InfiniteLine` costs: it takes the press
+        before the view box sees it, so an *invisible* movable line
+        swallows a rubber-band drag that starts on a frequency the reader
+        cannot see a reason for.  That is strictly worse than the visible
+        case, which at least explains itself.
+
+        The two states are kept apart rather than folded together because
+        they answer to different owners -- the region mode writes one, the
+        reader's checkbox the other -- and either may write while the other
+        is off.  `_apply_handle_state` is where they meet.
+        """
+        self._handles_shown = bool(visible)
+        self._apply_handle_state()
+
+    def _apply_handle_state(self) -> None:
+        """Push visibility, and movability gated on it, to both handles."""
         for handle in (self.highpass_handle, self.lowpass_handle):
-            if handle is not None:
-                handle.setMovable(bool(movable))
+            if handle is None:
+                continue
+            handle.setVisible(self._handles_shown)
+            handle.setMovable(self._handles_movable and self._handles_shown)
 
     # --- axis label -------------------------------------------------------
 
