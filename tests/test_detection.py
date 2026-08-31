@@ -285,7 +285,7 @@ def test_every_hand_labelled_pulse_is_found_again(recording, examples, scored, d
     templates, score, times, level = scored[("pulse", domain)]
     k = detection.calibrate_k(score, times, examples["pulse"], templates)
     settings = detection.Settings(domain=domain, k=k)
-    found = detection._pick(score, times, level, templates, settings)
+    found = detection.pick(score, times, level, templates, settings)
     assert _recovered(found, examples["pulse"]) == 11
 
 
@@ -300,7 +300,7 @@ def test_the_detected_pulses_fall_into_the_syllables_the_reader_drew(
     """
     templates, score, times, level = scored[("pulse", domain)]
     k = detection.calibrate_k(score, times, examples["pulse"], templates)
-    found = detection._pick(score, times, level, templates,
+    found = detection.pick(score, times, level, templates,
                             detection.Settings(domain=domain, k=k))
     for syllable in examples["syllable"]:
         inside = [c for c in found
@@ -326,12 +326,12 @@ def test_both_categories_agree_about_how_often_the_cricket_sings(
 
     templates, score, times, level = scored[("syllable", domain)]
     k = detection.calibrate_k(score, times, examples["syllable"], templates)
-    syllables = detection._pick(score, times, level, templates,
+    syllables = detection.pick(score, times, level, templates,
                                 detection.Settings(domain=domain, k=k))
 
     templates, score, times, level = scored[("pulse", domain)]
     k = detection.calibrate_k(score, times, examples["pulse"], templates)
-    pulses = detection._pick(score, times, level, templates,
+    pulses = detection.pick(score, times, level, templates,
                              detection.Settings(domain=domain, k=k))
     starts = np.array(sorted(c.t0 for c in pulses))
     chirps = 1 + int(np.sum(np.diff(starts) > 0.050))
@@ -362,7 +362,7 @@ def test_the_threshold_calibrated_from_the_examples_finds_the_examples(
     templates, score, times, level = scored[(category, domain)]
     k = detection.calibrate_k(score, times, examples[category], templates)
     assert k is not None
-    found = detection._pick(score, times, level, templates,
+    found = detection.pick(score, times, level, templates,
                             detection.Settings(domain=domain, k=k))
     tol = 0.030 if category == "syllable" else ONSET_TOL_S
     assert _recovered(found, examples[category], tol) == len(examples[category])
@@ -508,7 +508,7 @@ def test_detections_carry_the_band_and_channel_the_examples_had(
     """They are about to become label rows, which need both."""
     templates, score, times, level = scored[("pulse", detection.SPECTROGRAM)]
     k = detection.calibrate_k(score, times, examples["pulse"], templates)
-    found = detection._pick(score, times, level, templates,
+    found = detection.pick(score, times, level, templates,
                             detection.Settings(k=k))
     assert found
     for candidate in found[:20]:

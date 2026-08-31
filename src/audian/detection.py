@@ -186,6 +186,7 @@ __all__ = [
     "k_from_sensitivity",
     "learn",
     "margin_s",
+    "pick",
     "pcen",
     "represent",
     "score_curve",
@@ -871,7 +872,7 @@ def _extent(times: np.ndarray, peak: int, duration_s: float) -> tuple:
     return t0, t0 + float(duration_s)
 
 
-def _pick(score: np.ndarray, times: np.ndarray, level, templates: Templates,
+def pick(score: np.ndarray, times: np.ndarray, level, templates: Templates,
           settings: Settings) -> list:
     """Peaks of a score curve as candidate events."""
     if score.size == 0:
@@ -944,4 +945,4 @@ def detect(samples: np.ndarray, rate: float, templates: Templates,
     settings = settings.normalized()
     score, times, level = score_curve(samples, rate, templates, settings,
                                       t_offset)
-    return _pick(score, times, level, templates, settings)
+    return pick(score, times, level, templates, settings)
