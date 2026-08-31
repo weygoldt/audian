@@ -241,6 +241,21 @@ def run_interactions(app, main_win):
                 lambda: browser.zmidsliderw.setValue(browser.zmidsliderw.value() + 10),
             ),
         ]
+    if browser is not None and getattr(browser, "ofracw", None) is not None:
+        # The overlap, through the box and not the slider beside it: the box
+        # is the precise writer, and a value typed into it is the path that
+        # goes through the 200 ms debounce and a whole respectrogram.
+        settled_overlap = browser.ofracw.value()
+        steps += [
+            (
+                "overlap: a value the slider cannot express",
+                lambda: browser.ofracw.setValue(62.5),
+            ),
+            (
+                "overlap: back where it was",
+                lambda: browser.ofracw.setValue(settled_overlap),
+            ),
+        ]
 
     clean = 0
     for label, step in steps:

@@ -24,6 +24,7 @@ import os
 import sys
 from pathlib import Path
 
+import pyqtgraph as pg
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QLabel,
     QSizePolicy,
+    QSlider,
     QTabWidget,
     QToolButton,
 )
@@ -1854,3 +1856,142 @@ def test_a_theme_switch_does_not_drop_the_mark(peaking_off):
         window.set_app_theme(before)
         settle()
         pump(0.6)
+
+
+# --- the overlap row -------------------------------------------------------
+
+
+@pytest.fixture
+def overlap(browser):
+    """Give the resolution back exactly as the test found it.
+
+    The stack fixture is module scoped and a spectrogram is recomputed from
+    the overlap, so a test that left it somewhere else would hand the next
+    one a picture nobody asked for.
+    """
+    spectrogram = browser.data["spectrogram"]
+    before = spectrogram.overlap_frac
+    yield browser
+    browser.set_resolution(overlap_frac=before, dispatch=False)
+    settle()
+    pump(0.3)
+
+
+def overlap_widgets_agree(browser):
+    """Do the two halves of the row say what the transform is computed at?
+
+    The slider is whole percent AND stops at 99, so at the top of the range
+    it sits one position below what the box reads: a hop of one frame at
+    nfft 256 is 99.609375 %, which rounds to 100, and a 0..99 slider has no
+    such position.  `QSlider.setValue` clamps that itself.  It is the
+    clearest statement of why the row needed a box.
+    """
+    percent = 100 * browser.data["spectrogram"].overlap_frac
+    slider, box = browser.ofracsliderw, browser.ofracw
+    want = min(slider.maximum(), int(round(percent)))
+    return slider.value() == want and box.value() == pytest.approx(percent)
+
+
+def test_the_overlap_row_is_a_slider_and_a_box(browser):
+    """The last number on this page that could only be read, not written."""
+    assert isinstance(browser.ofracsliderw, QSlider)
+    assert isinstance(browser.ofracw, pg.SpinBox)
+    assert browser.ofracsliderw.minimum() == 0
+    assert browser.ofracsliderw.maximum() == 99
+    # 0..100 and not the 99.999 % `prepare_update` clamps to: the highest
+    # overlap the transform can actually reach is `1 - hop/nfft`, which is
+    # above the clamp for a long window, and a box that could not show it
+    # would report a picture drawn at something else.
+    assert browser.ofracw.opts["bounds"] == [0.0, 100.0]
+    assert overlap_widgets_agree(browser)
+
+
+def test_a_typed_overlap_is_not_rounded_by_the_slider_beside_it(overlap):
+    """The whole point of the box, and the trap in adding it.
+
+    The slider is whole percent where `overlap_frac` is a float, so a 62.5 %
+    that went out through the slider would come back 62.  The box is the
+    precise writer; the slider is written to and never read back from.
+    """
+    browser = overlap
+    spectrogram = browser.data["spectrogram"]
+    browser.ofracw.setValue(62.5)
+    settle()
+    pump(0.5)
+    assert spectrogram.overlap_frac == pytest.approx(0.625)
+    assert browser.ofracw.value() == pytest.approx(62.5)
+    assert browser.ofracsliderw.value() == 62  # the slider is whole percent
+    assert overlap_widgets_agree(browser)
+
+
+def test_the_slider_still_sets_the_overlap_it_is_dragged_to(overlap):
+    """The coarse grab keeps working, and the box follows what landed.
+
+    Not the value it was dragged to: `set_hop` rounds the hop to whole
+    frames, so 80 % of a 256 sample window is 80.078125 % and the box says
+    so rather than repeating what was asked for.
+    """
+    browser = overlap
+    spectrogram = browser.data["spectrogram"]
+    browser.ofracsliderw.setValue(80)
+    settle()
+    pump(0.5)
+    hop = int(round(0.2 * spectrogram.nfft))
+    assert spectrogram.hop == hop
+    assert spectrogram.overlap_frac == pytest.approx(1 - hop / spectrogram.nfft)
+    assert overlap_widgets_agree(browser)
+
+
+def test_a_box_typed_into_is_debounced_like_a_key_held_down(overlap):
+    """`update_resolution` stashes and starts the 200 ms timer.
+
+    Respectrogramming sixteen channels costs about 1.5 s, so the box has to
+    come in through the same coalescing the keys and the slider do -- one
+    recompute for a burst, not one per value.
+    """
+    browser = overlap
+    spectrogram = browser.data["spectrogram"]
+    browser.set_resolution(overlap_frac=0.5, dispatch=False)
+    settle()
+    browser.ofracw.setValue(70.0)
+    browser.ofracw.setValue(75.0)
+    assert browser.resolution_timer.isActive()
+    assert browser.pending_overlap == pytest.approx(0.75)
+    assert spectrogram.overlap_frac == pytest.approx(0.5), "recomputed per keystroke"
+    settle()
+    pump(0.5)
+    assert spectrogram.overlap_frac == pytest.approx(0.75)
+    assert overlap_widgets_agree(browser)
+
+
+@pytest.mark.parametrize("action", ["overlap_up", "overlap_down"])
+def test_the_two_keys_still_work_and_both_halves_follow_them(overlap, action):
+    """`O` and `Shift+O` halve and double the hop, which is a gesture rather
+    than a number -- the row follows the transform, it does not hold it."""
+    browser = overlap
+    browser.set_resolution(overlap_frac=0.5, dispatch=False)
+    settle()
+    pump(0.3)
+    before = browser.data["spectrogram"].overlap_frac
+    getattr(browser.window().acts, action).trigger()
+    settle()
+    pump(0.5)
+    assert browser.data["spectrogram"].overlap_frac != before, f"{action} moved nothing"
+    assert overlap_widgets_agree(browser)
+
+
+def test_a_hundred_percent_is_refused_by_the_transform_and_the_box_says_so(overlap):
+    """A hop of zero would be a column per sample, so `set_hop` floors it at
+    one frame -- and the box reports the 1 - 1/nfft that really landed
+    rather than the 100 % it was handed."""
+    browser = overlap
+    spectrogram = browser.data["spectrogram"]
+    browser.ofracw.setValue(100.0)
+    settle()
+    pump(0.5)
+    assert spectrogram.hop == 1
+    assert spectrogram.overlap_frac == pytest.approx(1 - 1 / spectrogram.nfft)
+    assert browser.ofracw.value() == pytest.approx(100 - 100 / spectrogram.nfft)
+    # and the slider, which has no position for it, stops at its own top
+    assert browser.ofracsliderw.value() == 99
+    assert overlap_widgets_agree(browser)

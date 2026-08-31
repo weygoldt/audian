@@ -1834,7 +1834,7 @@ class DataBrowser(QWidget):
         self.audiopairw = None
         self.nfftw = None
         self.ofracw = None
-        self.ofraclabelw = None
+        self.ofracsliderw = None
         self.cmapw = None
         self.fmaxw = None
         self.fminw = None
@@ -3128,23 +3128,77 @@ class DataBrowser(QWidget):
             )
             group.add_row("Window", "R / ⇧R", self.nfftw)
 
-            self.ofracw = QSlider(Qt.Orientation.Horizontal, self.parambar)
-            self.ofracw.tooltip = "Overlap of Fourier windows"
-            self.ofracw.setToolTip(self.ofracw.tooltip)
-            self.ofracw.setRange(0, 99)
-            self.ofracw.setTickPosition(QSlider.TickPosition.TicksBelow)
-            self.ofracw.setTickInterval(25)
-            self.ofracw.setValue(int(round(100 * spectrogram.overlap_frac)))
-            self.ofracw.valueChanged.connect(
+            # The overlap, in the shape the two filter cutoffs and the
+            # three level rows already have: the slider takes the width and
+            # the box takes the exact value.  The read-only label this box
+            # replaces could show a number and never take one, which made
+            # Overlap the last number on this page that could not be typed.
+            #
+            # The slider stays whole percent and the box does NOT, and that
+            # asymmetry is the point.  `overlap_frac` is a float, so a
+            # 62.5 % round-tripped through a 0..99 slider comes back 62 --
+            # the box is therefore the precise writer, and the slider is
+            # only ever WRITTEN in `set_resolution` and never read back
+            # from.  Both go through `update_resolution`, which is debounced
+            # at 200 ms because respectrogramming sixteen channels costs
+            # about 1.5 s; a box typed into pays one recompute, not one per
+            # keystroke.
+            #
+            # It costs the page nothing: measured on the four channel
+            # fixture, this group's minimum width is 172 px with the box and
+            # 172 px with the read-only label it replaces, and the window's
+            # own minimum is 695 px either way.
+            #
+            # Bounded 0..100 and NOT at the 99.999 % `prepare_update`
+            # clamps to, because the box has to be able to show every state
+            # the transform can reach and the clamp is not the highest of
+            # them.  `set_hop` rounds the hop to whole frames and floors it
+            # at one, so the real ceiling is `1 - hop/nfft`: measured over
+            # `NFFT_EXPONENTS`, it is 99.99923706 % at nfft 131072, above
+            # the clamp.  A box bounded at the clamp would round that down
+            # and report a picture drawn at something else.  100 % typed in
+            # is refused by the clamp instead, and refused visibly --
+            # `set_resolution` writes back the 99.609 % that a hop of one
+            # frame at nfft 256 actually is.
+            #
+            # `decimals=5` and not the 4 the level boxes use.  `pg.SpinBox`
+            # formats with `%g`, so decimals are significant digits, and at
+            # 4 every window from 16384 up prints its own ceiling as
+            # "100 %" -- a box reading a number the transform cannot hold.
+            # 5 is the fewest at which none of them does.  It is not enough
+            # to write the ladder `O` walks exactly (halving the hop gives
+            # 50, 75, 87.5 ... 99.609375 % at nfft 256, and the last of
+            # those needs eight); the box rounds what it shows and keeps
+            # what it holds, which is what the three level boxes do too.
+            self.ofracsliderw = QSlider(Qt.Orientation.Horizontal, self.parambar)
+            self.ofracsliderw.tooltip = "Overlap of Fourier windows"
+            self.ofracsliderw.setToolTip(self.ofracsliderw.tooltip)
+            self.ofracsliderw.setRange(0, 99)
+            self.ofracsliderw.setTickPosition(QSlider.TickPosition.TicksBelow)
+            self.ofracsliderw.setTickInterval(25)
+            self.ofracsliderw.setValue(int(round(100 * spectrogram.overlap_frac)))
+            self.ofracsliderw.valueChanged.connect(
                 lambda v: self.update_resolution(overlap_frac=0.01 * v)
             )
-            self.ofraclabelw = QLabel()
-            self.ofraclabelw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+            self.ofracw = pg.SpinBox(
+                self,
+                100 * spectrogram.overlap_frac,
+                bounds=(0.0, 100.0),
+                suffix="%",
+                step=1.0,
+                decimals=5,
+            )
+            self.style_parameter_spinbox(self.ofracw)
+            self.ofracw.tooltip = self.ofracsliderw.tooltip
+            self.ofracw.setToolTip(self.ofracw.tooltip)
+            self.ofracw.sigValueChanged.connect(
+                lambda sb: self.update_resolution(overlap_frac=0.01 * sb.value())
+            )
             group.add_row(
                 "Overlap",
                 "O / ⇧O",
-                ParameterGroup.expanding(self.ofracw),
-                self.ofraclabelw,
+                ParameterGroup.expanding(self.ofracsliderw),
+                self.ofracw,
             )
 
             self.cmapw = ColorMapCombo(self.parambar)
@@ -3376,7 +3430,7 @@ class DataBrowser(QWidget):
         else:
             self.nfftw = None
             self.ofracw = None
-            self.ofraclabelw = None
+            self.ofracsliderw = None
             self.cmapw = None
             self.smoothw = None
             self.fmaxw = None
@@ -8690,20 +8744,37 @@ class DataBrowser(QWidget):
                     deltaf_label = f"\u0394f={1000 / T:.3g}mHz"
                 self.nfftw.setToolTip(f"{self.nfftw.tooltip}, {deltaf_label}")
             if self.ofracw is not None:
+                # The slider is rounded to whole percent and the box is
+                # not, which is why the two are written separately rather
+                # than one from the other: `int(round())` through the box
+                # would throw away the .5 of a 62.5 % the reader has just
+                # typed, on the pass that is supposed to confirm it.
+                # `setValue` does the clamping the 0..99 range needs: the
+                # top of the reachable overlap is 99.609375 % at nfft 256,
+                # which rounds to a position the slider does not have.  The
+                # box does have it, which is the row's own argument.
+                percent = 100 * spectrogram.overlap_frac
+                blocked = self.ofracsliderw.blockSignals(True)
+                self.ofracsliderw.setValue(int(round(percent)))
+                self.ofracsliderw.blockSignals(blocked)
                 blocked = self.ofracw.blockSignals(True)
-                self.ofracw.setValue(int(round(100 * spectrogram.overlap_frac)))
+                self.ofracw.setValue(percent)
                 self.ofracw.blockSignals(blocked)
                 dt = spectrogram.hop / self.data.rate
                 if dt >= 1:
                     deltat_label = f"\u0394t={dt:.3g}s"
                 else:
                     deltat_label = f"\u0394t={1000 * dt:.3g}ms"
-                self.ofraclabelw.setText(
-                    f"{100 * spectrogram.overlap_frac:5.1f}% {deltat_label}"
+                # The time resolution moves from the row into both tool
+                # tips, which is where the Window row above already keeps
+                # its own \u0394f: the box that replaced the label has to
+                # spend its width on a number that can be typed back in.
+                tip = (
+                    f"{self.ofracsliderw.tooltip}, hop={spectrogram.hop}, "
+                    f"{deltat_label}"
                 )
-                self.ofracw.setToolTip(
-                    f"{self.ofracw.tooltip}, hop={spectrogram.hop}, {deltat_label}"
-                )
+                self.ofracsliderw.setToolTip(tip)
+                self.ofracw.setToolTip(tip)
         if dispatch:
             self.sigResolutionChanged.emit()
 

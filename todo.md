@@ -213,30 +213,48 @@ action that leaves state behind has to join them.
   Persisted as `peaking` at the **unchanged** version 1 and dispatched to
   every tab, like the cutoff lines above.
 
-- [ ] **An input box for the overlap, not just a slider.**  Every other
-  number on this page can now be typed into; the Overlap row still cannot.
-  It is a `QSlider` in whole percent (`ofracw`) beside a **read-only
-  `QLabel`** (`ofraclabelw`).  Wanted: the shape the three level rows and
-  the two filter cutoffs already have -- the slider keeps the coarse grab
-  and the label becomes a `pg.SpinBox`.
+- [x] **An input box for the overlap, not just a slider.**  Done: the
+  Overlap row is now a `QSlider` (`ofracsliderw`, still whole percent, still
+  the coarse grab) and a `pg.SpinBox` (`ofracw`) where the read-only
+  `QLabel` was, which is the shape the two filter cutoffs and the three
+  level rows already had.  The names follow that shape too -- `<x>w` is the
+  box and `<x>sliderw` the slider everywhere else in this bar, so the slider
+  took the longer name rather than the box taking a worse one.
 
-  Two things make it more than a swap.
+  **The box is the precise writer and the slider is never read back from.**
+  Written separately in `set_resolution` rather than one from the other: a
+  62.5 % typed in and rounded through the slider comes back 62, on the pass
+  that is supposed to confirm it.  Driven: 62.5 % typed gives
+  `overlap_frac` 0.625, the box 62.5 and the slider 62.  No memo was needed
+  -- unlike `setZRange`, `set_resolution` is already called once per
+  gesture, because `update_resolution` debounces at 200 ms.  A box typed
+  into goes through that same debounce, which a test pins by asserting the
+  timer is running and `overlap_frac` has not moved yet.
 
-  The slider quantises and the box must not.  `overlap_frac` is a float
-  that `BufferedSpectrogram.prepare_update` clamps to `0.0 .. 0.99999`,
-  while `ofracw` runs 0..99 in whole percent.  A 62.5 % typed into the box
-  and round-tripped through the slider comes back 62, so the box has to be
-  the precise writer and the slider must not overwrite it with its own
-  rounding.  That is the "one number, several writers" problem the level
-  rows just solved, in miniature; their memo is the worked example, and so
-  is the reason it has to be dropped before a widget-driven write.
+  **Bounded 0..100 and not at the clamp's 99.999 %, which is the one real
+  decision here.**  `set_hop` rounds the hop to whole frames and floors it
+  at one, so the highest overlap the transform can actually reach is
+  `1 - hop/nfft` -- measured over `NFFT_EXPONENTS`, 99.99923706 % at nfft
+  131072, which is *above* the clamp.  A box bounded at the clamp would
+  round that down and report a picture drawn at something else.  100 %
+  typed in is refused by the clamp instead, and visibly: at nfft 256 the box
+  comes back saying 99.609 %, which is what a hop of one frame is.
 
-  And the recompute is debounced on purpose.  `update_resolution` stashes
-  the value and starts `resolution_timer` (200 ms) because
-  respectrogramming sixteen channels costs about 1.5 s, so a box typed into
-  has to go through that debounce rather than recomputing per keystroke.
-  `set_resolution` already writes the slider back inside a `blockSignals`
-  sandwich when `O` / `Shift+O` move it; the box joins it there.
+  `decimals=5`, and measured rather than picked: `pg.SpinBox` formats with
+  `%g`, so at the level rows' 4 every window from 16384 up prints its own
+  ceiling as "100 %".  5 is the fewest at which none of them does.  It is
+  not enough to write the ladder `O` walks exactly -- 99.609375 % needs
+  eight -- so the box rounds what it shows and keeps what it holds.
+
+  The Δt readout the label carried moves into both tool tips, which is where
+  the Window row above already keeps its own Δf.  It costs the page no
+  width: measured on the four channel fixture, this group's minimum is
+  172 px with the box and 172 px with the label, and the window's own
+  minimum is 695 px either way.
+
+  One thing the row cannot do and the box now can: the slider stops at 99,
+  so no drag reaches the 99.609375 % a hop of one frame is.  `setValue`
+  clamps that write itself; the test says so rather than hiding it.
 
 # Spec stuff 
 
