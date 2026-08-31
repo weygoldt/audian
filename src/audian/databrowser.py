@@ -1674,6 +1674,7 @@ class DataBrowser(QWidget):
     sigColorMapChanged = Signal()
     sigSmoothingChanged = Signal()
     sigCutoffLinesChanged = Signal()
+    sigLevelsChanged = Signal(float, float)
     sigFilterChanged = Signal()
     sigEnvelopeChanged = Signal()
     sigTraceChanged = Signal(object, object, object)
@@ -2006,6 +2007,18 @@ class DataBrowser(QWidget):
         self.show_cutoff_lines = self.read_cutoff_lines_setting()
         #: the checkbox that shows it; see `smoothw` for why it is named here
         self.cutoffsw = None
+        #: The three rows that follow the colour scale, and the pair of
+        #: numbers last written into them.  They *follow* the mapping and do
+        #: not own it -- see `sync_level_widgets` -- so the memo is what
+        #: keeps sixteen `setZRange` calls per gesture from being sixteen
+        #: widget writes.
+        self.zmaxw = None
+        self.zmaxsliderw = None
+        self.zminw = None
+        self.zminsliderw = None
+        self.zmidw = None
+        self.zmidsliderw = None
+        self._level_widgets_shown = None
         #: window and overlap the reader has asked for this run, or None
         #: while both are still whatever the recording opened on.  Only a
         #: number that came from a gesture is ever written.
@@ -3143,6 +3156,92 @@ class DataBrowser(QWidget):
             )
             group.add_row("Smoothing", "", self.smoothw)
 
+            # The colour scale, in the shape the filter cutoffs already
+            # have: a slider that takes the width and a number box that
+            # takes the exact value.  A plain `QSlider` over dB and not the
+            # `LogSlider` the cutoffs use -- dB is already a logarithm, and
+            # a log scale over one would put a hundred of the two hundred
+            # and twenty positions inside the top decade of a quantity that
+            # is uniform end to end.
+            #
+            # THREE rows and not two, which is a decision rather than a
+            # reading of the keys.  Max and Min alone can reach every state
+            # the mapping has, so Power is redundant as a *state* -- but not
+            # as a gesture: sliding the ramp without changing its span is
+            # two drags with the other two, and the span changes in
+            # between.  It is what `D` and `⇧D` have always done, the
+            # reader asked for all three, and it costs the page one row of
+            # height and no width at all.  Measured on
+            # data/Gryllus_campestris.wav at 1600x1000: this page's minimum
+            # width is 172 px with three rows and 172 px with two, because
+            # the caption `POWER  D / ⇧D` is narrower than the slider and
+            # number box every row on this page already carries, and the
+            # window's own minimum is 695 px either way -- the floor
+            # `StartupPage` sets, not one the side panel has any part in.
+            bounds = self.level_range_bounds()
+            if bounds is not None:
+                rmin, rmax, rstep = bounds
+                for name, caption, keys, tip in (
+                    (
+                        "zmax",
+                        "Max",
+                        "K / ⇧K",
+                        "Top of the colour scale: everything at or above it "
+                        "is drawn in the last colour of the map",
+                    ),
+                    (
+                        "zmin",
+                        "Min",
+                        "J / ⇧J",
+                        "Floor of the colour scale: everything at or below "
+                        "it is drawn in the first colour of the map",
+                    ),
+                    (
+                        "zmid",
+                        "Power",
+                        "D / ⇧D",
+                        "Middle of the colour scale: moves both ends "
+                        "together, keeping the span",
+                    ),
+                ):
+                    box = pg.SpinBox(
+                        self,
+                        0.0,
+                        bounds=(rmin, rmax),
+                        suffix="dB",
+                        step=rstep,
+                        decimals=4,
+                    )
+                    self.style_parameter_spinbox(box)
+                    box.tooltip = tip
+                    box.setToolTip(tip)
+                    slider = QSlider(Qt.Orientation.Horizontal, self.parambar)
+                    slider.setRange(int(round(rmin)), int(round(rmax)))
+                    slider.setSingleStep(int(round(rstep)))
+                    slider.setPageStep(4 * int(round(rstep)))
+                    slider.tooltip = tip
+                    slider.setToolTip(tip)
+                    setattr(self, name + "w", box)
+                    setattr(self, name + "sliderw", slider)
+                    group.add_row(
+                        caption,
+                        keys,
+                        ParameterGroup.expanding(slider),
+                        box,
+                    )
+                # Connected after all six exist: each setter reads the OTHER
+                # end out of `level_range`, and a half-built row would have
+                # been asked for it while the loop was still running.
+                for slider, box, setter in (
+                    (self.zmaxsliderw, self.zmaxw, self.set_level_max),
+                    (self.zminsliderw, self.zminw, self.set_level_min),
+                    (self.zmidsliderw, self.zmidw, self.set_level_mid),
+                ):
+                    slider.valueChanged.connect(lambda v, fn=setter: fn(float(v)))
+                    box.sigValueChanged.connect(lambda sb, fn=setter: fn(sb.value()))
+                self._level_widgets_shown = None
+                self.sync_level_widgets()
+
             # The band a spectrogram opens at.  Appended after the two
             # appearance rows rather than squeezed beside the Window combo
             # box: `add_row` only ever appends and there is no insert API,
@@ -3245,6 +3344,12 @@ class DataBrowser(QWidget):
             self.fmaxw = None
             self.fminw = None
             self.cutoffsw = None
+            self.zmaxw = None
+            self.zmaxsliderw = None
+            self.zminw = None
+            self.zminsliderw = None
+            self.zmidw = None
+            self.zmidsliderw = None
 
         # envelope:
         if "envelope" in self.data:
@@ -8692,6 +8797,167 @@ class DataBrowser(QWidget):
             self.schedule_spectrogram_save()
         if dispatch:
             self.sigCutoffLinesChanged.emit()
+
+    # --- the colour scale -------------------------------------------------
+    #
+    # Six keys have driven it since before the parameter bar existed --
+    # `D`/`⇧D` (both ends together), `K`/`⇧K` (the top) and `J`/`⇧J` (the
+    # floor) -- and none of them could be given a number.  The three rows on
+    # the Spectrogram page can.
+    #
+    # The number then has three writers: the keys, the rows, and
+    # `SpectrogramPlot.fit_levels`, which refits the ramp whenever a panel
+    # is shown or the smoothing changes.  So the rows FOLLOW the mapping and
+    # never hold it: `set_level_range` writes through `PlotRange` like every
+    # other writer, and `sync_level_widgets` reads back what actually
+    # landed.  A row that held its own copy would be right until the first
+    # refit and then quietly wrong.
+
+    def level_range_bounds(self):
+        """``(rmin, rmax, rstep)`` of the colour scale, or None.
+
+        None whenever this recording has no spectrogram to colour, which is
+        also when the six keys are disabled -- see
+        `disable_unused_range_actions`.
+        """
+        if not self.spectrogram_power:
+            return None
+        prange = self.plot_ranges.get(self.spectrogram_power)
+        if prange is None or not prange.is_used():
+            return None
+        if prange.rmin is None or prange.rmax is None:
+            return None
+        step = prange.rstep if prange.rstep else 1.0
+        return float(prange.rmin), float(prange.rmax), float(step)
+
+    def level_range(self):
+        """The dB range the CURRENT lane's spectrogram is drawn against.
+
+        The current lane and not channel 0, for the reason `report_y_range`
+        reads the same way: under `y_per_channel` the ramp is a per-channel
+        number, and the lane the reader is working in is the one the page
+        is about.  Under the shared policy -- the default -- every channel
+        holds the same pair and the choice cannot be seen.
+        """
+        if not self.spectrogram_power:
+            return None
+        prange = self.plot_ranges.get(self.spectrogram_power)
+        if prange is None or not prange.is_used():
+            return None
+        channel = min(self.current_channel, len(prange.r0) - 1)
+        r0, r1 = prange.r0[channel], prange.r1[channel]
+        if r0 is None or r1 is None:
+            return None
+        return float(r0), float(r1)
+
+    def set_level_range(self, zmin, zmax, dispatch: bool = True) -> None:
+        """Write an absolute colour scale, clamped into the axis's own limits.
+
+        Goes through `set_ranges` and therefore through `PlotRange`, which
+        is what keeps the browser's idea of the mapping and the pixels on
+        screen the same thing -- the rule `SpectrogramPlot._apply_levels`
+        states from the other side.
+
+        The two ends are held one `rstep` apart, which is the step every
+        one of the six keys takes, so a slider cannot reach a state the
+        keys could not.  It has to be done here because `PlotRange.min_step`
+        only refuses to push the floor *past* the ceiling: dragged together
+        with nothing between them, the two ends make a mapping in which
+        every bin is either the darkest colour or the brightest, which is
+        not a spectrogram.
+        """
+        bounds = self.level_range_bounds()
+        if bounds is None:
+            return
+        rmin, rmax, step = bounds
+        lo = min(max(float(zmin), rmin), rmax - step)
+        hi = max(min(float(zmax), rmax), lo + step)
+        # The memo is dropped before the write and the rows are re-read
+        # after it, because the interesting case is the one where the write
+        # changes *nothing*: a slider dragged past the other end asks for a
+        # range that is refused, so the mapping is where it was and the memo
+        # would say there is nothing to do -- leaving the slider parked at a
+        # number the picture is not drawn against.  A clamped slider has to
+        # be pushed back to the clamp.
+        self._level_widgets_shown = None
+        self.set_ranges(self.spectrogram_power, lo, hi)
+        self.sync_level_widgets()
+        if dispatch:
+            self.sigLevelsChanged.emit(lo, hi)
+
+    def set_level_max(self, zmax) -> None:
+        """Move the top of the colour scale; `K` / `⇧K` in one number."""
+        current = self.level_range()
+        if current is not None:
+            self.set_level_range(current[0], zmax)
+
+    def set_level_min(self, zmin) -> None:
+        """Move the floor of the colour scale; `J` / `⇧J` in one number."""
+        current = self.level_range()
+        if current is not None:
+            self.set_level_range(zmin, current[1])
+
+    def set_level_mid(self, mid) -> None:
+        """Slide the whole colour scale, keeping its span; `D` / `⇧D`.
+
+        The span is preserved here and not left to `set_ranges`' own
+        clipping, which preserves it as well but by sliding the pair back
+        off the limit -- a slider dragged to the end would then report a
+        centre it is not at.  Clamping the centre first means the slider
+        stops where it stops.
+        """
+        current = self.level_range()
+        bounds = self.level_range_bounds()
+        if current is None or bounds is None:
+            return
+        rmin, rmax, _ = bounds
+        span = current[1] - current[0]
+        mid = min(max(float(mid), rmin + 0.5 * span), rmax - 0.5 * span)
+        self.set_level_range(mid - 0.5 * span, mid + 0.5 * span)
+
+    def sync_level_widgets(self) -> None:
+        """Write the mapping that actually landed into the three rows.
+
+        Called from `SpectrogramPlot.setZRange`, the one sink every writer
+        of the level mapping ends in.  A background tab is not left behind
+        by that: `set_ranges` and `apply_ranges` pass `do_set=isVisible()`,
+        so a hidden browser's images are not written either, and `showEvent`
+        pushes every range back down through the same sink on the way in.
+
+        The memo is not an optimisation of a slow write; it is what makes
+        the write *once*.  A sixteen channel gesture calls `setZRange`
+        sixteen times with the same pair, and a `QSlider` that is given its
+        own value while the reader is dragging it still interrupts the drag.
+
+        `blockSignals` around each write for the reason `set_color_map` and
+        `set_spec_smoothing` use it: "the widget changed" must not be read
+        as "the reader changed it", or the follow becomes a second writer
+        and the two fight over every refit.
+        """
+        levels = self.level_range()
+        if levels is None or self.zmaxsliderw is None:
+            return
+        shown = (self.current_channel, levels)
+        if shown == self._level_widgets_shown:
+            return
+        self._level_widgets_shown = shown
+        zmin, zmax = levels
+        for widget, value in (
+            (self.zminsliderw, zmin),
+            (self.zmaxsliderw, zmax),
+            (self.zmidsliderw, 0.5 * (zmin + zmax)),
+        ):
+            blocked = widget.blockSignals(True)
+            widget.setValue(int(round(value)))
+            widget.blockSignals(blocked)
+        for widget, value in (
+            (self.zminw, zmin),
+            (self.zmaxw, zmax),
+            (self.zmidw, 0.5 * (zmin + zmax)),
+        ):
+            blocked = widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(blocked)
 
     def update_filter(self, highpass_cutoff=None, lowpass_cutoff=None):
         """Called when filter cutoffs were changed by key shortcuts or handles

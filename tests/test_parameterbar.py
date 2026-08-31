@@ -1545,3 +1545,182 @@ def test_the_switch_and_the_region_mode_do_not_overwrite_each_other(browser):
         assert not any(h.isVisible() for h in cutoff_handles(browser))
     finally:
         restore_cutoffs(browser)
+
+
+# --- the colour scale ------------------------------------------------------
+
+
+@pytest.fixture
+def levels(browser):
+    """Give the colour scale back exactly as the test found it.
+
+    The stack fixture is module scoped and the mapping is shared by every
+    lane, so a test that left the ramp somewhere else would be handing the
+    next one a spectrogram drawn against a range nobody asked for.
+    """
+    before = browser.level_range()
+    yield browser
+    if before is not None:
+        browser.set_level_range(*before, dispatch=False)
+        settle()
+
+
+def level_widgets(browser):
+    return (
+        browser.zminsliderw,
+        browser.zmaxsliderw,
+        browser.zmidsliderw,
+        browser.zminw,
+        browser.zmaxw,
+        browser.zmidw,
+    )
+
+
+def widgets_agree(browser):
+    """Do all six rows say what the images are actually drawn against?"""
+    zmin, zmax = browser.level_range()
+    return (
+        browser.zminsliderw.value() == int(round(zmin))
+        and browser.zmaxsliderw.value() == int(round(zmax))
+        and browser.zmidsliderw.value() == int(round(0.5 * (zmin + zmax)))
+        and browser.zminw.value() == pytest.approx(zmin)
+        and browser.zmaxw.value() == pytest.approx(zmax)
+        and browser.zmidw.value() == pytest.approx(0.5 * (zmin + zmax))
+    )
+
+
+def test_the_colour_scale_has_a_row_for_each_of_the_three_key_pairs(browser):
+    """Max, Min and Power, and every slider spans the axis's own limits."""
+    assert all(w is not None for w in level_widgets(browser))
+    rmin, rmax, rstep = browser.level_range_bounds()
+    for slider in (browser.zminsliderw, browser.zmaxsliderw, browser.zmidsliderw):
+        assert slider.minimum() == int(round(rmin))
+        assert slider.maximum() == int(round(rmax))
+        assert slider.singleStep() == int(round(rstep))
+    for box in (browser.zminw, browser.zmaxw, browser.zmidw):
+        assert box.opts["bounds"] == [rmin, rmax]
+    assert widgets_agree(browser)
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "power_up",
+        "power_down",
+        "max_power_up",
+        "max_power_down",
+        "min_power_up",
+        "min_power_down",
+    ],
+)
+def test_the_six_keys_still_work_and_the_rows_follow_them(levels, action):
+    """The rows follow the mapping; they do not own it.
+
+    The number has three writers -- the keys, the rows, and `fit_levels` --
+    and this is the one that existed first.  A row that held its own copy
+    would be right until the first key press.
+    """
+    browser = levels
+    window = browser.window()
+    before = browser.level_range()
+    getattr(window.acts, action).trigger()
+    settle()
+    pump(0.3)
+    after = browser.level_range()
+    assert after != before, f"{action} moved nothing"
+    assert widgets_agree(browser), f"the rows did not follow {action}"
+
+
+def test_a_slider_sets_the_level_it_is_dragged_to(levels):
+    browser = levels
+    browser.set_level_range(-110.0, -45.0, dispatch=False)
+    settle()
+    browser.zmaxsliderw.setValue(-40)
+    settle()
+    pump(0.3)
+    assert browser.level_range() == (-110.0, -40.0)
+    browser.zminsliderw.setValue(-120)
+    settle()
+    pump(0.3)
+    assert browser.level_range() == (-120.0, -40.0)
+    assert widgets_agree(browser)
+
+
+def test_a_number_box_sets_the_level_that_is_typed_into_it(levels):
+    """The whole point of the row: a level nobody could name before."""
+    browser = levels
+    browser.set_level_range(-110.0, -45.0, dispatch=False)
+    settle()
+    browser.zmaxw.setValue(-37.5)
+    settle()
+    pump(0.3)
+    assert browser.level_range() == (-110.0, -37.5)
+    assert browser.zmaxsliderw.value() == -38  # the slider is whole dB
+    assert widgets_agree(browser)
+
+
+def test_the_power_row_moves_both_ends_and_keeps_the_span(levels):
+    """What `D` and `⇧D` have always done, and what Max and Min cannot do
+    in one gesture: the two of them together change the span in between."""
+    browser = levels
+    browser.set_level_range(-120.0, -40.0, dispatch=False)
+    settle()
+    browser.zmidsliderw.setValue(-100)
+    settle()
+    pump(0.3)
+    zmin, zmax = browser.level_range()
+    assert zmax - zmin == pytest.approx(80.0)
+    assert 0.5 * (zmin + zmax) == pytest.approx(-100.0)
+    assert widgets_agree(browser)
+
+
+def test_the_two_ends_cannot_cross_and_a_refused_drag_is_pushed_back(levels):
+    """`PlotRange.min_step` only refuses to push the floor PAST the ceiling.
+
+    A slider can ask for more than a key can, so the clamp lives in
+    `set_level_range` -- and the interesting half is what the widget does
+    afterwards.  A refused write changes the mapping by nothing, so a memo
+    keyed on the mapping alone would leave the slider parked at a number
+    the picture is not drawn against.
+    """
+    browser = levels
+    rmin, rmax, rstep = browser.level_range_bounds()
+    browser.set_level_range(-110.0, -45.0, dispatch=False)
+    settle()
+    browser.zminsliderw.setValue(int(rmax))
+    settle()
+    pump(0.3)
+    zmin, zmax = browser.level_range()
+    assert zmin < zmax, "the floor passed the ceiling"
+    assert zmax - zmin >= rstep
+    assert widgets_agree(browser), "the clamped slider was left where it was put"
+
+    browser.zmaxsliderw.setValue(int(rmin))
+    settle()
+    pump(0.3)
+    zmin, zmax = browser.level_range()
+    assert zmin < zmax, "the ceiling passed the floor"
+    assert widgets_agree(browser)
+
+
+def test_a_refit_moves_the_rows_with_nothing_having_been_typed(levels):
+    """`fit_levels` is the third writer, and the one a reader never sees.
+
+    It runs whenever a panel is shown or the smoothing changes, so a row
+    that only followed its own widget would be wrong exactly when the ramp
+    had just moved under the reader.
+    """
+    browser = levels
+    browser.set_level_range(-90.0, -40.0, dispatch=False)
+    settle()
+    pump(0.3)
+    assert widgets_agree(browser)
+    lane = next(
+        ax for ax in browser.spectrogram_plots() if ax.fits_levels() and ax.isVisible()
+    )
+    lane._levels_fitted = False
+    assert lane.fit_levels(), "the fit had nothing to say"
+    settle()
+    pump(0.3)
+    assert browser.level_range() != (-90.0, -40.0)
+    assert widgets_agree(browser)

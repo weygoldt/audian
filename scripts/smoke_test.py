@@ -209,6 +209,36 @@ def run_interactions(app, main_win):
             ("shrink window", lambda: main_win.resize(1000, 700)),
             ("grow window", lambda: main_win.resize(1600, 1000)),
         ]
+    if browser is not None and getattr(browser, "zmaxsliderw", None) is not None:
+        # The three colour-scale rows, each moved and put back.  They are
+        # driven through the widget rather than through `set_level_range`,
+        # because the path being exercised is the one a reader's drag takes.
+        steps += [
+            (
+                "colour scale: top down",
+                lambda: browser.zmaxsliderw.setValue(browser.zmaxsliderw.value() - 10),
+            ),
+            (
+                "colour scale: top back up",
+                lambda: browser.zmaxsliderw.setValue(browser.zmaxsliderw.value() + 10),
+            ),
+            (
+                "colour scale: floor down",
+                lambda: browser.zminsliderw.setValue(browser.zminsliderw.value() - 10),
+            ),
+            (
+                "colour scale: floor back up",
+                lambda: browser.zminsliderw.setValue(browser.zminsliderw.value() + 10),
+            ),
+            (
+                "colour scale: both down",
+                lambda: browser.zmidsliderw.setValue(browser.zmidsliderw.value() - 10),
+            ),
+            (
+                "colour scale: both back up",
+                lambda: browser.zmidsliderw.setValue(browser.zmidsliderw.value() + 10),
+            ),
+        ]
 
     clean = 0
     for label, step in steps:

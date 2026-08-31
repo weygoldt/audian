@@ -126,36 +126,46 @@ action that leaves state behind has to join them.
   a real `bool` is believed, so a `0` or a `1` a hand-edited file offers is
   an unset preference and the lines are drawn.
 
-- [ ] **Sliders for power, max and min.**  Six keys drive the colour scale
-  and none of them can be given a number: `D`/`Shift+D` (`power_down` /
-  `power_up`, both ends together), `K`/`Shift+K` (`max_power_down` /
-  `max_power_up`) and `J`/`Shift+J` (`min_power_down` / `min_power_up`).
-  They run `Audian.apply_power_ranges(name)` -> `apply_ranges(name,
-  browser.spectrogram_power)` -> `PlotRange.step_up` / `max_up` / `min_up`
-  and their opposites (plotranges.py:371-436), each one `rstep` followed by
-  `set_ranges`.
+- [x] **Sliders for power, max and min.**  Three rows on the Spectrogram
+  page, under Smoothing and above Opens at: **Max** `K / ⇧K`, **Min**
+  `J / ⇧J` and **Power** `D / ⇧D`, each a plain `QSlider` over the axis's
+  own -200..20 dB and a `pg.SpinBox` beside it, in the shape the filter
+  cutoffs have.  A plain slider and not `LogSlider`: dB is already a
+  logarithm, and a log scale over one would spend a hundred of the two
+  hundred and twenty positions inside the top decade of a quantity that is
+  uniform end to end.
 
-  Wanted: the shape the filter cutoffs already have -- a slider and a
-  `pg.SpinBox` on one row, the slider wrapped in
-  `ParameterGroup.expanding(...)`; see the High-pass and Low-pass rows.
-  Two rows is probably right, **Max** and **Min** as the two ends in dB,
-  with **Power** as the pair moving together -- but three sliders in a
-  group that is already the widest page is a layout question worth
-  measuring before it is a code question.
+  **Three rows and not two, and that was the open question.**  Max and Min
+  alone can reach every state the mapping has, so Power is redundant as a
+  *state* -- but not as a gesture: sliding the ramp without changing its
+  span is two drags with the other two and the span changes in between.
+  Measured, the layout question the todo raised has no cost in it: this
+  page's minimum width is **172 px with three rows and 172 px with two**,
+  because `POWER  D / ⇧D` is narrower than the slider and number box every
+  row here already carries, and the window's own minimum is 695 px either
+  way -- the floor `StartupPage` sets.  So the third row costs one row of
+  height and nothing else, and the six keys the reader named each have a
+  row.  Two rows remains defensible; it was rejected on the gesture, not on
+  the width.
 
-  The hard part is not the widgets.  It is that the number then has three
-  writers: the keys, the sliders, and `fit_levels`, which refits the ramp
-  whenever a panel is shown or the smoothing changes.  So the widgets have
-  to *follow* the range and not own it.  The sink every path ends in is
-  `SpectrogramPlot.setZRange`; `_applying_levels` and
-  `_cbar_levels_changed` beside it record why "the widget changed, so the
-  reader changed it" is wrong, and `set_color_map` and
-  `set_spec_smoothing` show the `blockSignals` sandwich to write a widget
-  back with.
+  The rows **follow** the mapping and never hold it.  `set_level_range`
+  writes through `PlotRange` like every other writer and
+  `sync_level_widgets` reads back what actually landed, called from
+  `SpectrogramPlot.setZRange` -- the one sink the keys, `fit_levels` and a
+  colour-bar drag all end in.  Two things that had to be got right: the
+  write is memoised, because a sixteen channel gesture calls `setZRange`
+  sixteen times with the same pair and a `QSlider` handed its own value
+  mid-drag interrupts the drag; and the memo is **dropped before every
+  widget-driven write**, because the interesting case is the one that
+  changes nothing -- a slider dragged past the other end asks for a range
+  that is refused, and a memo keyed on the mapping alone leaves the slider
+  parked at a number the picture is not drawn against.
 
-  `LogSlider` (databrowser.py) is the filter's slider and is logarithmic
-  in Hz.  dB is already logarithmic, so these want a plain `QSlider` over
-  `rmin..rmax`, not that class.
+  The two ends are held one `rstep` apart in `set_level_range`, because
+  `PlotRange.min_step` only refuses to push the floor *past* the ceiling
+  and a slider can ask for more than a key can.  A widget-driven change
+  mirrors to the other tabs under the same `Link power` (`Alt+P`) switch
+  the keys are gated on, as an absolute pair rather than a step.
 
 - [ ] **Peaking: show what is clipped at the top of the colour ramp.**  A
   checkbox and a key, after focus peaking in a camera: the reader wants to

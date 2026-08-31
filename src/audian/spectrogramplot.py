@@ -718,11 +718,27 @@ class SpectrogramPlot(TimePlot):
         return amin, amax
 
     def setZRange(self, zmin, zmax):
+        """Map this lane's dB range onto the colour ramp.
+
+        The sink every writer of the level mapping ends in -- the `D`, `K`
+        and `J` keys through `PlotRange`, `fit_levels` through
+        `_apply_levels`, a drag of the colour bar's own handles, and the
+        three rows of the Spectrogram page.  That is why the parameter bar
+        is told from *here* rather than from any of them: a row that
+        followed only the writer it belongs to would be the one number on
+        the page that could be wrong, and it would be wrong exactly when a
+        refit had just moved the ramp under the reader.
+        """
         for item in self.data_items:
             if hasattr(item, "setLevels"):
                 item.setLevels((zmin, zmax), update=True)
         self.cbar.setLevels((zmin, zmax))
         self._update_cbar_ticks(zmin, zmax)
+        # `getattr`, because this is reachable from pg.PlotItem's
+        # constructor -- the reason `fits_levels` spells it that way too:
+        browser = getattr(self, "browser", None)
+        if browser is not None and hasattr(browser, "sync_level_widgets"):
+            browser.sync_level_widgets()
         if self._refit_pending and not self._applying_levels:
             # someone else just replaced the mapping - see setVisible()
             self._refit_pending = False

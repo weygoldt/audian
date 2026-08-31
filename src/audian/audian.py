@@ -3985,6 +3985,21 @@ class Audian(QMainWindow):
             if b is not self.browser():
                 b.set_spec_smoothing(key, dispatch=False, save=False)
 
+    def dispatch_levels(self, zmin, zmax):
+        """Mirror a colour scale typed or dragged on the Spectrogram page.
+
+        Gated on the same `Link power` switch (`Alt+P`) the six keys are
+        gated on in `apply_ranges`, so that the two ways of moving the ramp
+        behave the same across tabs.  The absolute pair and not a step: a
+        row hands over a level, where a key hands over a gesture.
+        """
+        axspec = self.browser().spectrogram_power
+        if not axspec or not self.link_ranges.get(axspec):
+            return
+        for b in self.browsers:
+            if b is not self.browser():
+                b.set_level_range(zmin, zmax, dispatch=False)
+
     def dispatch_cutoff_lines(self):
         """Every tab agrees about the cutoff lines; see `dispatch_smoothing`."""
         on = self.browser().show_cutoff_lines
@@ -5271,6 +5286,7 @@ class Audian(QMainWindow):
             browser.sigColorMapChanged.connect(self.dispatch_colormap)
             browser.sigSmoothingChanged.connect(self.dispatch_smoothing)
             browser.sigCutoffLinesChanged.connect(self.dispatch_cutoff_lines)
+            browser.sigLevelsChanged.connect(self.dispatch_levels)
             browser.sigFilterChanged.connect(self.dispatch_filter)
             browser.sigEnvelopeChanged.connect(self.dispatch_envelope)
             browser.sigTraceChanged.connect(self.dispatch_trace)
