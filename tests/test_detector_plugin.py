@@ -376,3 +376,120 @@ def test_the_sweep_can_be_stopped(panel):
     assert panel._thread is None
     assert panel.runw.text() == "Run"
     assert panel.progressw.isHidden()
+
+
+# ------------------------------------------------------ the Plugins menu
+
+
+@pytest.fixture(scope="module")
+def window(app, tmp_path_factory):
+    """A whole window whose `Plugins` has been told about the detector.
+
+    `build_window` builds its own `Plugins` and lets it scan the working
+    directory, which finds nothing here on purpose -- the plugin lives in
+    ``examples/``.  Registering the factory through `load_plugins` is the
+    same door discovery uses, so what the menu is built from is what a
+    reader's copy in their data directory would put there.
+    """
+    pytest.importorskip("soundfile")
+    import audian.audian as audian_app
+    from PySide6.QtCore import QSettings
+    from audian.plugins import Plugins
+
+    original_load = Plugins.load_plugins
+    original_path = audian_app.settings_path
+    home = Path(QSettings("audian", "audian").fileName()).parent.parent
+    Plugins.load_plugins = lambda self: self.add_panel_factory(
+        audian_detector.audian_detector_panel)
+    try:
+        directory = tmp_path_factory.mktemp("detector-menu")
+        signal, _ = pulse_train()
+        win = build_window(app, directory, 2, signal)
+    finally:
+        Plugins.load_plugins = original_load
+    pump(0.5)
+    yield win
+    win.close()
+    win.setParent(None)
+    win.deleteLater()
+    pump(0.3)
+    audian_app.settings_path = original_path
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
+            QSettings.setPath(fmt, scope, os.fspath(home))
+
+
+def _detector_action(win):
+    return dict(win.plugin_acts)["Detector"]
+
+
+def test_an_installed_plugin_gets_a_menu_entry_and_not_a_tab(window):
+    """Installed is not the same as on screen, and used to be.
+
+    Every registered factory took a tab at startup, so a reader who wanted
+    the recording rather than the plugin had nowhere to put it.
+    """
+    assert [label for label, _act in window.plugin_acts] == ["Detector"]
+    assert "&Plugins" in [m.title() for m in window.menus]
+    browser = window.browser()
+    assert browser.plugin_labels() == ["Detector"]
+    assert not browser.plugin_panel_open("Detector")
+    assert browser.parambar.plugins is None, "a tab appeared unbidden"
+    assert not _detector_action(window).isChecked()
+
+
+def test_the_menu_entry_opens_and_closes_the_panel(window):
+    """Both directions from the same tick."""
+    browser = window.browser()
+    act = _detector_action(window)
+
+    act.setChecked(True)
+    pump(0.5)
+    assert browser.plugin_panel_open("Detector")
+    region = browser.parambar.plugins
+    assert region is not None
+    assert [region.tabText(i) for i in range(region.count())] == ["Detector"]
+    assert isinstance(region.widget(0), audian_detector.DetectorPanel)
+
+    act.setChecked(False)
+    pump(0.5)
+    assert not browser.plugin_panel_open("Detector")
+    assert browser.parambar.plugins is None, "the empty region was left behind"
+
+
+def test_closing_the_tab_turns_the_plugin_off_and_the_menu_agrees(window):
+    """The reader's other way out, and the tick has to follow it.
+
+    A tab closed by its own cross that left the menu still ticked would be
+    a switch that lies about the thing it switches.
+    """
+    browser = window.browser()
+    act = _detector_action(window)
+    act.setChecked(True)
+    pump(0.5)
+    assert act.isChecked() and browser.plugin_panel_open("Detector")
+
+    browser.plugin_tab_closed(0)
+    pump(0.5)
+    assert not browser.plugin_panel_open("Detector")
+    assert not act.isChecked(), "the tab closed but the menu still claims it is open"
+    assert browser.parambar.plugins is None
+
+
+def test_a_panel_opened_twice_is_still_one_panel(window):
+    """Asking for what is already there raises it rather than doubling it."""
+    browser = window.browser()
+    assert browser.open_plugin_panel("Detector")
+    assert browser.open_plugin_panel("Detector")
+    region = browser.parambar.plugins
+    assert region.count() == 1
+    browser.close_plugin_panel("Detector")
+    pump(0.3)
+
+
+def test_closing_a_panel_nobody_opened_is_not_an_error(window):
+    """The menu can be unticked from a state where nothing is open."""
+    browser = window.browser()
+    browser.close_plugin_panel("Detector")
+    browser.close_plugin_panel("no such plugin")
+    assert not browser.open_plugin_panel("no such plugin")

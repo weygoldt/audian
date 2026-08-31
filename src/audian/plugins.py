@@ -87,32 +87,76 @@ class Plugins(object):
         for f in self.analyzer_factories:
             f(browser)
 
-    def setup_panels(self, browser):
-        """Give every registered factory a chance at a side-panel tab.
+    def panel_entries(self) -> list:
+        """``(label, factory)`` for everything that could open a panel.
 
-        The one place in the panel that wraps a call it does not own.  A
-        plugin is somebody else's code on the reader's own path, and a
-        broken one has to cost its own tab and nothing else -- not the
-        panel, and not the file the reader was opening when it raised.
+        The label without building the widget, because the Plugins menu has
+        to list what a reader *could* open, and building every plugin's
+        panel to find out what it is called is what "could" was supposed to
+        avoid.
         """
-        for factory in self.panel_factories:
-            try:
-                made = factory(browser)
-            except Exception as exc:  # noqa: BLE001 - somebody else's code
-                name = getattr(factory, "__name__", repr(factory))
-                log.exception("side panel factory %s failed", name)
-                browser.notify("error", f"plugin panel {name} failed: {exc}")
-                continue
-            if made is None:
-                continue
-            try:
-                title, widget = made
-            except (TypeError, ValueError):
-                name = getattr(factory, "__name__", repr(factory))
-                log.error("side panel factory %s returned %r, not (title, widget)",
-                          name, made)
-                browser.notify(
-                    "error", f"plugin panel {name} returned {made!r}, not a pair"
-                )
-                continue
-            browser.add_plugin_panel(str(title), widget)
+        return [(panel_label(f), f) for f in self.panel_factories]
+
+    def setup_panels(self, browser):
+        """Offer every registered factory to the browser, unopened.
+
+        The factories used to be called here and their tabs added at once,
+        so a plugin present was a plugin taking up the panel -- a reader who
+        wanted the recording and not the plugin had nowhere to put it.  Now
+        the offer is what arrives at startup and `DataBrowser` calls the
+        factory when the reader asks for it from the menu.
+
+        The plugin's own contract is unchanged: still a callable returning
+        ``(title, widget)``, still discovered by its name.  Only *when* it
+        is called moved.
+        """
+        for label, factory in self.panel_entries():
+            browser.offer_plugin_panel(label, factory)
+
+
+def panel_label(factory) -> str:
+    """What the Plugins menu calls this factory's panel.
+
+    From the factory's own name -- ``audian_detector_panel`` becomes
+    "Detector" -- so that a plugin author who has followed the naming
+    convention has already named their menu entry.  A plugin that wants a
+    different wording sets ``menu_label`` on the function.
+    """
+    label = getattr(factory, "menu_label", "")
+    if label:
+        return str(label)
+    name = getattr(factory, "__name__", "") or "plugin"
+    if name.startswith("audian_"):
+        name = name[len("audian_"):]
+    if name.endswith("_panel"):
+        name = name[: -len("_panel")]
+    return name.replace("_", " ").strip().capitalize() or "Plugin"
+
+
+def build_panel(factory, browser):
+    """Call one plugin's factory, or return `None` if it misbehaved.
+
+    The one place in the panel that wraps a call it does not own.  A plugin
+    is somebody else's code on the reader's own path, and a broken one has
+    to cost its own tab and nothing else -- not the panel, and not the file
+    the reader was opening when it raised.
+    """
+    name = getattr(factory, "__name__", repr(factory))
+    try:
+        made = factory(browser)
+    except Exception as exc:  # noqa: BLE001 - somebody else's code
+        log.exception("side panel factory %s failed", name)
+        browser.notify("error", f"plugin panel {name} failed: {exc}")
+        return None
+    if made is None:
+        return None
+    try:
+        title, widget = made
+    except (TypeError, ValueError):
+        log.error("side panel factory %s returned %r, not (title, widget)",
+                  name, made)
+        browser.notify(
+            "error", f"plugin panel {name} returned {made!r}, not a pair"
+        )
+        return None
+    return str(title), widget

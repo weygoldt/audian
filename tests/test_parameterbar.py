@@ -103,21 +103,39 @@ def danger_pixels(button, checked=False):
     )
 
 
+class _StubSignal:
+    """Enough of a `Signal` for the stub browser to emit into."""
+
+    def __init__(self):
+        self.emitted = 0
+
+    def emit(self):
+        self.emitted += 1
+
+
 class _StubPanelBrowser:
-    """Just enough browser for `Plugins.setup_panels` to talk to.
+    """Just enough browser for the plugin panel path to talk to.
 
     A real one costs a window and a recording, and what is under test here
-    is the isolation around somebody else's callable -- so this is the
-    three things that path touches: a panel to put tabs in, the method that
-    puts them there, and somewhere for the notifications to go.
+    is the isolation around somebody else's callable -- so this is what
+    that path touches: a panel to put tabs in, the real browser's own
+    methods for offering and opening them, and somewhere for the
+    notifications to go.
     """
 
     def __init__(self):
         self.parambar = SidePanel()
         self.said = []
+        self.plugin_offers = []
+        self.plugin_panels = {}
+        self.sigPluginPanelsChanged = _StubSignal()
 
-    def add_plugin_panel(self, title, widget):
-        DataBrowser.add_plugin_panel(self, title, widget)
+    offer_plugin_panel = DataBrowser.offer_plugin_panel
+    plugin_labels = DataBrowser.plugin_labels
+    plugin_panel_open = DataBrowser.plugin_panel_open
+    open_plugin_panel = DataBrowser.open_plugin_panel
+    close_plugin_panel = DataBrowser.close_plugin_panel
+    plugin_tab_closed = DataBrowser.plugin_tab_closed
 
     def notify(self, level, message):
         self.said.append((level, message))
@@ -912,11 +930,23 @@ def test_a_plugin_panel_lands_in_its_own_region(app, tmp_path):
 
     view = _StubPanelBrowser()
     plugins.setup_panels(view)
+    # registering is an offer, not a tab: the factory has not been called
+    # and the region does not exist until the reader asks for it
+    assert made == []
+    assert view.plugin_labels() == ["Probe"]
+    assert view.parambar.plugins is None
+
+    assert view.open_plugin_panel("Probe")
     assert made == [view]
     region = view.parambar.plugins
     assert region is not None
     assert region.count() == 1
     assert region.tabText(0) == "Probe"
+    # and closing it takes the region away again, which is how a reader
+    # turns a plugin off
+    view.close_plugin_panel("Probe")
+    assert view.parambar.plugins is None
+    assert not view.plugin_panel_open("Probe")
     # text tabs, because there is no icon to invent for a plugin nobody has
     # written yet, and asking every author for one is a tax on writing one
     assert region.tabPosition() == QTabWidget.TabPosition.North
@@ -956,6 +986,8 @@ def test_a_broken_plugin_panel_does_not_take_the_window_down(app):
 
     view = _StubPanelBrowser()
     plugins.setup_panels(view)
+    for label in view.plugin_labels():
+        view.open_plugin_panel(label)
 
     # the good one is there, and it is the only one
     region = view.parambar.plugins

@@ -1863,8 +1863,10 @@ class Audian(QMainWindow):
         region_menu = self.setup_region_actions(self.menuBar())
         spec_menu = self.setup_spectrogram_actions(self.menuBar())
         view_menu = self.setup_view_actions(self.menuBar())
+        plugin_menu = self.setup_plugin_actions(self.menuBar())
         help_menu = self.setup_help_actions(self.menuBar())
-        self.menus = [file_menu, region_menu, spec_menu, view_menu, help_menu]
+        self.menus = [m for m in (file_menu, region_menu, spec_menu, view_menu,
+                                  plugin_menu, help_menu) if m is not None]
         self.setup_mnemonics()
 
         # chrome that needs the actions:
@@ -5143,6 +5145,58 @@ class Audian(QMainWindow):
 
         return view_menu
 
+    def setup_plugin_actions(self, menu):
+        """One tick per installed plugin panel, or no menu at all.
+
+        A plugin being installed and a plugin being on screen were the same
+        thing: every registered factory took a tab at startup, and a reader
+        who wanted the recording rather than the plugin had no way to say
+        so.  So the menu lists what *could* be opened and the tick says
+        whether it is, which gives the reader both directions -- open it
+        here, and close it either here or by the tab's own cross.
+
+        Absent entirely when nothing is installed, for the same reason
+        `SidePanel.plugin_region` is: an empty Plugins menu says the
+        application is missing something, when it means this reader has no
+        plugins.
+        """
+        entries = self.plugins.panel_entries() if self.plugins is not None else []
+        self.plugin_acts = []
+        if not entries:
+            return None
+        plugin_menu = menu.addMenu("&Plugins")
+        for label, _factory in entries:
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setStatusTip(f"Show the {label} panel")
+            act.toggled.connect(
+                lambda on, name=label: self.toggle_plugin_panel(name, on)
+            )
+            plugin_menu.addAction(act)
+            self.plugin_acts.append((label, act))
+        return plugin_menu
+
+    def toggle_plugin_panel(self, label: str, wanted: bool) -> None:
+        """Open or close one plugin's panel in the browser on screen."""
+        browser = self.browser()
+        if browser is None:
+            return
+        browser.toggle_plugin_panel(label, wanted)
+
+    def sync_plugin_actions(self) -> None:
+        """Point the Plugins ticks at what the current browser has open.
+
+        Runs on a tab closed by its own cross as much as on the menu, and
+        on every change of file: the panels belong to a browser, so two
+        recordings open side by side each answer for themselves.
+        """
+        browser = self.browser()
+        for label, act in getattr(self, "plugin_acts", []):
+            checked = browser is not None and browser.plugin_panel_open(label)
+            blocked = act.blockSignals(True)
+            act.setChecked(checked)
+            act.blockSignals(blocked)
+
     def setup_help_actions(self, menu):
         self.setup_global_actions()
 
@@ -5335,6 +5389,7 @@ class Audian(QMainWindow):
             browser.sigAudioChanged.connect(self.dispatch_audio)
             browser.sigAudioSourceChanged.connect(self.dispatch_audio_source)
             browser.sigAudioPairChanged.connect(self.dispatch_audio_pair)
+            browser.sigPluginPanelsChanged.connect(self.sync_plugin_actions)
             browser.set_starttime_mode(self.starttime_mode)
             pb = self.browser() if self.prev_browser is None else self.prev_browser
             if self.link_panels:

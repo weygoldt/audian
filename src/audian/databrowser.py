@@ -988,6 +988,13 @@ class SidePanel(QWidget):
             self.plugins = QTabWidget(self)
             self.plugins.setTabPosition(QTabWidget.TabPosition.North)
             self.plugins.setDocumentMode(True)
+            # A plugin's tab closes like a document's, because closing it is
+            # how a reader turns the plugin off -- there is no second place
+            # to go looking for the switch, and the menu tick follows.
+            self.plugins.setTabsClosable(True)
+            owner = self.parent()
+            if hasattr(owner, "plugin_tab_closed"):
+                self.plugins.tabCloseRequested.connect(owner.plugin_tab_closed)
             self.split.addWidget(self.plugins)
             # the built-ins keep their height and the plugins take what is
             # going, which is the way round a reader who opened a plugin
@@ -995,6 +1002,21 @@ class SidePanel(QWidget):
             self.split.setStretchFactor(0, 0)
             self.split.setStretchFactor(1, 1)
         return self.plugins
+
+    def drop_plugin_region(self) -> None:
+        """Take the plugin tab set away once its last tab has gone.
+
+        The same reason it is absent until something registers: an empty box
+        with a tab bar and nothing in it is a control that says the
+        application is missing something, when what it means is that this
+        reader closed their last plugin.  The splitter goes back to one
+        child and no handle, which is what it was before any plugin opened.
+        """
+        if self.plugins is None:
+            return
+        region, self.plugins = self.plugins, None
+        region.setParent(None)
+        region.deleteLater()
 
 
 class LogSlider(QSlider):
@@ -1675,6 +1697,10 @@ class DataBrowser(QWidget):
     sigSmoothingChanged = Signal()
     sigCutoffLinesChanged = Signal()
     sigPeakingChanged = Signal()
+    #: A plugin panel was opened or closed, from the menu or from its own
+    #: close button.  The Plugins menu ticks follow it, since a tab closed
+    #: by its cross has to leave the menu saying the same thing.
+    sigPluginPanelsChanged = Signal()
     sigLevelsChanged = Signal(float, float)
     sigFilterChanged = Signal()
     sigEnvelopeChanged = Signal()
@@ -1814,6 +1840,12 @@ class DataBrowser(QWidget):
         self.gui = None
         self.toolbar = None
         self.parambar = None
+        #: ``[(label, factory)]`` a plugin registered but nobody has opened.
+        #: The offer arrives at startup; the widget is not built until the
+        #: reader picks it out of the Plugins menu.
+        self.plugin_offers = []
+        #: ``{label: widget}`` for the panels actually open.
+        self.plugin_panels = {}
         #: How wide the side panel is when it is open, in pixels.
         #:
         #: Kept while it is shut, and that is deliberate: closing the panel
@@ -3872,19 +3904,104 @@ class DataBrowser(QWidget):
                 f"spectrogram does (Shift+F2)",
             )
 
-    def add_plugin_panel(self, title: str, widget: QWidget) -> None:
-        """Put one plugin's widget in the panel's lower region.
+    def offer_plugin_panel(self, label: str, factory) -> None:
+        """Record that a plugin could open a panel, without opening it.
 
-        Called by `Plugins.setup_panels`, which owns the isolation: a
-        factory that raises costs its own tab and nothing else.  By the
-        time a widget reaches here it is a widget.
+        A plugin that is installed is not a plugin the reader wants on
+        screen right now, and the two used to be the same thing: every
+        registered factory got a tab at startup, in a region that then had
+        to exist whether or not anybody looked at it.  What arrives here is
+        an offer; `open_plugin_panel` is what takes it up.
         """
-        if self.parambar is None or widget is None:
+        if factory is None:
             return
-        self.parambar.plugin_region().addTab(widget, title)
+        self.plugin_offers.append((str(label), factory))
+
+    def plugin_labels(self) -> list:
+        """What this browser could open, in the order it was registered."""
+        return [label for label, _factory in self.plugin_offers]
+
+    def plugin_panel_open(self, label: str) -> bool:
+        return str(label) in self.plugin_panels
+
+    def open_plugin_panel(self, label: str) -> bool:
+        """Build a plugin's panel and give it a tab.  Idempotent.
+
+        The factory is called here rather than at startup, so a plugin that
+        raises does so in front of a reader who just asked for it -- which
+        is both a better moment to be told and a cheaper one to recover
+        from.  `plugins.build_panel` owns that isolation.
+        """
+        from .plugins import build_panel
+
+        label = str(label)
+        if self.parambar is None:
+            return False
+        if label in self.plugin_panels:
+            region = self.parambar.plugin_region()
+            region.setCurrentWidget(self.plugin_panels[label])
+            return True
+        factory = dict(self.plugin_offers).get(label)
+        if factory is None:
+            return False
+        made = build_panel(factory, self)
+        if made is None:
+            self.sigPluginPanelsChanged.emit()
+            return False
+        title, widget = made
+        if widget is None:
+            self.sigPluginPanelsChanged.emit()
+            return False
+        region = self.parambar.plugin_region()
+        region.addTab(widget, str(title))
+        region.setCurrentWidget(widget)
+        self.plugin_panels[label] = widget
+        self.sigPluginPanelsChanged.emit()
+        return True
+
+    def close_plugin_panel(self, label: str) -> None:
+        """Take a plugin's panel off the screen and let go of its widget.
+
+        Closing the tab is how a reader turns a plugin off, so the widget
+        is destroyed rather than hidden: a plugin holding a file open, a
+        thread, or a timer should stop doing so when it is dismissed, and
+        `deleteLater` is what tells it to.
+        """
+        label = str(label)
+        widget = self.plugin_panels.pop(label, None)
+        if widget is None:
+            return
+        if self.parambar is not None and self.parambar.plugins is not None:
+            region = self.parambar.plugins
+            index = region.indexOf(widget)
+            if index >= 0:
+                region.removeTab(index)
+            if region.count() == 0:
+                self.parambar.drop_plugin_region()
+        widget.close()
+        widget.setParent(None)
+        widget.deleteLater()
+        self.sigPluginPanelsChanged.emit()
+
+    def toggle_plugin_panel(self, label: str, wanted: bool) -> None:
+        """Open or close one plugin's panel, from the menu."""
+        if wanted:
+            self.open_plugin_panel(label)
+        else:
+            self.close_plugin_panel(label)
+
+    def plugin_tab_closed(self, index: int) -> None:
+        """The reader pressed a plugin tab's own close button."""
+        if self.parambar is None or self.parambar.plugins is None:
+            return
+        widget = self.parambar.plugins.widget(index)
+        for label, open_widget in list(self.plugin_panels.items()):
+            if open_widget is widget:
+                self.close_plugin_panel(label)
+                return
 
     def has_plugin_panels(self) -> bool:
-        """Whether any plugin registered a panel with this browser."""
+        """Whether any plugin panel is open in this browser."""
         return self.parambar is not None and self.parambar.plugins is not None
 
     def side_panel_shown(self) -> bool:
