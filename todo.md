@@ -258,39 +258,62 @@ action that leaves state behind has to join them.
 
 # Spec stuff 
 
-- [ ] **Annotation marks hide the navigator's own waveform.**  Reported by
-  the reader: in densely annotated stretches the overview is completely
-  invisible, covered by the vertical annotation lines.  It is a z-order,
-  and every number is already written down.  The navigator stacks the
-  waveform at **10** (`fulltraceplot.build_channel`: `line.setZValue(10)`,
-  the activity overview at 11, the zero line at 20), the window-selection
-  region at **50**, event marks at `eventoverlay.NAV_MARK_Z` = **60** and
-  label boxes at `labeloverlay.LABEL_NAV_Z` = **65**.  `SURFACE_NAVIGATOR`
-  drops caps and labels but keeps full-lane geometry, so every annotation
-  is a full-height line over the waveform and a dense stretch is a picket
-  fence.
+- [x] **Annotation marks hide the navigator's own waveform.**  Done, and by
+  raising the waveform rather than lowering the marks.  `fulltraceplot` now
+  names its own ladder -- `NAV_REGION_Z` 50, `NAV_TRACE_Z` **70**,
+  `NAV_ACTIVITY_Z` 71, `NAV_ZERO_Z` 80 -- where it used to write 50, 10, 11
+  and 20 as literals.  The overview and its zero line are above
+  `eventoverlay.NAV_MARK_Z` (60) and `labeloverlay.LABEL_NAV_Z` (65), which
+  are untouched, so the measurement `LABEL_NAV_Z` carries still holds: the
+  marks still clear the translucent selection region.
 
-  **Do not simply lower the marks.**  They sit at 60/65 to clear the
-  translucent selection region at 50, and `LABEL_NAV_Z` carries the
-  measurement: a box edge samples (223, 113, 134) under the region against
-  (255, 107, 107), its own colour, above it -- and it is wrong precisely
-  inside the stretch of session the reader is working in.  Putting the
-  marks under the trace puts them under the region too, and undoes that.
+  **Screenshotted both ways, as the entry asked.**  Driven on
+  data/Gryllus_campestris.wav at 1600x1000 -- 17.951 s carrying 118 pulses,
+  35 trials and 44 label spans, the picket fence -- with the window on
+  4..10 s so the region covers x 361..734 of the 1232x96 strip.  Counting
+  pixels that are exactly the overview's own pen colour, (87, 144, 174):
 
-  The order wanted is the reader's own words, "putting them behind the
-  trace plot in the overview", and the way to get it without losing the
-  above is to **raise the navigator's waveform above the marks** rather
-  than to lower the marks.  One consequence has to be looked at rather than
-  assumed: a waveform above 65 is also above the region at 50, so the
-  region's wash would tint the ground and no longer the trace.  That is
-  probably the better picture and it is what a minimap usually does, but it
-  is a visible change nobody asked for -- screenshot it both ways and say
-  which is which.
+  | z of the overview  | in total | inside the region | outside it |
+  | ------------------ | -------- | ----------------- | ---------- |
+  | 10 (was)           | 2600     | 0                 | 2600       |
+  | `NAV_TRACE_Z` (70) | 5363     | 1866              | 3497       |
 
-  If it turns out worse, the fallback is to leave the z alone and make a
-  navigator mark cheaper instead: a thinner pen, a lower alpha, or one
-  density band rather than one line per event.  That attacks the dense case
-  directly and touches no measured ordering.
+  Twice the overview on screen, and read back rather than counted only: at
+  10 the waveform is a set of fragments between the marks, and at 70 every
+  burst reads as one shape with the marks passing behind it.  The marks stay
+  perfectly legible -- they are full height and the waveform only covers
+  them where it has amplitude.
+
+  **The consequence nobody asked for, stated so it can be overruled.**  A
+  trace above 65 is also above the region at 50, so the region's wash now
+  tints the ground and no longer the trace.  The zero column above is what
+  that looked like before: not one pixel inside the window the reader is
+  working in was the waveform's own colour, because it sampled (85, 143,
+  189) there -- exactly (87, 144, 174) under `theme.region_brush`.  The
+  region is still obvious, since what marks it is the ground: (13, 18, 25)
+  outside against (25, 40, 66) inside, the same pair `LABEL_NAV_Z` records.
+  The cost is a little of its two edge lines, which the waveform now
+  crosses: 120 pixels of (76, 141, 255) before against 54 after, in the same
+  four columns, so both edges are still drawn and neither has moved.  This
+  is what a minimap usually does and it looks better, but it is the one
+  thing here a reader might want back.
+
+  The fallback -- a thinner pen, a lower alpha or a density band -- was not
+  taken.  It makes a mark cheaper without making the waveform visible: at
+  118 marks over 17.951 s the fence is a fence at any alpha, and every one
+  of those variants is a new appearance decision where a z is an ordering
+  that was simply wrong.
+
+  Two things had to be driven rather than reasoned about.  The zero line
+  rises with the trace and not with the marks, because a reference chopped
+  up by the annotations the trace has just cleared is worse than no
+  reference.  And the selection region keeps the mouse: an item on top of a
+  control is how a control stops working, but `EnvelopeItem` and
+  `ActivityItem` are plain `pg.GraphicsObject`s with no `ItemIsMovable` and
+  no `mousePressEvent`, so `QGraphicsItem`'s default ignores the press and
+  the scene hands it down -- unlike the cutoff `pg.InfiniteLine`s
+  `set_handles_movable` has to switch off.  A test presses at y=0, where the
+  envelope is solid, and asserts the region moved.
 
 - [ ] **`theme.collect_orphan_widgets` can segfault the test suite.** It
   walks a snapshot of `QApplication.topLevelWidgets()` and calls

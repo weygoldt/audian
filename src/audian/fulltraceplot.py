@@ -101,6 +101,88 @@ HANDLE_HEIGHT_FRACTION = theme.HANDLE_HEIGHT_FRACTION
 """Fraction of the strip height a grab handle spans, centred on the row."""
 
 
+NAV_REGION_Z = 50
+"""z of the window-selection region, the one thing on this strip that is a
+control rather than a picture.
+
+`eventoverlay.NAV_REGION_Z` mirrors this number rather than importing it,
+because importing `fulltraceplot` pulls the whole browser in; a test asserts
+the two agree.
+"""
+
+NAV_TRACE_Z = 70
+"""z of the overview itself, and it sits ABOVE the annotation marks.
+
+Reported by the reader: in a densely annotated stretch the overview is
+completely invisible, covered by the vertical annotation lines.  It is a
+z-order and nothing else.  `eventoverlay.NAV_MARK_Z` is 60 and
+`labeloverlay.LABEL_NAV_Z` is 65, `SURFACE_NAVIGATOR` draws every annotation
+at full lane height, and the overview used to be at 10 -- so a dense stretch
+is a picket fence with a waveform somewhere behind it.
+
+**The waveform rises; the marks do not fall.**  That is the whole decision,
+and the obvious alternative undoes a measured one.  The marks are at 60 and
+65 to clear the translucent region below them, and `labeloverlay.LABEL_NAV_Z`
+tabulates what it costs when they do not: a box edge samples (223, 113, 134)
+under the region against (255, 107, 107) above it, and it is wrong precisely
+inside the stretch of session the reader is working in.  Marks put under the
+trace are marks under the region again.
+
+Measured on data/Gryllus_campestris.wav at 1600x1000, 17.951 s carrying 118
+pulses, 35 trials and 44 label spans -- the picket fence the reader
+described -- with the window on 4..10 s, so the selection region covers
+x 361..734 of a 1232x96 strip.  Counting pixels that are exactly the
+overview's own pen colour, (87, 144, 174):
+
+==================  =========  ==================  ===========
+z of the overview   in total   inside the region   outside it
+==================  =========  ==================  ===========
+10 (was)            2600       0                   2600
+`NAV_TRACE_Z` (70)  5363       1866                3497
+==================  =========  ==================  ===========
+
+Twice the overview on screen, and the middle column is the consequence that
+had to be looked at rather than assumed.  At 10 the region's translucent
+brush was painted OVER the waveform, so not one pixel inside the window the
+reader is working in was the waveform's own colour: it sampled
+(85, 143, 189) there instead, which is exactly (87, 144, 174) under
+`theme.region_brush`.  Above the region the wash tints the ground and no
+longer the trace -- which is what a minimap usually does, and which is a
+visible change nobody asked for.
+
+The region stays legible, because what marks it is the ground and not the
+trace: measured on this strip, the row ground goes (13, 18, 25) outside the
+region to (25, 40, 66) inside it, the same pair `labeloverlay.LABEL_NAV_Z`
+records.  What is given up is a little of its two edge lines, which the
+waveform now crosses -- 120 pixels of (76, 141, 255) before against 54
+after, in the same four columns, so both edges are still drawn and neither
+has moved.
+
+The region keeps the mouse.  `EnvelopeItem` and `ActivityItem` are plain
+`pg.GraphicsObject`s with no `ItemIsMovable` and no `mousePressEvent`, so
+`QGraphicsItem`'s default ignores a press and the scene hands it on down --
+unlike the cutoff `pg.InfiniteLine`s `set_handles_movable` had to switch off.
+Driven rather than reasoned: a press on the region above the raised trace
+still moves it.
+"""
+
+NAV_ACTIVITY_Z = NAV_TRACE_Z + 1
+"""z of the activity overview, which is the other half of `NAV_TRACE_Z`.
+
+The two are never visible at once -- `set_overview` switches between them --
+so this only has to keep the order they had at 10 and 11.
+"""
+
+NAV_ZERO_Z = NAV_TRACE_Z + 10
+"""z of the navigator's zero line, above the overview it is a reference for.
+
+It rises with the trace and not with the marks.  A zero line left at 20 would
+be a reference chopped into pieces by exactly the annotations the trace has
+just cleared, and it would be missing under the part of the strip the reader
+is looking at.
+"""
+
+
 class EnvelopeItem(pg.GraphicsObject):
     """Filled min/max envelope of a compressed waveform.
 
@@ -493,7 +575,7 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
             movable=True,
             swapMode="block",
         )
-        region.setZValue(50)
+        region.setZValue(NAV_REGION_Z)
         region.setBounds((0, self.tmax))
         region.setRegion((self.axtraces[channel].viewRange()[0]))
         # a region drag emits at mouse rate (60-120 Hz) and one step costs
@@ -511,21 +593,21 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
 
         # add data:
         line = EnvelopeItem(self.trace_role())
-        line.setZValue(10)
+        line.setZValue(NAV_TRACE_Z)
         axt.addItem(line)
         self.lines.append(line)
 
         # the activity overview shares the panel and the region; only one of
         # the two is ever visible, so switching costs a repaint, not a rebuild.
         act = ActivityItem()
-        act.setZValue(11)
+        act.setZValue(NAV_ACTIVITY_Z)
         act.setVisible(False)
         axt.addItem(act)
         self.act_items.append(act)
 
         # add zero line:
         zero_line = axt.addLine(y=0, movable=False, pen=theme.zero_pen())
-        zero_line.setZValue(20)
+        zero_line.setZValue(NAV_ZERO_Z)
         self.zero_lines.append(zero_line)
 
         theme.style_plotitem(axt)

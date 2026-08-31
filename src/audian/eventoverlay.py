@@ -253,9 +253,10 @@ FILL_Z = -20
 MARK_Z = 15
 CAP_Z = 16
 
-#: z of the navigator's selection region: `fulltraceplot.build_channel` calls
-#: `region.setZValue(50)` on it.  Written down rather than imported, because
-#: `fulltraceplot` pulls the whole browser in and this is one integer.
+#: z of the navigator's selection region, of which `fulltraceplot.NAV_REGION_Z`
+#: is the definition.  Written down rather than imported, because
+#: `fulltraceplot` pulls the whole browser in and this is one integer; a test
+#: asserts the two agree.
 NAV_REGION_Z = 50
 
 #: What a mark costs on the navigator.  The selection region above is a
@@ -265,6 +266,12 @@ NAV_REGION_Z = 50
 #: `MARK_ALPHA` says a mark is drawn at full opacity; on this surface that
 #: costs a z above the region.  Still under the crosshair and the playback
 #: marker, which are at 100.
+#:
+#: And under the navigator's own overview, which sits at
+#: `fulltraceplot.NAV_TRACE_Z`.  Full-height marks over a waveform made a
+#: densely annotated stretch a picket fence with nothing visible behind it;
+#: the waveform was raised rather than these lowered, because lowering them
+#: puts them back under the region and undoes the measurement above.
 NAV_MARK_Z = NAV_REGION_Z + 10
 
 #: How each surface draws.  Geometry is the full lane on all three -- that is

@@ -66,9 +66,19 @@ from audian.labels import (  # noqa: E402
     categories_to_settings,
     sidecar_path,
 )
-from audian.eventoverlay import NAV_REGION_Z, SURFACE_NAVIGATOR  # noqa: E402
-from audian.fulltraceplot import MODE_ALL  # noqa: E402
-from audian.labeloverlay import LABEL_Z, CategoryStrip  # noqa: E402
+from audian.eventoverlay import (  # noqa: E402
+    NAV_MARK_Z,
+    NAV_REGION_Z,
+    SURFACE_NAVIGATOR,
+)
+from audian.fulltraceplot import (  # noqa: E402
+    MODE_ALL,
+    NAV_ACTIVITY_Z,
+    NAV_TRACE_Z,
+    NAV_ZERO_Z,
+)
+from audian import fulltraceplot  # noqa: E402
+from audian.labeloverlay import LABEL_NAV_Z, LABEL_Z, CategoryStrip  # noqa: E402
 from test_panelsplitter import app as app  # noqa: E402,F401  -- a fixture
 from test_panelsplitter import open_stack, panel, pump, settle  # noqa: E402
 
@@ -2123,6 +2133,134 @@ def test_the_overview_clears_the_window_region(browser):
     for lane in browser.label_overlays:
         if lane.surface != SURFACE_NAVIGATOR:
             assert lane.z == LABEL_Z
+
+
+def nav_send(browser, ax, kind, x, y, button, buttons):
+    """One real mouse event on the navigator strip, in DATA coordinates.
+
+    The navigator's own viewport, and a global position, for the reasons
+    `send` and `drag` above give: the scene finds the item under the mouse by
+    mapping the screen position back through the viewport, and the scene of a
+    `GraphicsLayoutWidget` is that viewport at 1:1.
+    """
+    application = QApplication.instance()
+    viewport = browser.datafig.viewport()
+    scene = ax.getViewBox().mapViewToScene(pg.Point(x, y))
+    pos = QPoint(int(round(scene.x())), int(round(scene.y())))
+    application.sendEvent(
+        viewport,
+        QMouseEvent(
+            kind,
+            QPointF(pos),
+            QPointF(viewport.mapToGlobal(pos)),
+            button,
+            buttons,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+    settle()
+
+
+def test_the_overview_is_drawn_over_the_annotation_marks(browser):
+    """The reader's report: in a densely annotated stretch the strip is a
+    picket fence and the overview behind it is invisible.
+
+    The fix is the waveform rising and NOT the marks falling, because the
+    marks are at 60 and 65 to clear the region -- which is what
+    `test_the_overview_clears_the_window_region` above measures.  So both
+    orderings are asserted here: the overview over the marks, and the marks
+    still over the region.
+    """
+    strip = browser.datafig
+    assert strip.lines and strip.act_items and strip.zero_lines
+    for line, act, zero in zip(strip.lines, strip.act_items, strip.zero_lines):
+        assert line.zValue() == NAV_TRACE_Z
+        assert act.zValue() == NAV_ACTIVITY_Z
+        assert zero.zValue() == NAV_ZERO_Z
+        # over every kind of mark the strip can carry
+        assert line.zValue() > NAV_MARK_Z
+        assert line.zValue() > LABEL_NAV_Z
+        # and the zero line is a reference for the overview, so it rises
+        # with it rather than being left under the fence
+        assert zero.zValue() > line.zValue()
+    # the measured decision this must not undo
+    assert NAV_MARK_Z > NAV_REGION_Z
+    assert all(nav.z > NAV_REGION_Z for nav in nav_overlays(browser))
+    # eventoverlay mirrors the region's z rather than importing it
+    assert fulltraceplot.NAV_REGION_Z == NAV_REGION_Z
+    for region in strip.regions:
+        assert region.zValue() == NAV_REGION_Z
+
+
+def test_the_region_still_takes_a_press_through_the_raised_overview(browser):
+    """An item on top of a control is how a control stops working.
+
+    `EnvelopeItem` is a plain `pg.GraphicsObject` with no `ItemIsMovable`
+    and no `mousePressEvent`, so `QGraphicsItem`'s default ignores the press
+    and the scene hands it on down -- unlike the cutoff `pg.InfiniteLine`s,
+    which `set_handles_movable` has to switch off for exactly this reason.
+    Driven rather than reasoned, and pressed at y=0, where the envelope is
+    solid.
+    """
+    strip = browser.datafig
+    channel = strip.current_channel()
+    ax = strip.axs[channel]
+    region = strip.regions[channel]
+    was = browser.plot_ranges["t"].r0[0], browser.plot_ranges["t"].r1[0]
+    # a window narrower than the recording, or the region fills the strip and
+    # there is nowhere for a successful drag to go
+    browser.set_times(0.5, 1.0)
+    settle()
+    pump(0.3)
+    t0, t1 = region.getRegion()
+    width = t1 - t0
+    assert 0 < width < strip.tmax
+    step = 0.5 * width
+    press = pg.Point(t0 + 0.5 * width, 0.0)
+    line = strip.lines[channel]
+    assert line.isVisible() and line.boundingRect().contains(press), (
+        "the press misses the overview, so it proves nothing about its z"
+    )
+    try:
+        nav_send(
+            browser,
+            ax,
+            QEvent.Type.MouseButtonPress,
+            press.x(),
+            press.y(),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+        )
+        for frac in (0.25, 0.5):
+            nav_send(
+                browser,
+                ax,
+                QEvent.Type.MouseMove,
+                t0 + 0.5 * width + frac * width,
+                0.0,
+                Qt.MouseButton.NoButton,
+                Qt.MouseButton.LeftButton,
+            )
+        nav_send(
+            browser,
+            ax,
+            QEvent.Type.MouseButtonRelease,
+            t0 + 0.5 * width + step,
+            0.0,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+        )
+        pump(0.3)
+        moved = region.getRegion()
+        assert moved[0] > t0, "the raised overview swallowed the press"
+        assert moved[1] - moved[0] == pytest.approx(width, rel=0.05)
+        # and the browser followed the region, which is what the drag is for
+        trange = browser.plot_ranges["t"]
+        assert trange.r0[0] == pytest.approx(moved[0], abs=0.05)
+    finally:
+        browser.set_times(was[0], was[1] - was[0])
+        settle()
+        pump(0.3)
 
 
 def test_the_overview_is_read_only(labelling):

@@ -160,6 +160,12 @@ LABEL_Z = 25
 #: is the box that has to clear it.  `eventoverlay.NAV_MARK_Z` buys a fixed
 #: label the same thing; this stays above it, which is the order the two
 #: kinds of mark have everywhere else.
+#:
+#: The navigator's own overview is above BOTH, at
+#: `fulltraceplot.NAV_TRACE_Z`, so that a densely annotated stretch is not a
+#: picket fence with the waveform lost behind it.  Lowering these under the
+#: trace instead would have put them under the region again, which is what
+#: the table above is about.
 LABEL_NAV_Z = NAV_REGION_Z + 15
 
 #: The selected label, above every unselected one and still under the cross
