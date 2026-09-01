@@ -548,6 +548,41 @@ def browser(app, tmp_path):
             QSettings.setPath(fmt, scope, os.fspath(home))
 
 
+def test_a_sweep_covers_every_file_of_a_split_recording(browser):
+    """`Data.file_path` is the first file, not the recording.
+
+    `data.py` reduces a list of paths to its first element on the way in, so
+    a sweep that took it would track file one of four and report the answer
+    as the whole recording -- silently, which is the same class of failure
+    `open_files` exists to prevent.  The complete list is on the loader.
+    """
+    from audian_plugins.frequencybands import audian_frequency_bands_panel
+
+    _title, panel = audian_frequency_bands_panel(browser)
+    try:
+        class _Loader:
+            file_paths = ["/one.wav", "/two.wav", "/three.wav"]
+
+        class _Data:
+            data = _Loader()
+            file_path = "/one.wav"
+
+        panel.browser = type("B", (), {"data": _Data()})()
+        assert panel.source_paths() == ["/one.wav", "/two.wav", "/three.wav"]
+
+        # and a browser whose loader has gone still names the anchor
+        class _Bare:
+            data = None
+            file_path = "/one.wav"
+
+        panel.browser = type("B", (), {"data": _Bare()})()
+        assert panel.source_paths() == ["/one.wav"]
+    finally:
+        panel.browser = browser
+        panel.close()
+        pump(0.2)
+
+
 def test_a_recording_has_lanes_to_draw_on(browser):
     assert browser.spectrogram_axes(), "no spectrogram lane to hang a band on"
 

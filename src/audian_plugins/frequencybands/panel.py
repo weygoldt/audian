@@ -492,12 +492,29 @@ class BandPanel(QWidget):
         return Path(path) if path else None
 
     def source_paths(self) -> list:
+        """The complete ordered file list behind the browser's timeline.
+
+        Not `Data.file_path`, which is the anchor a sidecar is named after
+        and becomes the *first* path once a split recording is open --
+        `data.py` reduces a list to its first element on the way in.  A
+        sweep taking it would silently track file one of four and report the
+        result as the whole recording, which is the same class of failure
+        `open_files` exists to prevent.  The live loader keeps the full list;
+        the detector plugin reads it the same way.
+        """
         data = getattr(self.browser, "data", None)
-        paths = getattr(data, "file_paths", None)
-        if paths:
-            return [os.fspath(p) for p in paths]
-        one = self.recording_path()
-        return [os.fspath(one)] if one else []
+        loader = getattr(data, "data", None)
+        opened = getattr(loader, "file_paths", None)
+        if opened is not None:
+            paths = [os.fspath(path) for path in opened]
+            if paths:
+                return paths
+        fallback = getattr(data, "file_path", None)
+        if fallback is None:
+            return []
+        if isinstance(fallback, (list, tuple, np.ndarray)):
+            return [os.fspath(path) for path in fallback]
+        return [os.fspath(fallback)]
 
     def load_for_recording(self) -> None:
         """Read the sidecar of whichever recording is open, once per file."""

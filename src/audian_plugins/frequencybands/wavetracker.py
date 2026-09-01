@@ -21,10 +21,14 @@ of the spectrogram -- plus one that is a time axis:
     assigned to none**.  This is why the arrays are float and why every
     comparison against them has to exclude NaN first.
 ``sign_v``
-    Its power at each electrode, ``(n_detections, n_channels)``.  Read only
-    to learn the channel count; the amplitude signature is what separates two
-    fish at the same frequency, and using it is a tracking job rather than a
-    curation one.
+    Its power at each electrode, ``(n_detections, n_channels)``.  **Not read
+    here**, and that is a limitation worth naming rather than hiding: the
+    per-electrode amplitude signature is the only thing that separates two
+    fish at the same frequency, so it is what a band's channel would have to
+    be derived from, and imported bands therefore carry no channel at all.
+    Using it is a tracking job rather than a curation one, and doing it
+    badly would put a confident number in a column that is allowed to be
+    empty.
 ``times``
     Seconds, one per spectrogram frame, and the only array indexed rather
     than parallel.
