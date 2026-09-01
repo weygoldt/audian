@@ -17,7 +17,8 @@ dependencies = [
   "pyqtgraph",
   "SoundFile",
   "sounddevice",
-  "thunderlab>=1.6.0"
+  "thunderlab>=1.6.0",
+  "audioio",
 ]
 # PySide6 6.11 wheels start at 3.9; the old ">=3.8" would resolve to a
 # Python that has no binding to install.
@@ -88,3 +89,6 @@ pythonpath = "src"
 # contributor who runs `ruff format` with no arguments gets the same
 # result as CI does.
 quote-style = "double"
+
+[tool.uv.sources]
+audioio = { git = "https://github.com/weygoldt/audioio" }
