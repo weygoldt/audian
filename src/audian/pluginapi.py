@@ -41,6 +41,16 @@ applies a continuity heuristic that silently drops some of them.
 Do **not** read `browser.data.buffer`.  It is a window that moves, and
 `set_times` shifts it in place after cancelling whatever was reading it.
 
+Denoising a spectrogram
+-----------------------
+
+`Denoiser` and `Parameter` are what an ``audian_*denoisers`` factory
+returns.  A denoiser is handed a ``(time, channel, frequency)`` block of
+power, the frequency of each bin, and its own parameter values; it must be
+pointwise in time, because the spectrogram is transformed in chunks.  See
+`audian.denoise` for the whole contract and `audian_plugins.denoisers` for
+two written against it.
+
 Working off the GUI thread
 --------------------------
 
@@ -52,11 +62,12 @@ delivered to audian's own compute worker as well.  A plugin that needs a
 thread should own one.
 """
 
+from . import theme
 from .data import open_files
 from .databrowser import ParameterGroup, caption_label, narrow_combo
+from .denoise import Denoiser, Parameter
 from .labels import KIND_POINT, KIND_SPAN, Label, LabelCategory
 from .tasks.tokens import Cancelled, CancelToken
-from . import theme
 
 #: Attributes a panel factory may assume its browser has.  Everything else
 #: about a `DataBrowser` is internal and may move.
@@ -70,13 +81,15 @@ PLUGIN_BROWSER_ATTRS = (
 )
 
 __all__ = [
-    "Cancelled",
-    "CancelToken",
     "KIND_POINT",
     "KIND_SPAN",
+    "PLUGIN_BROWSER_ATTRS",
+    "CancelToken",
+    "Cancelled",
+    "Denoiser",
     "Label",
     "LabelCategory",
-    "PLUGIN_BROWSER_ATTRS",
+    "Parameter",
     "ParameterGroup",
     "caption_label",
     "narrow_combo",

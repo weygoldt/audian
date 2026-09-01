@@ -78,7 +78,7 @@ class BufferedSpectrogram(BufferedData):
         self.nfft = nfft
         self.hop = 0
         self.overlap_frac = overlap_frac
-        #: Which entries of `denoise.DENOISERS` run on each chunk, and what
+        #: Which registered denoisers run on each chunk, and what
         #: each of them is set to.  Keys and plain numbers rather than
         #: objects, so both are things a settings file can carry.  Every
         #: denoiser keeps its parameters whether or not it is enabled, so

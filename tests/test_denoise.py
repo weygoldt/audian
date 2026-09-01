@@ -11,6 +11,25 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from audian import denoise  # noqa: E402
+from audian_plugins.denoisers import audian_builtin_denoisers  # noqa: E402
+from audian_plugins.denoisers.engine import (  # noqa: E402
+    mains_comb,
+    spatial_coherence,
+)
+
+
+@pytest.fixture(autouse=True)
+def registered():
+    """The bundled denoisers, in the registry.
+
+    Registered here rather than left to plugin discovery: these tests are
+    about the two denoisers and not about whether the loader found them,
+    and `register` replaces by key, so doing it again costs nothing when
+    the panel tests have already loaded the plugins for real.
+    """
+    for entry in audian_builtin_denoisers():
+        denoise.register(entry)
+
 
 # ---------------------------------------------------------------- spatial
 
@@ -33,7 +52,7 @@ def kept(out, source):
 
 def spatial(block, threshold=6.0, softness=3.0):
     freqs = np.arange(block.shape[2], dtype=float)
-    return denoise.spatial_coherence(
+    return spatial_coherence(
         block, freqs, {"threshold": threshold, "softness": softness}
     )
 
@@ -284,7 +303,7 @@ class TestChunkInvariance:
     def test_every_entry_is_pointwise_in_time(self):
         rng = np.random.default_rng(11)
         b = rng.random((24, 4, len(FREQS))) + 1e-3
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             whole = entry.apply(b, FREQS, entry.defaults())
             halves = np.concatenate([
                 entry.apply(b[:10], FREQS, entry.defaults()),
@@ -296,9 +315,9 @@ class TestChunkInvariance:
         rng = np.random.default_rng(12)
         b = rng.random((30, 4, len(FREQS))) + 1e-3
         params = denoise.defaults()
-        whole = denoise.apply_chain(b, FREQS, denoise.KEYS, params)
+        whole = denoise.apply_chain(b, FREQS, denoise.keys(), params)
         pieces = np.concatenate([
-            denoise.apply_chain(b[i:i + 7], FREQS, denoise.KEYS, params)
+            denoise.apply_chain(b[i:i + 7], FREQS, denoise.keys(), params)
             for i in range(0, len(b), 7)
         ])
         assert np.array_equal(whole, pieces)
@@ -306,7 +325,7 @@ class TestChunkInvariance:
 
 class TestRegistry:
     def test_keys_are_unique(self):
-        keys = [d.key for d in denoise.DENOISERS]
+        keys = [d.key for d in denoise.all_denoisers()]
         assert len(keys) == len(set(keys))
 
     def test_unknown_key_is_none_rather_than_a_raise(self):
@@ -332,12 +351,12 @@ class TestRegistry:
 
     def test_defaults_cover_every_declared_parameter(self):
         values = denoise.defaults()
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             for param in entry.params:
                 assert param.key in values[entry.key]
 
     def test_every_parameter_default_is_inside_its_bounds(self):
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             for param in entry.params:
                 assert param.minimum <= param.default <= param.maximum
                 assert param.clamp(param.default) == param.default
@@ -347,3 +366,85 @@ class TestRegistry:
         assert param.clamp(1e9) == param.maximum
         assert param.clamp(-5) == param.minimum
         assert param.clamp(3.7) == 4
+
+
+class TestPluginRegistration:
+    """Denoisers arrive through the plugin loader, like the event detector."""
+
+    def test_the_bundled_plugin_is_discovered(self):
+        from audian.plugins import Plugins
+
+        denoise.clear()
+        try:
+            plugins = Plugins()
+            plugins.load_plugins()
+            assert denoise.denoiser("mains") is not None
+            assert denoise.denoiser("spatial") is not None
+        finally:
+            denoise.clear()
+            for entry in audian_builtin_denoisers():
+                denoise.register(entry)
+
+    def test_order_and_not_registration_decides_the_chain(self):
+        """A plugin loading first must not put its denoiser first.
+
+        Discovery order is bundled, then installed, then the working
+        directory -- so without an explicit order the picture would depend
+        on what happened to be installed.
+        """
+        denoise.clear()
+        try:
+            late = denoise.Denoiser(key="late", name="Late", apply=lambda b, f, v: b,
+                                    order=90)
+            early = denoise.Denoiser(key="early", name="Early", apply=lambda b, f, v: b,
+                                     order=10)
+            denoise.register(late)
+            denoise.register(early)
+            assert denoise.keys() == ("early", "late")
+            assert denoise.ordered(("late", "early")) == ("early", "late")
+        finally:
+            denoise.clear()
+            for entry in audian_builtin_denoisers():
+                denoise.register(entry)
+
+    def test_registering_the_same_key_replaces_rather_than_duplicates(self):
+        """Every `Plugins` instance runs the factories, and a suite builds
+        several -- so registration has to be idempotent."""
+        before = denoise.keys()
+        for entry in audian_builtin_denoisers():
+            denoise.register(entry)
+            denoise.register(entry)
+        assert denoise.keys() == before
+
+    def test_a_plugin_can_override_a_bundled_denoiser(self):
+        mine = denoise.Denoiser(key="mains", name="Mine", apply=lambda b, f, v: b)
+        try:
+            denoise.register(mine)
+            assert denoise.denoiser("mains").name == "Mine"
+        finally:
+            for entry in audian_builtin_denoisers():
+                denoise.register(entry)
+        assert denoise.denoiser("mains").name == "&Mains hum"
+
+    def test_a_bad_factory_does_not_lose_the_others(self, capsys):
+        from audian.plugins import Plugins
+
+        denoise.clear()
+        try:
+            plugins = Plugins()
+
+            def broken():
+                raise RuntimeError("no")
+
+            plugins.add_denoiser_factory(broken)
+            plugins.add_denoiser_factory(audian_builtin_denoisers)
+            plugins.setup_denoisers()
+            assert denoise.denoiser("mains") is not None
+        finally:
+            denoise.clear()
+            for entry in audian_builtin_denoisers():
+                denoise.register(entry)
+
+    def test_something_that_is_not_a_denoiser_is_refused(self):
+        with pytest.raises(TypeError):
+            denoise.register("not a denoiser")

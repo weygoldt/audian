@@ -9038,7 +9038,7 @@ class DataBrowser(QWidget):
     def setup_denoise_rows(self, group) -> None:
         """One switch per denoiser, and its parameters under it.
 
-        Built from `denoise.DENOISERS` rather than written out, so a new
+        Built from the denoiser registry rather than written out, so a new
         denoiser arrives with its controls already drawn.  Every row is
         created whether or not its denoiser is on; `sync_denoise_rows`
         hides the parameters of the ones that are off, which is why
@@ -9051,7 +9051,7 @@ class DataBrowser(QWidget):
         the thing it changes.
         """
         self.denoise_widgets = {}
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             switch = QToolButton(self.parambar)
             switch.setText(entry.name.replace("&", ""))
             switch.setCheckable(True)

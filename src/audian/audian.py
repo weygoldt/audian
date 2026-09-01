@@ -4017,7 +4017,7 @@ class Audian(QMainWindow):
         if not isinstance(browser, DataBrowser) or browser.data is None:
             return
         running = set(browser.denoisers_enabled())
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             act = self.acts.denoisers.get(entry.key)
             if act is None:
                 continue
@@ -4140,10 +4140,10 @@ class Audian(QMainWindow):
         # One checkable action per registry entry, and NOT in an exclusive
         # group: denoisers are layers that stack, each running on what the
         # last returned, so more than one can be ticked.  Built from
-        # `denoise.DENOISERS` rather than written out, so a new denoiser
+        # the denoiser registry rather than written out, so a new denoiser
         # appears here by being registered.
         self.acts.denoisers = {}
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             act = QAction(entry.name, self)
             act.setCheckable(True)
             act.setChecked(False)
@@ -4263,7 +4263,7 @@ class Audian(QMainWindow):
         spec_menu.addAction(self.acts.toggle_peaking)
 
         self.denoise_menu = spec_menu.addMenu("De&noising")
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             self.denoise_menu.addAction(self.acts.denoisers[entry.key])
         self.denoise_menu.addSeparator()
         self.denoise_menu.addAction(self.acts.denoise_threshold_up)

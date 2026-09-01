@@ -84,7 +84,7 @@ def enable(view, key, on=True):
 
 
 def all_off(view):
-    for key in denoise.KEYS:
+    for key in denoise.keys():
         view.set_denoiser_enabled(key, False)
     pump(1.5)
 
@@ -198,12 +198,12 @@ class TestLayering:
 class TestPanelAndMenu:
     def test_every_denoiser_has_a_menu_entry_and_a_switch(self, view):
         window = view.window()
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             assert entry.key in window.acts.denoisers
             assert entry.key in view.denoise_widgets
 
     def test_every_declared_parameter_has_a_row(self, view):
-        for entry in denoise.DENOISERS:
+        for entry in denoise.all_denoisers():
             rows = view.denoise_widgets[entry.key]["params"]
             for param in entry.params:
                 assert param.key in rows, (entry.key, param.key)
