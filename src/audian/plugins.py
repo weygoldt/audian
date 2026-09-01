@@ -1,14 +1,22 @@
 import importlib
 import logging
 import os
+import pkgutil
 import sys
 
+from importlib import metadata
 from pathlib import Path
 
 from .bufferedfilter import BufferedFilter
 from .bufferedspectrogram import BufferedSpectrogram
 
 log = logging.getLogger(__name__)
+
+#: The entry point group a plugin distribution advertises itself in.  The
+#: contract between audian and a plugin that lives somewhere else: name a
+#: module, and its ``audian_*`` callables are bound exactly as a bundled
+#: plugin's are.
+PLUGIN_ENTRY_POINT = "audian.plugins"
 
 
 def default_setup_traces(browser):
@@ -23,6 +31,9 @@ class Plugins(object):
         self.add_trace_factory(default_setup_traces)
         self.analyzer_factories = []
         self.panel_factories = []
+        #: module names already bound, so overlapping discovery paths do
+        #: not put the same plugin in the menu twice
+        self._bound = set()
 
     def add_plugin(self, name, module):
         self.plugins[name] = module
@@ -57,27 +68,131 @@ class Plugins(object):
     def clear_panel_factories(self):
         self.panel_factories = []
 
-    def load_plugins(self):
+    def bind(self, module, name: str = "") -> bool:
+        """Register every ``audian_*`` callable a module exposes.
+
+        The one rule the whole plugin system is built on, in one place, so
+        that a plugin bundled with audian, one installed from its own
+        distribution and one dropped in a working directory are all found
+        the same way and cannot drift apart.
+
+        A module is bound once.  The three discovery paths overlap on
+        purpose -- a plugin part-way out of this tree is installed *and*
+        still bundled, and a reader testing one keeps a copy in the working
+        directory -- and binding it twice would put two identical entries in
+        the Plugins menu, each opening its own tab.
+        """
+        if getattr(module, "__name__", None) in self._bound:
+            return False
+        found = False
+        for key in dir(module):
+            if not key.startswith("audian_"):
+                continue
+            value = getattr(module, key)
+            if not callable(value):
+                continue
+            if key.endswith("traces"):
+                self.add_trace_factory(value)
+            elif key.endswith("analyzer"):
+                self.add_analyzer_factory(value)
+            elif key.endswith("panel"):
+                self.add_panel_factory(value)
+            else:
+                continue
+            found = True
+        if found:
+            self._bound.add(getattr(module, "__name__", None))
+            self.add_plugin(name or getattr(module, "__name__", "plugin"), module)
+        return found
+
+    def load_bundled(self) -> None:
+        """The plugins that ship inside audian's own tree.
+
+        Walked rather than listed, so adding one is adding a directory.
+        This is what makes a merged plugin work without being copied
+        anywhere: discovery used to be the working directory alone, which
+        meant installing a plugin was copying a file into every directory a
+        reader ever launched from -- and a plugin that was present but not
+        copied looked exactly like a feature that had not been installed at
+        all, because the Plugins menu is absent when nothing registers.
+
+        Each of these is a directory move from its own repository, at which
+        point `load_installed` finds it instead and nothing else changes.
+        """
+        try:
+            import audian_plugins
+        except ImportError:
+            return
+        for info in pkgutil.iter_modules(audian_plugins.__path__):
+            name = f"audian_plugins.{info.name}"
+            try:
+                module = importlib.import_module(name)
+            except Exception as exc:  # noqa: BLE001 - one bad plugin, not all
+                log.exception("bundled plugin %s failed to import", name)
+                print(f"could not load {name}: {exc}")
+                continue
+            self.bind(module, name)
+
+    def load_installed(self) -> None:
+        """Plugins from any distribution that advertises one.
+
+        The ``audian.plugins`` entry point group, which is how a plugin
+        that has left this tree announces itself::
+
+            [project.entry-points."audian.plugins"]
+            eventdetection = "audian_plugins.eventdetection"
+
+        The value names a *module*, and it is scanned by the same `bind`
+        the other two paths use -- so extraction is a packaging change and
+        not a rewrite.
+        """
+        try:
+            found = metadata.entry_points(group=PLUGIN_ENTRY_POINT)
+        except Exception:  # noqa: BLE001 - metadata is not always readable
+            return
+        for entry in found:
+            try:
+                module = entry.load()
+            except Exception as exc:  # noqa: BLE001 - somebody else's code
+                log.exception("plugin entry point %s failed", entry.name)
+                print(f"could not load plugin {entry.name}: {exc}")
+                continue
+            if self.bind(module, entry.name):
+                print(f"loaded audian plugin {entry.name}")
+
+    def load_local(self) -> None:
+        """Anything named ``audian*.py`` in the working directory.
+
+        Kept for what it is good at: trying something out on one recording
+        without installing anything.  It is not how a plugin is shipped --
+        see `load_bundled` for why that was the whole problem.
+        """
         cwd = Path.cwd()
         sys.path.append(os.fspath(cwd))
-        for module in cwd.glob("audian*.py"):
-            x = importlib.import_module(module.stem)
-            called = False
-            for k in dir(x):
-                if k.startswith("audian_") and callable(getattr(x, k)):
-                    if k.endswith("traces"):
-                        self.add_trace_factory(getattr(x, k))
-                        called = True
-                    elif k.endswith("analyzer"):
-                        self.add_analyzer_factory(getattr(x, k))
-                        called = True
-                    elif k.endswith("panel"):
-                        self.add_panel_factory(getattr(x, k))
-                        called = True
-            if called:
-                self.add_plugin(k, x)
-                print(f"loaded audian plugins from {module.stem}")
-        sys.path.pop()
+        try:
+            for path in sorted(cwd.glob("audian*.py")):
+                try:
+                    module = importlib.import_module(path.stem)
+                except Exception as exc:  # noqa: BLE001 - somebody else's code
+                    log.exception("local plugin %s failed to import", path.stem)
+                    print(f"could not load {path.name}: {exc}")
+                    continue
+                if self.bind(module, path.stem):
+                    print(f"loaded audian plugins from {path.stem}")
+        finally:
+            sys.path.pop()
+
+    def load_plugins(self):
+        """Every plugin this installation can see.
+
+        Bundled first, then installed, then the working directory, which is
+        also the order of least to most surprising: a reader who dropped a
+        file beside their recording is the one most likely to be overriding
+        something on purpose.
+        """
+        self.load_bundled()
+        self.load_installed()
+        self.load_local()
 
     def setup_traces(self, browser):
         for f in self.trace_factories:

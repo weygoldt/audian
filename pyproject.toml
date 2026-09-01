@@ -57,6 +57,24 @@ audian-compress = "audian.compresseddata:run"
 [project.gui-scripts]
 audian = "audian.audian:run"
 
+[tool.setuptools.packages.find]
+# Explicit because there are two top-level packages under src/ now: `audian`
+# and the plugins that ship with it.  Auto-discovery would probably find
+# both, and "probably" is how a release goes out with the Plugins menu empty
+# -- which is indistinguishable, from the outside, from a broken feature.
+where = ["src"]
+
+# Plugins that live in their own distribution announce themselves in the
+# `audian.plugins` entry point group, naming a module whose `audian_*`
+# callables audian binds:
+#
+#     [project.entry-points."audian.plugins"]
+#     eventdetection = "audian_plugins.eventdetection"
+#
+# Nothing is declared here, because everything under `src/audian_plugins`
+# is found by walking that package -- the entry point is what a plugin
+# gains when it leaves this tree, not something it needs while inside it.
+
 [tool.setuptools.dynamic]
 version = {attr = "audian.version.__version__"}
 

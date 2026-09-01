@@ -37,13 +37,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
-sys.path.insert(0, str(REPO / "examples"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_panelsplitter import app, build_window, pump  # noqa: E402,F401
 
-import audian_detector  # noqa: E402
-from audian import detection  # noqa: E402
+from audian_plugins import eventdetection  # noqa: E402
+from audian_plugins.eventdetection import engine as detection  # noqa: E402
+from audian_plugins.eventdetection import panel as detector_panel  # noqa: E402
 from audian.labels import KIND_POINT, KIND_SPAN, Label  # noqa: E402
 
 RATE = 8000
@@ -111,7 +111,7 @@ def panel(app, tmp_path_factory):
                                  onset + PULSE_S, 600.0, 2000.0))
     browser.labels.forget_undo()
 
-    title, widget = audian_detector.audian_detector_panel(browser)
+    title, widget = eventdetection.audian_event_detection_panel(browser)
     assert title == "Detector"
     widget.refresh_categories()
     widget.show()
@@ -157,22 +157,78 @@ def test_the_factory_is_found_by_the_name_the_convention_gives_it():
     renaming the function is what breaks the plugin -- not an import, not a
     registration call that would fail loudly.
     """
-    names = [k for k in dir(audian_detector)
-             if k.startswith("audian_") and callable(getattr(audian_detector, k))]
-    assert "audian_detector_panel" in names
-    assert [n for n in names if n.endswith("panel")] == ["audian_detector_panel"]
+    names = [k for k in dir(eventdetection)
+             if k.startswith("audian_") and callable(getattr(eventdetection, k))]
+    assert "audian_event_detection_panel" in names
+    assert [n for n in names if n.endswith("panel")] == ["audian_event_detection_panel"]
 
 
 def test_a_plugin_file_in_the_working_directory_is_discovered(tmp_path, monkeypatch):
-    """The discovery rule itself, exercised rather than assumed."""
+    """The oldest of the three rules, kept for trying something out."""
     from audian.plugins import Plugins
 
     (tmp_path / "audian_probe.py").write_text(
         "def audian_probe_panel(browser):\n    return 'Probe', None\n")
     monkeypatch.chdir(tmp_path)
     plugins = Plugins()
-    plugins.load_plugins()
+    plugins.load_local()
     assert [f.__name__ for f in plugins.panel_factories] == ["audian_probe_panel"]
+
+
+def test_a_bundled_plugin_is_found_from_any_directory(tmp_path, monkeypatch):
+    """The fix for the complaint that a merged plugin did not appear.
+
+    Discovery used to be the working directory alone, so installing a
+    plugin meant copying a file into every directory a reader launched
+    from -- and one that was present but not copied looked exactly like a
+    feature that had not been merged, because the Plugins menu is absent
+    when nothing registers.
+    """
+    from audian.plugins import Plugins
+
+    monkeypatch.chdir(tmp_path)          # nothing here at all
+    plugins = Plugins()
+    plugins.load_plugins()
+    assert "audian_event_detection_panel" in [
+        f.__name__ for f in plugins.panel_factories]
+
+
+def test_the_same_plugin_found_twice_is_registered_once(tmp_path, monkeypatch):
+    """The three paths overlap on purpose, and must not double the menu.
+
+    A plugin part-way out of this tree is installed *and* still bundled;
+    a reader testing one keeps a copy beside their recording.  Two entries
+    opening two identical tabs is the failure that would cause.
+    """
+    from audian.plugins import Plugins
+
+    monkeypatch.chdir(tmp_path)
+    plugins = Plugins()
+    plugins.load_plugins()
+    once = len(plugins.panel_factories)
+    plugins.load_plugins()
+    assert len(plugins.panel_factories) == once
+
+
+def test_an_extracted_plugin_would_be_found_by_its_entry_point():
+    """What extraction costs: a pyproject stanza, and no code change.
+
+    The group is scanned with the same `bind` the bundled walk uses, so a
+    package that leaves this tree keeps working by declaring::
+
+        [project.entry-points."audian.plugins"]
+        eventdetection = "audian_plugins.eventdetection"
+    """
+    from audian.plugins import PLUGIN_ENTRY_POINT, Plugins
+
+    assert PLUGIN_ENTRY_POINT == "audian.plugins"
+    plugins = Plugins()
+    # binding the package directly is what `load_installed` does once the
+    # entry point resolves, so this pins the contract without needing a
+    # second distribution installed to prove it
+    assert plugins.bind(eventdetection, "eventdetection")
+    assert [f.__name__ for f in plugins.panel_factories] == [
+        "audian_event_detection_panel"]
 
 
 def test_the_detector_reopens_every_file_in_a_split_recording(panel):
@@ -204,7 +260,7 @@ def test_every_span_in_later_exp3_wavs_is_learned():
     assert len(examples) >= 5
     assert any(example.t0 > 931.968 for example in examples)
 
-    recording = audian_detector.Recording(EXP3_FILES)
+    recording = detector_panel.Recording(EXP3_FILES)
     try:
         templates = detection.learn_from_reader(
             lambda t0, t1: recording.samples(t0, t1, 0),
@@ -312,7 +368,7 @@ def test_the_level_slider_and_box_share_an_off_position(panel):
     assert panel.levelw.value() == -42
     assert panel.settings().power_floor_db == pytest.approx(-42.0)
 
-    panel.levelw.setValue(audian_detector.LEVEL_FLOOR_DB)
+    panel.levelw.setValue(detector_panel.LEVEL_FLOOR_DB)
     pump(0.05)
     assert panel.settings().power_floor_db is None
 
@@ -375,7 +431,7 @@ def test_threshold_fitting_uses_all_labels_not_only_the_visible_window(
     from audian.tasks.tokens import CancelToken
 
     progress = []
-    result = audian_detector._fit(
+    result = detector_panel._fit(
         panel._paths(), panel.templates, panel.examples(), panel.settings(),
         panel._channel(), CancelToken(), progress.append,
     )
@@ -440,7 +496,7 @@ def test_moving_the_sensitivity_does_not_rescore(panel):
 def test_turning_on_the_level_gate_scores_levels_once(panel):
     """An off curve has no level array; a live gate must not silently do nothing."""
     _select(panel)
-    panel.levelw.setValue(audian_detector.LEVEL_FLOOR_DB)
+    panel.levelw.setValue(detector_panel.LEVEL_FLOOR_DB)
     panel._scored_for = None
     panel._level = None
     panel.browser.set_times(0.0, 4.0)
@@ -456,7 +512,7 @@ def test_turning_on_the_level_gate_scores_levels_once(panel):
     panel.levelw.setValue(-30)
     panel.preview()
     assert panel._level is level, "moving a live gate rescored the recording"
-    panel.levelw.setValue(audian_detector.LEVEL_FLOOR_DB)
+    panel.levelw.setValue(detector_panel.LEVEL_FLOOR_DB)
 
 
 def test_moving_an_example_invalidates_the_template_cache(panel):
@@ -665,7 +721,7 @@ def window(app, tmp_path_factory):
     original_path = audian_app.settings_path
     home = Path(QSettings("audian", "audian").fileName()).parent.parent
     Plugins.load_plugins = lambda self: self.add_panel_factory(
-        audian_detector.audian_detector_panel)
+        eventdetection.audian_event_detection_panel)
     try:
         directory = tmp_path_factory.mktemp("detector-menu")
         signal, _ = pulse_train()
@@ -685,7 +741,7 @@ def window(app, tmp_path_factory):
 
 
 def _detector_action(win):
-    return dict(win.plugin_acts)["Detector"]
+    return dict(win.plugin_acts)["Event detection"]
 
 
 def test_an_installed_plugin_gets_a_menu_entry_and_not_a_tab(window):
@@ -694,11 +750,11 @@ def test_an_installed_plugin_gets_a_menu_entry_and_not_a_tab(window):
     Every registered factory took a tab at startup, so a reader who wanted
     the recording rather than the plugin had nowhere to put it.
     """
-    assert [label for label, _act in window.plugin_acts] == ["Detector"]
+    assert [label for label, _act in window.plugin_acts] == ["Event detection"]
     assert "&Plugins" in [m.title() for m in window.menus]
     browser = window.browser()
-    assert browser.plugin_labels() == ["Detector"]
-    assert not browser.plugin_panel_open("Detector")
+    assert browser.plugin_labels() == ["Event detection"]
+    assert not browser.plugin_panel_open("Event detection")
     assert browser.parambar.plugins is None, "a tab appeared unbidden"
     assert not _detector_action(window).isChecked()
 
@@ -710,15 +766,15 @@ def test_the_menu_entry_opens_and_closes_the_panel(window):
 
     act.setChecked(True)
     pump(0.5)
-    assert browser.plugin_panel_open("Detector")
+    assert browser.plugin_panel_open("Event detection")
     region = browser.parambar.plugins
     assert region is not None
     assert [region.tabText(i) for i in range(region.count())] == ["Detector"]
-    assert isinstance(region.widget(0), audian_detector.DetectorPanel)
+    assert isinstance(region.widget(0), detector_panel.DetectorPanel)
 
     act.setChecked(False)
     pump(0.5)
-    assert not browser.plugin_panel_open("Detector")
+    assert not browser.plugin_panel_open("Event detection")
     assert browser.parambar.plugins is None, "the empty region was left behind"
 
 
@@ -732,11 +788,11 @@ def test_closing_the_tab_turns_the_plugin_off_and_the_menu_agrees(window):
     act = _detector_action(window)
     act.setChecked(True)
     pump(0.5)
-    assert act.isChecked() and browser.plugin_panel_open("Detector")
+    assert act.isChecked() and browser.plugin_panel_open("Event detection")
 
     browser.plugin_tab_closed(0)
     pump(0.5)
-    assert not browser.plugin_panel_open("Detector")
+    assert not browser.plugin_panel_open("Event detection")
     assert not act.isChecked(), "the tab closed but the menu still claims it is open"
     assert browser.parambar.plugins is None
 
@@ -744,18 +800,18 @@ def test_closing_the_tab_turns_the_plugin_off_and_the_menu_agrees(window):
 def test_a_panel_opened_twice_is_still_one_panel(window):
     """Asking for what is already there raises it rather than doubling it."""
     browser = window.browser()
-    assert browser.open_plugin_panel("Detector")
-    assert browser.open_plugin_panel("Detector")
+    assert browser.open_plugin_panel("Event detection")
+    assert browser.open_plugin_panel("Event detection")
     region = browser.parambar.plugins
     assert region.count() == 1
-    browser.close_plugin_panel("Detector")
+    browser.close_plugin_panel("Event detection")
     pump(0.3)
 
 
 def test_closing_a_panel_nobody_opened_is_not_an_error(window):
     """The menu can be unticked from a state where nothing is open."""
     browser = window.browser()
-    browser.close_plugin_panel("Detector")
+    browser.close_plugin_panel("Event detection")
     browser.close_plugin_panel("no such plugin")
     assert not browser.open_plugin_panel("no such plugin")
 
@@ -770,7 +826,7 @@ def test_the_entry_is_filed_under_a_heading_and_named_for_the_method(window):
     """
     from audian.plugins import panel_menu_path
 
-    path = panel_menu_path(audian_detector.audian_detector_panel)
+    path = panel_menu_path(eventdetection.audian_event_detection_panel)
     assert path == ("Event detection", "Normalised cross-correlation")
 
     plugin_menu = [m for m in window.menus if m.title() == "&Plugins"][0]
@@ -814,7 +870,7 @@ def test_the_tab_carries_audians_own_close_mark(window):
     # and pressing it turns the plugin off, menu tick and all
     button.click()
     pump(0.5)
-    assert not browser.plugin_panel_open("Detector")
+    assert not browser.plugin_panel_open("Event detection")
     assert not act.isChecked()
     assert browser.parambar.plugins is None
 
@@ -887,7 +943,7 @@ def session(app, tmp_path_factory):
             QSettings.setPath(fmt, scope, os.fspath(directory))
     theme.apply(app)
     plugins = Plugins()
-    plugins.add_panel_factory(audian_detector.audian_detector_panel)
+    plugins.add_panel_factory(eventdetection.audian_event_detection_panel)
     win = audian_app.Audian(paths, {}, plugins, [], 0, None, False, 0, None)
     win.resize(1200, 900)
     win.show()
@@ -905,12 +961,12 @@ def session(app, tmp_path_factory):
                                  onset + PULSE_S, 600.0, 2000.0))
     browser.labels.forget_undo()
 
-    browser.open_plugin_panel("Detector")
+    browser.open_plugin_panel("Event detection")
     pump(1.0)
-    panel = browser.plugin_panels["Detector"]
+    panel = browser.plugin_panels["Event detection"]
     yield panel, browser, onsets
 
-    browser.close_plugin_panel("Detector")
+    browser.close_plugin_panel("Event detection")
     win.close()
     win.setParent(None)
     win.deleteLater()

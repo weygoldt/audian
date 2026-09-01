@@ -207,11 +207,39 @@ Basic plot items:
 - `plugins.py`: Discover and manage plugins. Panel plugins appear as checkable
   entries in the Plugins menu and can be disabled either there or by closing
   their side-panel tab.
+- `pluginapi.py`: What a plugin may import from audian. A plugin that stays
+  inside this surface can be moved to a repository of its own without
+  breaking; one that reaches into `databrowser` or `labels` directly is
+  holding internals that move.
 - `analyzer.py`: Base class for analyzer plugins.
 - `statisticsanalyzer.py`: Compute basic descriptive statistics.
-- `examples/audian_detector.py`: Few-shot normalized cross-correlation event
-  detector for trace and spectrogram templates. Copy it into the recording's
-  directory, start audian there, and enable **Plugins > Detector**.
+
+Plugins are found in three places, and all three bind the same way — a
+module exposing callables named `audian_*panel`, `*analyzer` or `*traces`:
+
+1. **Bundled**, by walking `src/audian_plugins/`. These ship with audian and
+   need no installing.
+2. **Installed**, through the `audian.plugins` entry point group. This is how
+   a plugin that lives in its own repository announces itself.
+3. **Local**, any `audian*.py` in the working directory — for trying
+   something out on one recording without installing it.
+
+#### Bundled plugins
+
+- `audian_plugins/eventdetection/`: Few-shot normalized cross-correlation
+  event detector for trace and spectrogram templates. `engine.py` is the
+  arithmetic and imports no Qt; `panel.py` is the interface. Enable it at
+  **Plugins > Event detection > Normalised cross-correlation**.
+
+Taking a bundled plugin out into its own repository is meant to be
+mechanical: move the package directory, give it a `pyproject.toml` declaring
+
+``` toml
+[project.entry-points."audian.plugins"]
+eventdetection = "audian_plugins.eventdetection"
+```
+
+and delete it from here. No code changes, in either repository.
 
 
 ## Run audian from Spyder IPython console:

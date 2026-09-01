@@ -1,28 +1,24 @@
 """The few-shot detector, as a plugin.
 
-Copy this file next to a recording and start audian from that directory --
-`Plugins.load_plugins` globs ``audian*.py`` in the working directory and
-binds every callable named ``audian_*panel``.  **Plugins > Detector** then
-turns the detector on and opens its tab in the lower half of the side panel;
-unticking it, or closing the tab, turns it off and releases its reader and
-worker.
+**Plugins > Event detection > Normalised cross-correlation** turns the
+detector on and opens its tab in the lower half of the side panel; unticking
+it, or closing the tab, turns it off and releases its reader and worker.
+Nothing has to be installed or copied: `Plugins.load_bundled` walks
+`audian_plugins`, which is what this package is for.
 
-It lives in ``examples/`` and not in the repository root, and that is not
-tidiness.  Discovery is by working directory, and the suite runs from the
-root: a copy left there is loaded into *every* browser any test builds,
-which is how it was found -- three of `tests/test_parameterbar`'s claims
-broke at once, including the one that a browser with no plugins grows no
-plugin region, and a test that opened ``data/Gryllus_campestris.wav`` wrote
-a category of detections into the recording's tracked sidecar.  The root of
-a checkout is a development directory; a reader's data directory is where a
-plugin belongs, and copying it there is the same gesture as installing it.
+It was a loose file in a working directory before that, which is the oldest
+of the three discovery rules and the wrong one to ship on.  Installing a
+plugin meant copying it into every directory a reader ever launched from,
+and one that was present but not copied looked exactly like a feature that
+had not been merged -- the Plugins menu is absent when nothing registers, so
+there was nothing on screen to disagree with.
 
-The arithmetic is not here.  `audian.detection` holds it, imports no Qt and
-is tested without a window; this file is the half that has a reader in it.
-The split is the point of the exercise: a plugin should be able to add a
-real feature through `Plugins.add_panel_factory` without the core growing a
-special case for it, and the only thing this file needed that audian did
-not already offer was nothing.
+The arithmetic is next door in `engine`, which imports no Qt and is tested
+without a window; this file is the half that has a reader in it.  Both halves
+are in one package so that the detector can be lifted into a repository of
+its own without leaving its brain behind, and everything it needs from audian
+comes through `audian.pluginapi` -- the surface that will not move under it
+once it lives somewhere else.
 
 What the reader does
 --------------------
@@ -101,9 +97,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from audian import detection, theme
-from audian.databrowser import ParameterGroup, narrow_combo
-from audian.labels import KIND_SPAN, Label
+from audian.pluginapi import (
+    KIND_SPAN,
+    Cancelled,
+    CancelToken,
+    Label,
+    ParameterGroup,
+    narrow_combo,
+    open_files,
+    theme,
+)
+
+from . import engine as detection
 
 #: Appended to the source category to name where detections land.  A
 #: separate category and never the source itself: a detector that wrote
@@ -165,8 +170,6 @@ class Recording:
         # applies a timestamp-continuity heuristic which is known to drop the
         # final short file of TASCAM sessions; a detector must scan exactly
         # the timeline the GUI displayed.
-        from audian.data import open_files
-
         if isinstance(paths, (list, tuple, np.ndarray)):
             self.paths = [os.fspath(path) for path in paths]
         else:
@@ -342,8 +345,6 @@ class SweepWorker(QObject):
         self.token = token
 
     def run(self) -> None:
-        from audian.tasks.tokens import Cancelled
-
         try:
             found = _sweep(self.paths, self.templates, self.settings,
                            self.channel, self.token, self.sigProgress.emit)
@@ -372,8 +373,6 @@ class FitWorker(QObject):
         self.token = token
 
     def run(self) -> None:
-        from audian.tasks.tokens import Cancelled
-
         try:
             result = _fit(
                 self.paths, self.templates, self.examples, self.settings,
@@ -1231,8 +1230,6 @@ class DetectorPanel(QWidget):
             self._say("no examples to learn from")
             return
 
-        from audian.tasks.tokens import CancelToken
-
         self._fitting_for = source
         self._token = CancelToken()
         self._worker = FitWorker(
@@ -1313,8 +1310,6 @@ class DetectorPanel(QWidget):
         if self.templates is None or not self.templates.ok:
             self._say("no examples to learn from")
             return
-
-        from audian.tasks.tokens import CancelToken
 
         self._token = CancelToken()
         self._worker = SweepWorker(recording.paths, self.templates,
@@ -1427,21 +1422,3 @@ class DetectorPanel(QWidget):
             self._say(f"could not write the CSV: {exc}")
             return None
         return path
-
-
-def audian_detector_panel(browser):
-    """Register the Detector tab.
-
-    The name is the whole interface: `Plugins.load_plugins` binds any
-    callable in this module named ``audian_*`` that ends in ``panel``.
-    """
-    return "Detector", DetectorPanel(browser)
-
-
-#: Where the entry sits: **Plugins > Event detection > Normalised
-#: cross-correlation**.  Under a heading rather than at the top level
-#: because "Detector" says nothing about which of several a reader is
-#: turning on, and the next one to be written will be a detector too --
-#: the heading is what makes the second one cheap to add.
-audian_detector_panel.menu_path = ("Event detection",
-                                   "Normalised cross-correlation")

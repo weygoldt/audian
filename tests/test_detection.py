@@ -4,7 +4,7 @@ Runs without a window::
 
     .venv-qt6/bin/python -m pytest tests/test_detection.py -q
 
-`audian.detection` imports no Qt, so nothing here builds one -- the same
+`audian_plugins.eventdetection.engine` imports no Qt, so nothing here builds one -- the same
 split `tests/test_smoothing.py` states its reasons for.  Every claim below
 is about an array.
 
@@ -38,7 +38,7 @@ from scipy.io import wavfile
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from audian import detection  # noqa: E402
+from audian_plugins.eventdetection import engine as detection  # noqa: E402
 
 RECORDING = REPO / "data" / "Gryllus_campestris.wav"
 LABELS = Path(__file__).resolve().parent / "data" / "gryllus-fewshot-labels.csv"
