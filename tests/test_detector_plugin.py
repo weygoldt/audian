@@ -1037,3 +1037,63 @@ def test_a_run_crosses_every_file_boundary(session):
             f"file {index}: {len(here)} found against {len(wanted)} present")
     assert found[-1] > (SESSION_FILES - 1) * SESSION_FILE_S, (
         "nothing was found in the last file of the session")
+
+
+def test_a_finished_run_survives_seeking_through_the_recording(panel):
+    """The preview and the run share a category and mean different things.
+
+    "Candidates in this window" and "results for the whole recording" are
+    drawn by the same code into the same rows, and `_draw` replaces that
+    category outright -- it has to, or a preview could never withdraw a mark
+    it no longer stands by.  Leaving the preview live after a run therefore
+    let the next pan replace a whole recording's results with one window's:
+    measured, 87 detections spanning 10.0-17.6 s became 21, and only in
+    view.  That is the marks vanishing as a reader seeks.
+    """
+    browser = panel.browser
+    _select(panel)
+    browser.set_times(0.0, 3.0)
+    pump(0.4)
+    panel._calibrate()
+    for _ in range(400):
+        pump(0.05)
+        if panel._thread is None:
+            break
+    panel._run_clicked()
+    for _ in range(600):
+        pump(0.05)
+        if panel._thread is None:
+            break
+    assert panel._thread is None, "the sweep never finished"
+
+    name = panel._category_name()
+    after_run = browser.labels.count_in(name)
+    assert after_run > 0, panel.statusw.text()
+    assert not panel._drawing, "the preview is still live after a run"
+
+    # seeking, and the preview that a pan would schedule
+    for start in (2.0, 4.0, 6.0):
+        browser.set_times(start, 2.0)
+        pump(0.3)
+        panel.preview()
+        pump(0.2)
+        assert browser.labels.count_in(name) == after_run, (
+            f"seeking to {start} s cost "
+            f"{after_run - browser.labels.count_in(name)} detections")
+
+    panel._committed = False
+    panel._drawing = True
+
+
+def test_touching_a_control_after_a_run_says_that_it_replaces_it(panel):
+    """Going back to previewing costs the run, and must not do so quietly.
+
+    A count dropping from a whole recording's worth to one window's is
+    alarming when it is unexplained and ordinary when it is not.
+    """
+    panel._committed = True
+    panel._drawing = False
+    panel._resume()
+    assert panel._drawing
+    assert not panel._committed
+    assert "Run" in panel.statusw.text(), panel.statusw.text()

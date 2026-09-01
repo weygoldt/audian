@@ -53,6 +53,18 @@ against 200-940 ms to rescore a window.  Changing what is *matched* -- the
 category, the domain, the representation, the combiner -- is what throws
 the cache away.
 
+**A finished Run ends the preview.**  Both write the same category and mean
+different things: the preview says "candidates in this window", the run says
+"results for the whole recording".  Since `_draw` replaces that category
+outright -- it must, or a preview could never withdraw a mark it no longer
+stands by -- leaving the preview live after a run let the next pan replace a
+whole recording's results with one window's: 87 detections spanning
+10.0-17.6 s became 21, and only in view, which is what a reader sees as the
+marks vanishing as they seek.  Seeking after a run now changes nothing.
+Touching a control starts previewing again and says that it has, because a
+count falling from a recording's worth to a window's is alarming unexplained
+and ordinary explained.
+
 Reading the recording, not the buffer
 -------------------------------------
 
@@ -1063,8 +1075,22 @@ class DetectorPanel(QWidget):
             self._debounce.start()
 
     def _resume(self, *args) -> None:
-        """A control moved: draw again, even if Clear had stopped it."""
+        """A control moved: draw again, even if Clear or a run had stopped it.
+
+        Coming back from a finished run costs that run's results, because
+        the preview owns the same category and can only replace it -- and
+        the settings just changed, so those results describe the recording
+        under a rule the reader has stopped using.  Said out loud rather
+        than done quietly: a count dropping from a whole recording's worth
+        to one window's is alarming when it is unexplained, and ordinary
+        when it is not.
+        """
+        was_committed = self._committed
+        self._committed = False
         self._drawing = True
+        if was_committed:
+            self._say("settings changed -- previewing this window again; "
+                      "Run to redo the whole recording")
         self._schedule()
 
     def _learn(self):
@@ -1209,6 +1235,9 @@ class DetectorPanel(QWidget):
         if self._thread is not None:
             if self._job == "fit":
                 self._stop_job()
+            else:
+                self._say("still scanning the recording -- "
+                          "wait for it, or press Stop")
             return
         # pressing a button is asking for an answer, so it also undoes Clear
         self._drawing = True
@@ -1295,9 +1324,18 @@ class DetectorPanel(QWidget):
     # -- the whole recording ---------------------------------------------
 
     def _run_clicked(self) -> None:
+        """Scan the whole recording, or stop the scan in progress.
+
+        One worker at a time, so pressing this while a fit is still running
+        does nothing -- and used to do nothing *silently*, which is a button
+        that looks broken.  It says which job is holding the thread instead.
+        """
         if self._thread is not None:
             if self._job == "run":
                 self._stop_job()
+            else:
+                self._say("still fitting to the examples -- "
+                          "wait for it, or press Stop fitting")
             return
         self._drawing = True
         recording = self._open()
@@ -1375,16 +1413,34 @@ class DetectorPanel(QWidget):
             notify("error", f"detector: {message}")
 
     def _run_finished(self, found) -> None:
+        """Keep what the run found, and stop the preview overwriting it.
+
+        The two draw into the same category and mean different things: the
+        preview says "candidates in this window", the run says "results for
+        the whole recording".  `_draw` replaces the category outright -- it
+        has to, or a preview could never remove a mark it no longer stands
+        by -- so leaving the preview live after a run meant the next pan
+        replaced a whole recording's results with one window's.  Measured on
+        the reference cricket: 87 detections spanning 10.0-17.6 s became 21,
+        and only in view.  That is what a reader sees as the marks vanishing
+        as they seek.
+
+        So a finished run is the end of previewing.  Touching any control
+        starts it again, deliberately, and `_resume` says what that costs.
+        """
         self._teardown()
         if found is None:
             self._say("stopped")
             return
         self._committed = True
+        self._drawing = False
+        self._debounce.stop()
         self._draw(found)
         path = self._write_csv(found)
         self.refresh_categories()
         where = f" · {path.name}" if path is not None else ""
-        self._say(f"{len(found)} found in the recording{where}")
+        self._say(f"{len(found)} found in the recording{where} · "
+                  f"seek freely; move a control to preview again")
         save = getattr(self.browser, "schedule_label_save", None)
         if save is not None:
             save()
