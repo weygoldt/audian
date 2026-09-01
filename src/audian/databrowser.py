@@ -1981,6 +1981,15 @@ class DataBrowser(QWidget):
         self.resolution_timer.timeout.connect(self.apply_resolution)
         self.pending_nfft = None
         self.pending_overlap = None
+        self.denoise_timer = QTimer(self)
+        self.denoise_timer.setSingleShot(True)
+        self.denoise_timer.timeout.connect(self.apply_denoise_values)
+        #: {denoiser key: {parameter key: value}} a burst of slider moves
+        #: has stashed, applied once the burst stops.
+        self._pending_denoise = {}
+        #: {denoiser key: (checkbox, {parameter key: [widgets...]})}, filled
+        #: by `setup_parameter_bar` so a disabled denoiser's rows can hide.
+        self.denoise_widgets = {}
         self.overview_timer = QTimer(self)
         self.overview_timer.timeout.connect(self.report_overview_progress)
         #: the application's `TaskManager`, adopted in `open()`.  None means
@@ -3530,6 +3539,8 @@ class DataBrowser(QWidget):
                 group.add_row("Filter", "", self.cutoffsw)
             else:
                 self.cutoffsw = None
+
+            self.setup_denoise_rows(group)
             groups.append(group)
         else:
             self.nfftw = None
@@ -4786,6 +4797,7 @@ class DataBrowser(QWidget):
             "filter_timer",
             "envelope_timer",
             "resolution_timer",
+            "denoise_timer",
             "overview_timer",
         ):
             timer = getattr(self, name, None)
@@ -9017,16 +9029,176 @@ class DataBrowser(QWidget):
             hop_frac = 1 - self.current_overlap()
             self.update_resolution(overlap_frac=1 - hop_frac * 2)
 
-    def current_denoiser(self) -> str:
-        """Key of the denoiser the spectrogram is running, or "none"."""
-        if not self.spectrogram or self.spectrogram not in self.data:
-            return denoise.NONE_KEY
-        return self.data[self.spectrogram].denoiser_key
+    #: Positions a denoising slider has between a parameter's bounds.  The
+    #: box beside it is the precise writer -- same division of labour as
+    #: the Overlap row, where the slider is whole percent and the box is
+    #: not -- so this only has to be fine enough to drag with.
+    DENOISE_SLIDER_STEPS = 1000
 
-    def current_denoise_threshold(self) -> float:
+    def setup_denoise_rows(self, group) -> None:
+        """One switch per denoiser, and its parameters under it.
+
+        Built from `denoise.DENOISERS` rather than written out, so a new
+        denoiser arrives with its controls already drawn.  Every row is
+        created whether or not its denoiser is on; `sync_denoise_rows`
+        hides the parameters of the ones that are off, which is why
+        `add_row` hands back its caption along with its fields.
+
+        The rows live on the Spectrogram page and not a page of their own.
+        A denoised spectrogram is still the spectrogram -- the reader who
+        wants the hum gone is looking at the picture these rows are under
+        -- and a tab of its own would put a click between the switch and
+        the thing it changes.
+        """
+        self.denoise_widgets = {}
+        for entry in denoise.DENOISERS:
+            switch = QToolButton(self.parambar)
+            switch.setText(entry.name.replace("&", ""))
+            switch.setCheckable(True)
+            switch.setChecked(False)
+            switch.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+            switch.setToolTip(entry.tip)
+            switch.toggled.connect(
+                lambda on, key=entry.key: self.set_denoiser_enabled(key, on)
+            )
+            rows = {"switch": group.add_row("Denoise", "", switch)}
+
+            params = {}
+            for param in entry.params:
+                box = pg.SpinBox(
+                    self,
+                    param.default,
+                    bounds=(param.minimum, param.maximum),
+                    suffix=param.suffix,
+                    step=param.step,
+                    int=param.integer,
+                    decimals=param.decimals,
+                )
+                self.style_parameter_spinbox(box)
+                box.tooltip = f"{entry.name.replace('&', '')}: {param.label}"
+                box.setToolTip(box.tooltip)
+                box.sigValueChanged.connect(
+                    lambda sb, k=entry.key, p=param.key: self.set_denoise_value(
+                        k, p, sb.value()
+                    )
+                )
+                if param.integer:
+                    # A slider over a handful of integers is worse than the
+                    # box: it cannot land on a value the box types in one
+                    # keystroke, and it takes the width of a real one.
+                    widgets = group.add_row(param.label, "", box)
+                    slider = None
+                else:
+                    slider = QSlider(Qt.Orientation.Horizontal, self.parambar)
+                    slider.setRange(0, self.DENOISE_SLIDER_STEPS)
+                    slider.setValue(self.denoise_slider_pos(param, param.default))
+                    slider.setToolTip(box.tooltip)
+                    slider.valueChanged.connect(
+                        lambda v, k=entry.key, p=param: self.set_denoise_value(
+                            k, p.key, self.denoise_slider_value(p, v)
+                        )
+                    )
+                    widgets = group.add_row(
+                        param.label,
+                        "",
+                        ParameterGroup.expanding(slider),
+                        box,
+                    )
+                params[param.key] = {
+                    "row": widgets,
+                    "box": box,
+                    "slider": slider,
+                }
+            self.denoise_widgets[entry.key] = {
+                "switch": switch,
+                "rows": rows,
+                "params": params,
+            }
+        self.sync_denoise_rows()
+
+    def denoise_slider_pos(self, param, value: float) -> int:
+        span = param.maximum - param.minimum
+        if span <= 0:
+            return 0
+        frac = (float(value) - param.minimum)/span
+        return int(round(self.DENOISE_SLIDER_STEPS*min(max(frac, 0.0), 1.0)))
+
+    def denoise_slider_value(self, param, pos: int) -> float:
+        span = param.maximum - param.minimum
+        return param.minimum + span*pos/self.DENOISE_SLIDER_STEPS
+
+    def sync_denoise_rows(self) -> None:
+        """Show each denoiser's parameters only while it is running.
+
+        Six rows of controls for two switched-off denoisers is most of the
+        page, and every one of them would be a control that changes
+        nothing the reader can see.
+        """
+        if not self.denoise_widgets:
+            return
+        on = set(self.denoisers_enabled())
+        for key, widgets in self.denoise_widgets.items():
+            switch = widgets["switch"]
+            usable = self.denoiser_usable(key)
+            switch.setEnabled(usable)
+            if not usable:
+                entry = denoise.denoiser(key)
+                switch.setToolTip(
+                    f"{entry.tip}\n\nNeeds at least {entry.min_channels} "
+                    f"channels; this recording has {self.data.channels}."
+                )
+            blocked = switch.blockSignals(True)
+            switch.setChecked(key in on)
+            switch.blockSignals(blocked)
+            for entry in widgets["params"].values():
+                for w in entry["row"]:
+                    w.setVisible(key in on)
+        self.sync_denoise_widgets()
+
+    def sync_denoise_widgets(self) -> None:
+        """Write the stored values back into the boxes and sliders.
+
+        Signals blocked throughout: `setValue` emits, and an emission here
+        would post the value straight back through `set_denoise_value` and
+        start a recompute for a number that has not changed.
+        """
+        for key, widgets in self.denoise_widgets.items():
+            entry = denoise.denoiser(key)
+            if entry is None:
+                continue
+            for pkey, holder in widgets["params"].items():
+                param = entry.parameter(pkey)
+                if param is None:
+                    continue
+                value = self.denoise_value(key, pkey)
+                box = holder["box"]
+                blocked = box.blockSignals(True)
+                box.setValue(value)
+                box.blockSignals(blocked)
+                slider = holder["slider"]
+                if slider is not None:
+                    blocked = slider.blockSignals(True)
+                    slider.setValue(self.denoise_slider_pos(param, value))
+                    slider.blockSignals(blocked)
+
+    def denoisers_enabled(self) -> tuple:
+        """Keys of the denoisers the spectrogram is running, in chain order."""
         if not self.spectrogram or self.spectrogram not in self.data:
-            return denoise.DEFAULT_THRESHOLD_DB
-        return self.data[self.spectrogram].denoise_threshold_db
+            return ()
+        return denoise.ordered(self.data[self.spectrogram].denoisers)
+
+    def denoiser_is_on(self, key: str) -> bool:
+        return key in self.denoisers_enabled()
+
+    def denoise_value(self, key: str, pkey: str) -> float:
+        """One denoiser's setting, falling back to the declared default."""
+        entry = denoise.denoiser(key)
+        param = entry.parameter(pkey) if entry is not None else None
+        fallback = param.default if param is not None else 0.0
+        if not self.spectrogram or self.spectrogram not in self.data:
+            return fallback
+        values = self.data[self.spectrogram].denoise_params.get(key, {})
+        return values.get(pkey, fallback)
 
     def denoiser_usable(self, key: str) -> bool:
         """Whether `key` has the channels it needs on this recording.
@@ -9036,61 +9208,91 @@ class DataBrowser(QWidget):
         to see that spatial coherence exists and why it is unavailable,
         not wonder where the menu item went.
         """
-        return self.data.channels >= denoise.denoiser(key).min_channels
+        entry = denoise.denoiser(key)
+        return entry is not None and self.data.channels >= entry.min_channels
 
-    def set_denoiser(self, key: str, dispatch: bool = True) -> None:
-        """Run `key` on the spectrogram, or nothing if it is "none".
+    def set_denoiser_enabled(self, key: str, on: bool) -> None:
+        """Add `key` to the chain, or take it out.
 
-        Not debounced, unlike `update_resolution`: choosing from a menu is
-        one event, not the burst of them a dragged slider emits, so the
-        coalescing timer would only add latency.
+        Not debounced, unlike `update_resolution`: ticking a box is one
+        event, not the burst a dragged slider emits, so the coalescing
+        timer would only add latency.
         """
         if self.setting:
             return
         if not self.spectrogram or self.spectrogram not in self.data:
             return
-        if not self.denoiser_usable(key):
+        entry = denoise.denoiser(key)
+        if entry is None:
+            return
+        if on and not self.denoiser_usable(key):
             self.notify(
                 "warning",
-                f"{denoise.denoiser(key).name.replace('&', '')} needs at "
-                f"least {denoise.denoiser(key).min_channels} channels; "
-                f"this recording has {self.data.channels}",
+                f"{entry.name.replace('&', '')} needs at least "
+                f"{entry.min_channels} channels; this recording has "
+                f"{self.data.channels}",
             )
+            return
+        wanted = set(self.denoisers_enabled())
+        wanted.add(key) if on else wanted.discard(key)
+        with self.updating():
+            self.request_recompute(
+                self.data[self.spectrogram], denoisers=tuple(wanted)
+            )
+        self.sync_denoise_rows()
+
+    def set_denoise_value(self, key: str, pkey: str, value: float) -> None:
+        """Set one denoiser's parameter, debounced like the resolution.
+
+        Debounced because a dragged slider emits one change per step and
+        each one re-runs the whole transform -- the same 447 ms at sixteen
+        channels that `update_resolution` coalesces.
+        """
+        if self.setting:
+            return
+        self._pending_denoise.setdefault(key, {})[pkey] = value
+        self.denoise_timer.start(200)
+
+    def apply_denoise_values(self) -> None:
+        """Push the stashed parameters once the burst has stopped."""
+        pending = self._pending_denoise
+        self._pending_denoise = {}
+        if not pending:
+            return
+        if not self.spectrogram or self.spectrogram not in self.data:
             return
         with self.updating():
             self.request_recompute(
-                self.data[self.spectrogram], denoiser_key=key
+                self.data[self.spectrogram], denoise_params=pending
             )
-        if dispatch:
-            self.notify(
-                "info",
-                f"spectrogram denoising: "
-                f"{denoise.denoiser(key).name.replace('&', '')}",
-            )
+        self.sync_denoise_widgets()
 
-    def step_denoise_threshold(self, delta_db: float) -> None:
-        """Move the gate by `delta_db` and say where it landed.
-
-        The threshold has no widget in the parameter bar, so the message
-        is the only feedback there is -- without it the reader is stepping
-        a number they cannot see.
-        """
+    def step_denoise_param(self, key: str, pkey: str, steps: float) -> None:
+        """Move one parameter by `steps` of its declared step, and say so."""
+        entry = denoise.denoiser(key)
+        param = entry.parameter(pkey) if entry is not None else None
+        if param is None:
+            return
         if not self.spectrogram or self.spectrogram not in self.data:
             return
         spectrogram = self.data[self.spectrogram]
-        value = spectrogram.denoise_threshold_db + delta_db
+        value = self.denoise_value(key, pkey) + steps*param.step
         with self.updating():
-            self.request_recompute(spectrogram, denoise_threshold_db=value)
+            self.request_recompute(
+                spectrogram, denoise_params={key: {pkey: value}}
+            )
+        self.sync_denoise_widgets()
         self.notify(
             "info",
-            f"denoising threshold {spectrogram.denoise_threshold_db:.0f} dB",
+            f"{entry.name.replace('&', '')} {param.label.lower()} "
+            f"{self.denoise_value(key, pkey):g}{param.suffix}",
         )
 
     def denoise_threshold_up(self):
-        self.step_denoise_threshold(denoise.THRESHOLD_STEP_DB)
+        self.step_denoise_param("spatial", "threshold", 1)
 
     def denoise_threshold_down(self):
-        self.step_denoise_threshold(-denoise.THRESHOLD_STEP_DB)
+        self.step_denoise_param("spatial", "threshold", -1)
 
     def set_color_map(
         self, color_map=None, dispatch: bool = True, save: bool = True

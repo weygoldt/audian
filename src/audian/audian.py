@@ -3996,39 +3996,40 @@ class Audian(QMainWindow):
         if browser is not None and hasattr(browser, "set_peaking"):
             browser.set_peaking(checked)
 
-    def choose_denoiser(self, key: str) -> None:
-        """A radio item in Spectrogram > Denoising was picked."""
+    def choose_denoiser(self, key: str, on: bool) -> None:
+        """A layer in Spectrogram > Denoising was switched on or off."""
         browser = self.browser()
-        if browser is not None and hasattr(browser, "set_denoiser"):
-            browser.set_denoiser(key)
+        if browser is not None and hasattr(browser, "set_denoiser_enabled"):
+            browser.set_denoiser_enabled(key, on)
             # The browser refuses a denoiser it has too few channels for,
             # and Qt has already moved the tick by the time we hear about
             # it -- so put the tick back where the data says it is.
             self.sync_denoise_actions(browser)
 
     def sync_denoise_actions(self, browser) -> None:
-        """Point the Denoising radio list at what `browser` is running.
+        """Point the Denoising list at what `browser` is running.
 
         Called from `adapt_menu`, because the choice belongs to a browser
-        and not to the window: switching tabs has to move the tick, and an
+        and not to the window: switching tabs has to move the ticks, and an
         entry that needs more channels than the newly shown recording has
         must go grey rather than silently fail when picked.
         """
         if not isinstance(browser, DataBrowser) or browser.data is None:
             return
-        active = browser.current_denoiser()
+        running = set(browser.denoisers_enabled())
         for entry in denoise.DENOISERS:
             act = self.acts.denoisers.get(entry.key)
             if act is None:
                 continue
-            usable = browser.denoiser_usable(entry.key)
-            act.setEnabled(usable)
+            act.setEnabled(browser.denoiser_usable(entry.key))
             blocked = act.blockSignals(True)
-            act.setChecked(entry.key == active)
+            act.setChecked(entry.key in running)
             act.blockSignals(blocked)
-        running = denoise.denoiser(active).apply is not None
-        self.acts.denoise_threshold_up.setEnabled(running)
-        self.acts.denoise_threshold_down.setEnabled(running)
+        # The keyboard steps move the spatial threshold, so they are only
+        # live while that layer is the one being looked at.
+        spatial = "spatial" in running
+        self.acts.denoise_threshold_up.setEnabled(spatial)
+        self.acts.denoise_threshold_down.setEnabled(spatial)
 
     def dispatch_peaking(self):
         """Every tab agrees about peaking; see `dispatch_smoothing`."""
@@ -4136,24 +4137,22 @@ class Audian(QMainWindow):
         )
         self.acts.toggle_peaking.toggled.connect(self.toggle_peaking)
 
-        # One checkable action per registry entry, in an exclusive group --
-        # a radio list, because denoisers are alternatives and not layers
-        # to be combined.  Built from `denoise.DENOISERS` rather than
-        # written out, so a new denoiser appears here by being registered.
-        self.denoise_group = QActionGroup(self)
-        self.denoise_group.setExclusive(True)
+        # One checkable action per registry entry, and NOT in an exclusive
+        # group: denoisers are layers that stack, each running on what the
+        # last returned, so more than one can be ticked.  Built from
+        # `denoise.DENOISERS` rather than written out, so a new denoiser
+        # appears here by being registered.
         self.acts.denoisers = {}
         for entry in denoise.DENOISERS:
             act = QAction(entry.name, self)
             act.setCheckable(True)
-            act.setChecked(entry.key == denoise.NONE_KEY)
+            act.setChecked(False)
             if entry.tip:
                 act.setToolTip(entry.tip)
                 act.setStatusTip(entry.tip)
-            act.triggered.connect(
-                lambda checked, key=entry.key: self.choose_denoiser(key)
+            act.toggled.connect(
+                lambda on, key=entry.key: self.choose_denoiser(key, on)
             )
-            self.denoise_group.addAction(act)
             self.acts.denoisers[entry.key] = act
             # Also in the attribute bag under a generated name, so
             # `tests/test_actioninventory` pins each entry's menu path and
@@ -4162,7 +4161,9 @@ class Audian(QMainWindow):
             # stays because it is what the sync code looks up by key.
             setattr(self.acts, f"denoiser_{entry.key}", act)
 
-        self.acts.denoise_threshold_up = QAction("Increase denoising", self)
+        self.acts.denoise_threshold_up = QAction(
+            "Increase spatial threshold", self
+        )
         self.acts.denoise_threshold_up.setShortcut("Shift+U")
         self.acts.denoise_threshold_up.setToolTip(
             "Raise the spread a bin must show across electrodes to be kept"
@@ -4171,7 +4172,9 @@ class Audian(QMainWindow):
             lambda x: self.browser().denoise_threshold_up()
         )
 
-        self.acts.denoise_threshold_down = QAction("Decrease denoising", self)
+        self.acts.denoise_threshold_down = QAction(
+            "Decrease spatial threshold", self
+        )
         self.acts.denoise_threshold_down.setShortcut("U")
         self.acts.denoise_threshold_down.setToolTip(
             "Lower the spread a bin must show across electrodes to be kept"

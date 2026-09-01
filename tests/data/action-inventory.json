@@ -172,7 +172,7 @@
       "U"
     ],
     "path": "Spectrogram \u203a Denoising",
-    "text": "Decrease denoising"
+    "text": "Decrease spatial threshold"
   },
   "denoise_threshold_up": {
     "checkable": false,
@@ -182,15 +182,15 @@
       "Shift+U"
     ],
     "path": "Spectrogram \u203a Denoising",
-    "text": "Increase denoising"
+    "text": "Increase spatial threshold"
   },
-  "denoiser_none": {
+  "denoiser_mains": {
     "checkable": true,
-    "checked": true,
+    "checked": false,
     "in_menus": true,
     "keys": [],
     "path": "Spectrogram \u203a Denoising",
-    "text": "None"
+    "text": "Mains hum"
   },
   "denoiser_spatial": {
     "checkable": true,

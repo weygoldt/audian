@@ -78,12 +78,13 @@ class BufferedSpectrogram(BufferedData):
         self.nfft = nfft
         self.hop = 0
         self.overlap_frac = overlap_frac
-        #: Which entry of `denoise.DENOISERS` runs on each chunk, and the
-        #: two numbers it takes.  Held as the key rather than the object so
-        #: that the value is something a settings file can carry.
-        self.denoiser_key = denoise.NONE_KEY
-        self.denoise_threshold_db = denoise.DEFAULT_THRESHOLD_DB
-        self.denoise_softness_db = denoise.DEFAULT_SOFTNESS_DB
+        #: Which entries of `denoise.DENOISERS` run on each chunk, and what
+        #: each of them is set to.  Keys and plain numbers rather than
+        #: objects, so both are things a settings file can carry.  Every
+        #: denoiser keeps its parameters whether or not it is enabled, so
+        #: that turning one off and on again does not reset it.
+        self.denoisers = ()
+        self.denoise_params = denoise.defaults()
         self.set_hop()
         self.frequencies = np.zeros(0)
         self.fresolution = 1
@@ -137,7 +138,8 @@ class BufferedSpectrogram(BufferedData):
         # Read once, not per chunk: a denoiser swapped mid-buffer would
         # leave the two halves treated differently, which is the same
         # hazard `DataBrowser.request_recompute` joins the worker to avoid.
-        apply_denoiser = denoise.denoiser(self.denoiser_key).apply
+        enabled = denoise.ordered(self.denoisers)
+        params = {k: dict(v) for k, v in self.denoise_params.items()}
         if nsource >= self.nfft:
             with np.errstate(under="ignore"):
                 while written < ndest:
@@ -159,11 +161,9 @@ class BufferedSpectrogram(BufferedData):
                     if n < 1:
                         break
                     block = Sxx.transpose((1, 2, 0))[:n]
-                    if apply_denoiser is not None:
-                        block = apply_denoiser(
-                            block,
-                            self.denoise_threshold_db,
-                            self.denoise_softness_db,
+                    if enabled:
+                        block = denoise.apply_chain(
+                            block, freq, enabled, params
                         )
                     dest[written : written + n] = block
                     written += n
@@ -202,30 +202,17 @@ class BufferedSpectrogram(BufferedData):
         else:
             return False
 
-    def update(
-        self,
-        nfft=None,
-        overlap_frac=None,
-        denoiser_key=None,
-        denoise_threshold_db=None,
-        denoise_softness_db=None,
-    ):
-        if self.prepare_update(
-            nfft,
-            overlap_frac,
-            denoiser_key,
-            denoise_threshold_db,
-            denoise_softness_db,
-        ):
+    def update(self, nfft=None, overlap_frac=None, denoisers=None,
+               denoise_params=None):
+        if self.prepare_update(nfft, overlap_frac, denoisers, denoise_params):
             self.recompute_all()
 
     def prepare_update(
         self,
         nfft=None,
         overlap_frac=None,
-        denoiser_key=None,
-        denoise_threshold_db=None,
-        denoise_softness_db=None,
+        denoisers=None,
+        denoise_params=None,
     ) -> bool:
         spec_update = False
         if nfft is not None:
@@ -254,37 +241,39 @@ class BufferedSpectrogram(BufferedData):
         # same hop -- so it must not go through `update_step()`, but the
         # contents are stale and have to be transformed again.  Hence a
         # second flag rather than folding it into `spec_update`.
-        denoiser_changed = False
-        params_changed = False
-        if denoiser_key is not None and denoiser_key != self.denoiser_key:
-            self.denoiser_key = denoise.denoiser(denoiser_key).key
-            denoiser_changed = True
-        if denoise_threshold_db is not None:
-            value = float(
-                np.clip(
-                    denoise_threshold_db,
-                    denoise.MIN_THRESHOLD_DB,
-                    denoise.MAX_THRESHOLD_DB,
-                )
-            )
-            if value != self.denoise_threshold_db:
-                self.denoise_threshold_db = value
-                params_changed = True
-        if denoise_softness_db is not None:
-            value = float(max(0.0, denoise_softness_db))
-            if value != self.denoise_softness_db:
-                self.denoise_softness_db = value
-                params_changed = True
+        chain_changed = False
+        if denoisers is not None:
+            wanted = denoise.ordered(denoisers)
+            if wanted != denoise.ordered(self.denoisers):
+                self.denoisers = wanted
+                chain_changed = True
 
-        # Switching denoisers always needs the buffer redone -- including
-        # switching *back* to None, which is the recompute that undoes the
-        # denoising.  Stepping a parameter only needs it when a denoiser is
-        # actually running: with None selected the number changes what a
-        # later switch will do, not the picture in front of the reader.
-        active = denoise.denoiser(self.denoiser_key).apply is not None
-        denoise_update = denoiser_changed or (params_changed and active)
+        # A parameter of a denoiser that is switched off changes what
+        # enabling it will do, not the picture in front of the reader -- so
+        # it is stored either way and only counts as a change when its own
+        # denoiser is running.  Clamped here rather than at the widget, so
+        # a value from a settings file is bounded too.
+        touched_running = False
+        if denoise_params:
+            running = set(denoise.ordered(self.denoisers))
+            for key, values in denoise_params.items():
+                entry = denoise.denoiser(key)
+                if entry is None:
+                    continue
+                current = self.denoise_params.setdefault(key, entry.defaults())
+                for pkey, value in values.items():
+                    param = entry.parameter(pkey)
+                    if param is None or value is None:
+                        continue
+                    clamped = param.clamp(value)
+                    if clamped != current.get(pkey):
+                        current[pkey] = clamped
+                        if key in running:
+                            touched_running = True
 
-        return spec_update or denoise_update
+        # Enabling or disabling always needs the buffer redone -- including
+        # disabling, which is the recompute that undoes the denoising.
+        return spec_update or chain_changed or touched_running
 
     def visible_slice(self, t0: float, t1: float) -> tuple[int, int]:
         """Index range of `[t0, t1]` within the current buffer.
