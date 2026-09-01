@@ -8879,6 +8879,16 @@ class DataBrowser(QWidget):
             self.auto_fit_y()
 
     def apply_time_ranges(self, timefunc):
+        # Same rule as `set_times` above, and for the same reason: this also
+        # calls `update_times`, which shifts the loader's buffer in place
+        # while `run_job` may be slicing that very array on the worker
+        # thread.  It is reached from twelve keyboard actions -- both zooms,
+        # both centred zooms, up, down, the small steps, home, end and snap
+        # -- and fans out to every linked browser, so the window in which a
+        # filter change is still recomputing and a key lands is wide.
+        # Without the resume the abandoned recompute is silently dropped too.
+        if self.tasks is not None:
+            self.tasks.cancel_and_wait()
         with self.updating():
             getattr(self.plot_ranges, timefunc)(Panel.times[0], None, self.isVisible())
             trange = self.plot_ranges[Panel.times[0]]
@@ -8887,6 +8897,7 @@ class DataBrowser(QWidget):
             # TODO: set time range here!
             self.panels.update_plots()
             self.plot_ranges.set_powers()
+        self.resume_recompute()
         self.update_levels()
 
     def range_channels(self) -> list:

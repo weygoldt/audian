@@ -104,3 +104,47 @@ def test_no_trace_holds_a_plot_item() -> None:
     trace = BufferedData("x", "y")
     assert not hasattr(trace, "plot_items")
     assert trace.visible_channels.dtype == bool
+
+
+def _methods_calling(tree: ast.AST, attr: str) -> set[str]:
+    """Names of the functions whose body calls ``<something>.attr(...)``."""
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Attribute)
+                and inner.func.attr == attr
+            ):
+                found.add(node.name)
+    return found
+
+
+def test_every_caller_of_update_times_joins_the_compute_worker() -> None:
+    """Moving the loader's buffer while a worker reads it is the one rule.
+
+    `Data.update_times` shifts the buffer in place; `plan_chain` captured
+    `t.source.buffer` and `run_job` slices that same array on the worker
+    thread.  `tasks/manager.py` states the rule and both `set_times` and
+    `set_panels` obeyed it -- `apply_time_ranges`, reached from twelve
+    keyboard actions, did not, which is how a page-down inside the ~400 ms
+    after a filter change could read a memmoved buffer.
+
+    Pinned structurally rather than by exercising one method, because the
+    rule lives in each caller and that is exactly why it drifted: the next
+    method to call `update_times` has to join too, and nothing else would
+    say so.
+    """
+    path = SRC / "databrowser.py"
+    tree = ast.parse(path.read_text(), filename=str(path))
+    movers = _methods_calling(tree, "update_times")
+    joiners = _methods_calling(tree, "cancel_and_wait")
+    assert movers, "no caller of update_times found; has it been renamed?"
+    missing = sorted(movers - joiners)
+    assert not missing, (
+        f"{missing} call data.update_times without cancel_and_wait first. "
+        "That moves the loader's buffer while the compute worker may be "
+        "slicing it -- see tasks/manager.py."
+    )
