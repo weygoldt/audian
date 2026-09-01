@@ -7,9 +7,12 @@
 Crickets, birds, bats, electric fish — single channel or a sixteen-electrode
 array, a few seconds or a session split across a dozen files.
 
-[![PyPI version](https://badge.fury.io/py/audian.svg)](https://pypi.python.org/pypi/audian/)
-[![PyPI license](https://img.shields.io/pypi/l/audian.svg)](https://pypi.python.org/pypi/audian/)
-[![Python versions](https://img.shields.io/pypi/pyversions/audian.svg)](https://pypi.python.org/pypi/audian/)
+A fork of [bendalab/audian](https://github.com/bendalab/audian) by
+[Jan Benda](https://github.com/janscience).
+
+[![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
+[![Upstream](https://img.shields.io/badge/fork%20of-bendalab%2Faudian-lightgrey.svg)](https://github.com/bendalab/audian)
 
 </div>
 
@@ -17,8 +20,14 @@ array, a few seconds or a session split across a dozen files.
 
 ## Install
 
+Not on PyPI — `pip install audian` gets you
+[the upstream release](https://pypi.python.org/pypi/audian/), not this fork.
+Install this one from source:
+
 ```sh
-pip install audian
+git clone https://github.com/weygoldt/audian
+cd audian
+pip install -e .
 ```
 
 ## Use
@@ -65,8 +74,7 @@ the recording.
 The defaults were measured rather than guessed: which way of combining several
 examples survives noise, why the threshold is relative to the noise floor
 instead of an absolute score, and where the whole approach stops working. See
-[`src/audian_plugins/eventdetection/engine.py`](src/audian_plugins/eventdetection/engine.py)
-if you want the numbers.
+[`engine.py`](src/audian_plugins/eventdetection/engine.py) for the numbers.
 
 ## Two themes
 
@@ -96,17 +104,29 @@ myplugin = "myplugin"
 Import from [`audian.pluginapi`](src/audian/pluginapi.py) and nothing else —
 that is the surface promised to keep working.
 
-## More
+## Credits
 
-- [User manual](docs/usermanual.md)
-- [Internals](docs/architecture.md) — how it is put together
-- `audian --help` for command-line options
-- Built on [ThunderLab](https://github.com/bendalab/thunderlab),
-  [AudioIO](https://github.com/bendalab/audioio) and
-  [pyqtgraph](https://pyqtgraph.readthedocs.io)
+audian is **Jan Benda's**, written in the
+[Benda lab](https://github.com/bendalab) at the University of Tübingen. This
+repository is a fork: the application, its data model and everything it knows
+about reading recordings come from that work, and the great majority of the
+commits behind it are his.
 
----
+It stands on the lab's stack, all by the same authors:
 
-<div align="center">
-GPLv3 · by <a href="https://github.com/bendalab">Bendalab</a>, University of Tübingen
-</div>
+| | |
+| --- | --- |
+| [audioio](https://github.com/bendalab/audioio) | reading and writing audio files and their metadata, on any platform |
+| [thunderlab](https://github.com/bendalab/thunderlab) | multi-file loading, spectrograms, and the analysis routines under them |
+
+Plus [pyqtgraph](https://pyqtgraph.readthedocs.io) for the plotting and
+[PySide6](https://doc.qt.io/qtforpython/) for the window.
+
+GPLv3, inherited from upstream.
+
+## Notes
+
+Documentation is out of date and being rewritten — `audian --help` and the
+in-app cheat sheet (<kbd>?</kbd>) are current, the rest is not.
+[`docs/architecture.md`](docs/architecture.md) describes how the code is put
+together and lags it in places; `todo.md` is the working list.
