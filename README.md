@@ -1,307 +1,112 @@
+<div align="center">
+
+# audian
+
+**A fast, keyboard-driven viewer for recordings of animal vocalisations.**
+
+Crickets, birds, bats, electric fish — single channel or a sixteen-electrode
+array, a few seconds or a session split across a dozen files.
+
+[![PyPI version](https://badge.fury.io/py/audian.svg)](https://pypi.python.org/pypi/audian/)
 [![PyPI license](https://img.shields.io/pypi/l/audian.svg)](https://pypi.python.org/pypi/audian/)
-[![PyPI version](https://badge.fury.io/py/audian.svg)](https://badge.fury.io/py/audian)
+[![Python versions](https://img.shields.io/pypi/pyversions/audian.svg)](https://pypi.python.org/pypi/audian/)
 
-# audian - AUDIoANalyzer
+</div>
 
-Python- and [pyqtgraph](https://pyqtgraph.readthedocs.io)-based GUI
-for viewing and analyzing recordings of animal vocalizations.
+![audian](docs/shots/overview-dark.png)
 
-![audian](docs/audian-v1.7.png)
+## Install
 
-[Documentation](https://bendalab.github.io/audian) |
-[API Reference](https://bendalab.github.io/audian/api)
-
-
-## Features
-
-- Interactive viewer for single and multi-channel audio signals.
-- Can handle many file formats and long recordings - holds only part of the recordings in memory.
-- Displays raw traces, filtered traces, envelopes, and spectrogram.
-- Change spectrogram resolution, overlap, color bar range and color map interactively.
-- Change low- and high-pass filter cutoff frequencies interactively.
-- Optional envelope with lowpass-filter cutoff frequency that can be changed interactively.
-- Hide and show channels as well as plot panels.
-- Overlay events from an alignment CSV on traces, spectrogram and the navigator strip, backed by polars and windowed to the visible range.
-- Extensive and intuitive key shortcuts for most functions.
-- Plugins for additional computed traces, on-demand side panels, and analysis.
-- An example few-shot event detector that learns normalized cross-correlation
-  templates from every editable label, reports training recall, previews the
-  visible window, offers adjustable non-maximum suppression, and scans a whole
-  recording in the background.
-
-``` sh
-audian data.wav
-```
-
-
-## User manual
-
-I just started to write a [user manual](docs/usermanual.md).
-
-
-## Development
-
-I currently explore various possibilities for interactive analysis of
-audio signals. In the end, audian should be easily extensible via
-plugins that provide processing and analysis algorithms, and audian
-handles all GUI aspects.
-
-### Incomplete list of TODOs:
-
-- [ ] Implement Model-View structure
-  - [x] Handle all data (raw, filtered, spectrogram,...) in one class!
-  - [x] Boil down the BufferedData code to a simple plugin interface.
-  - [x] Add destination list to Buffered data.
-  - [x] Smart updates of trace buffers.
-  - [x] Move spectrum functions from Data to BufferedSpectrum.
-  - [x] Move y-lim functions from TracItem and SpecItem to DataBrowser.
-  - [x] Traces should be assignable to plots.
-  - [x] TraceItems should get color and line width from data objects.
-  - [x] Recompute derived data whenever a source is changed.
-  - [x] Update plots of all items that have been recomputed.
-  - [x] Recompute derived data only if visible or used by something visible.
-  - [x] Automatically discover plugins.
-  - [x] Analyzer plugins for analysing a select snippet of the data.
-  - [ ] Test this plugin interface with
-    - [ ] Subtract common mean
-    - [x] Logarithmic and high-pass filtered envelope
-    - [ ] Envelope from visible frequency range of spectrogram
-    - [ ] Feature expansion (kernel filter)
-- [ ] Improve zoom stack behavior!!!
-- [ ] Add events and marker ranges to the Data class
-  - [ ] Load events from csv files provide along with the raw data.
-  - [x] Provide interface for event detectors
-  - [ ] Provide interface for event filters?
-- [ ] Implement a proper layout for showing the plot panels:
-  - [x] Support additional plots from plugins
-  - [ ] Proper y-labels for xt plots: channel not for single trace plot, otherwise plot name with unit.
-  - [ ] add units to amplitude axes
-  - [x] Amplitude ranges should consider ampl_min/ampl_max of all traces
-  - [x] Add yt plot with independent y-axis key shortcut
-  - [ ] Update cross-hair code to the new plot_ranges
-  - [ ] Support optional grid layout
-- [x] New plot widget showing power spectrum of visible range.
-- [ ] Support horizontal power spectrum
-- [ ] Cycle with Ctrl+P through no power plot, power spectrum to the right, power spectrum on top.
-- [x] FullTracePlot:
-  - [x] fix offset problem.
-  - [x] indicate time under mouse cursor.
-  - [x] compute full trace in the background.
-  - [x] store and load full trace to user specific cache dir.
-  - [x] background computation and file saving only if long enough.
-  - [x] command line script for computing fulltrace plot
-- [x] Add a toolbar widget for spectrum overlap
-- [x] SpinBox for envelope cutoff frequency needs to show digits
-  after decimal point.
-- [ ] Interactive high- and low-pass filtering:
-  - [ ] make the lines and the corrseponding toolbar widget a general property of the spectrogram plot
-  - [ ] allow for flexible connections of these features to some bufferedata update function.
-  - [ ] high- and low-pass filter lines must not cross! Update limits.
-  - [ ] add a toolbar widget for setting filter order.
-- [ ] Implement downsampling of spectrograms! Or make it even dependent on window size.
-- [ ] Improve on the concept of current cursor:
-  - [ ] play should not stop at visible range but keeps going and scrolls data.
-  - [ ] make cursor moveable by mouse.
-  - [ ] some key shortcuts for moving and handling cursor.
-- [ ] Improve on marking cross hair, cues, regions, events:
-  - [x] Cross hair should only be used for measuring! Just a single whitish color.
-    Comments only in the table.
-    Show points only fom active measurement.
-    
-  - Cues and regions have position data with labels. Same for all channels.
-    - visualize them by infinite vertical lines/regions, both in plots and
-      FullTracePlot (maybe in extra row?).
-    - can be set from cursor position/marked region.
-    - add key shortcuts to go to next/previous cue.
-    - from cue table go to selected cue.
-    - how does boris export them?
-  - Events are channel specific points.
-    - Plotted as dot at data amplitude.
-    - Many events per label.
-    - Result from some analysis.
-    - But should be editable.
-  - Event regions are channel specific:
-    - Plotted as lines on top of data.
-    - Result from some analysis.
-    - But should be editable.
-- [ ] Define plugin interfaces for analysis on full data, visible range,
-  selected range.
-- [ ] Have a dockable sidebar for showing metadata, cue tables etc.
-
-
-### Structure
-
-Eventually we want audian to be neatly separated into a data model,
-widgets that display the data, and controllers.
-
-#### Model
-
-At the core of audian are time-series data that are loaded from a
-file. In addition it supports varous derived time-series data, like
-for example filtered data, computed envelopes, spectrograms,
-etc. Audian can handle very large data sets, but holds only a small
-part in memory (buffer).
-
-- `class BufferedData`: Base class for computed data (`buffereddata.py`).
-- `class BufferedFilter`: Filter source data on the fly (`bufferedfilter.py`).
-- `class BufferedEnvelope`: Compute envelope on the fly (`bufferedenvelope.py`).
-- `class BufferedSpectrogram`: Spectrogram of source data on the fly (`bufferedspectrogram.py`).
-
-- `class Data`: Handles all the raw and derived data traces like filtered data, spectrogram data, etc (`data.py`).
-
-- `labels.py`: The **editable labels** -- the store, and the
-  `<stem>-editable-labels.csv` sidecar beside the recording. Pure data, no Qt.
-  These are the ones a reader draws afterwards; the **fixed labels** are the
-  session bundle read by `session.py` and drawn by `eventoverlay.py`, which
-  audian never writes.
-- `labeloverlay.py`: The Qt half of `labels.py`: one overlay per plot, the
-  category editor and the label list.
-
-Replaces `markerdata.py`, whose authoring path had been commented out for
-long enough that its store could not delete a row and its per-category
-scatter layers were frozen at file-open time. Markers embedded in a WAV are
-still carried into a saved region; they are read off the file, which is
-where they live.
-
-#### View
-
-All the data audian is dealing with are displayed in plots.
-
-A few classes specializing some pyqtgraph features:
-
-- `timeaxisitem.py`: Label time-axis of TimePlot.
-- `yaxisitem.py`: Label y-axis of TimePlot.
-- `selectviewbox.py`: Handles zooming and selection on all RangePlot.
-
-Managing plots:
-
-- `plotranges.py`: Manage ranges of plot axes.
-- `panels.py`: Manage plot panels.
-
-Basic plots for time-series data:
-
-- `rangeplot.py`: Plot displaying any data with specified range type.
-- `timeplot.py`: Plot displaying data as a function of time.
-- `spectrogramplot.py`: Plot displaying spectrograms.
-
-Basic plot items:
-
-- `traceitem.py`: PlotDataItem for TimePlot.
-- `specitem.py`: ImageItem for SpectrogramPlot.
-- `fulltraceplot.py`: GraphicsLayoutWidget showing the full raw data traces.
-
-#### Controller
-
-- `audian.py`: Main GUI, handles DataBrowser widgets and key shortcuts.
-  Its `ToolStrip` is the tool bar: it gives up the words on its buttons, then
-  the space around its group rules, then whole groups into an overflow menu,
-  so that the window's minimum width does not grow with the bar.
-- `databrowser.py`: Each data file is displayed in a DataBrowser widget.
-  Its `ParameterTabs` is the bottom bar: one tab per group of parameters and
-  one group on screen, so the bar asks for the width of its widest page
-  rather than the sum of all of them.
-- `compresseddata.py`: Handle compressed and cached data for FullTracePlot.
-
-#### Plugins
-
-- `plugins.py`: Discover and manage plugins. Panel plugins appear as checkable
-  entries in the Plugins menu and can be disabled either there or by closing
-  their side-panel tab.
-- `pluginapi.py`: What a plugin may import from audian. A plugin that stays
-  inside this surface can be moved to a repository of its own without
-  breaking; one that reaches into `databrowser` or `labels` directly is
-  holding internals that move.
-- `analyzer.py`: Base class for analyzer plugins.
-- `statisticsanalyzer.py`: Compute basic descriptive statistics.
-
-Plugins are found in three places, and all three bind the same way — a
-module exposing callables named `audian_*panel`, `*analyzer` or `*traces`:
-
-1. **Bundled**, by walking `src/audian_plugins/`. These ship with audian and
-   need no installing.
-2. **Installed**, through the `audian.plugins` entry point group. This is how
-   a plugin that lives in its own repository announces itself.
-3. **Local**, any `audian*.py` in the working directory — for trying
-   something out on one recording without installing it.
-
-#### Bundled plugins
-
-- `audian_plugins/eventdetection/`: Few-shot normalized cross-correlation
-  event detector for trace and spectrogram templates. `engine.py` is the
-  arithmetic and imports no Qt; `panel.py` is the interface. Enable it at
-  **Plugins > Event detection > Normalised cross-correlation**.
-
-Taking a bundled plugin out into its own repository is meant to be
-mechanical: move the package directory, give it a `pyproject.toml` declaring
-
-``` toml
-[project.entry-points."audian.plugins"]
-eventdetection = "audian_plugins.eventdetection"
-```
-
-and delete it from here. No code changes, in either repository.
-
-
-## Run audian from Spyder IPython console:
-
-Call the audian script via a shell escape:
-``` py
-! audian
-```
-
-## Installation
-
-Simply run (as superuser):
 ```sh
 pip install audian
 ```
 
-This should also install:
-- [ThunderLab](https://github.com/bendalab/thunderlab)
-- [AudioIO](https://github.com/bendalab/audioio)
+## Use
 
-From the (spyder) IPython console, you can install it via
 ```sh
-%pip install audian
+audian recording.wav        # one file
+audian session/*.wav        # a split session, joined by its timestamps
 ```
 
-## Options
+Press <kbd>Ctrl</kbd>+<kbd>K</kbd> for every shortcut, or <kbd>?</kbd> for the
+cheat sheet. Almost everything has one.
 
-Output of `audian --help`:
+## What it does
 
-``` txt
-usage: audian [-h] [--version] [-v] [-c CHANNELS] [-f FREQ] [-l FREQ] [-i KWARGS] [-u [UNWRAP]] [-U [UNWRAP]]
-              [files ...]
+- **Long recordings, quickly.** Only the visible part is held in memory, so an
+  hour-long multi-channel file opens as fast as a short one.
+- **Traces, filters, envelopes, spectrograms** — per channel, in any
+  combination, each panel hidden or shown with a key.
+- **A spectrogram you can argue with.** Window length, overlap, colour map,
+  level range, smoothing, and peaking to show where it clips — all live, all
+  on the keyboard.
+- **Band-pass filtering** with the cutoffs drawn on the spectrogram.
+- **Two kinds of label, kept apart.** *Fixed* labels are what the instrument
+  recorded; *editable* labels are your reading of it, drawn with the mouse
+  into a CSV sidecar. audian never writes the first kind.
+- **A navigator strip** showing the whole recording, so you always know where
+  you are in it.
+- **Plugins** for computed traces, analyses and side panels — including a
+  few-shot event detector that ships with it.
 
-Browse and analyze recordings of animal vocalizations..
+## Detecting events
 
-positional arguments:
-  files        name of files with the time series data
+Mark a handful of examples, and let it find the rest.
 
-options:
-  -h, --help   show this help message and exit
-  --version    show program's version number and exit
-  -v           Print debug information
-  -c CHANNELS  Comma separated list of channels to be displayed (first channel is 0).
-  -f FREQ      Cutoff frequency of highpass filter in Hz
-  -l FREQ      Cutoff frequency of lowpass filter in Hz
-  -i KWARGS    key-word arguments for the data loader function
-  -u [UNWRAP]  unwrap clipped data with threshold relative to maximum input range and divide by two using unwrap()
-               from audioio package
-  -U [UNWRAP]  unwrap clipped data with threshold relative to maximum input range and clip using unwrap() from audioio
-               package
-  -a CSV, --events CSV
-               alignment or event CSV to draw over the recording; without it an alignment file sitting beside the
-               recording and naming it in its #recording= header is picked up automatically
-  --theme {dark,light}
-               colour theme; 'light' is the high-contrast daylight theme for outdoor use
+![detector](docs/shots/detector.png)
 
-version 2.0 by Jan Benda (2015-2024)
+**Plugins → Event detection → Normalised cross-correlation** learns templates
+from the events you labelled and matches them against the recording, on the
+spectrogram or on the waveform. Tune it on the window in front of you, then
+run it over the whole file in the background. Results arrive as ordinary
+editable labels — correct them, delete them, save them — and as a CSV beside
+the recording.
+
+The defaults were measured rather than guessed: which way of combining several
+examples survives noise, why the threshold is relative to the noise floor
+instead of an absolute score, and where the whole approach stops working. See
+[`src/audian_plugins/eventdetection/engine.py`](src/audian_plugins/eventdetection/engine.py)
+if you want the numbers.
+
+## Two themes
+
+Dark for a desk, daylight for a laptop in the field — high contrast, and a
+colour map to match.
+
+| Dark | Daylight |
+| --- | --- |
+| ![dark](docs/shots/overview-dark.png) | ![light](docs/shots/overview-light.png) |
+
+```sh
+audian --theme light recording.wav
 ```
 
-## Other scientific software for working on timeseries data
+## Writing a plugin
 
-- [BioSPPy](https://github.com/scientisst/BioSPPy): The toolbox
-  bundles together various signal processing and pattern recognition
-  methods geared towards the analysis of biosignals.
-  
+A plugin is a module exposing a callable named `audian_*panel`, `*analyzer` or
+`*traces`. Bundled ones live in
+[`src/audian_plugins/`](src/audian_plugins/); your own can sit in the
+directory you launch from, or in its own installable package that declares:
+
+```toml
+[project.entry-points."audian.plugins"]
+myplugin = "myplugin"
+```
+
+Import from [`audian.pluginapi`](src/audian/pluginapi.py) and nothing else —
+that is the surface promised to keep working.
+
+## More
+
+- [User manual](docs/usermanual.md)
+- [Internals](docs/architecture.md) — how it is put together
+- `audian --help` for command-line options
+- Built on [ThunderLab](https://github.com/bendalab/thunderlab),
+  [AudioIO](https://github.com/bendalab/audioio) and
+  [pyqtgraph](https://pyqtgraph.readthedocs.io)
+
+---
+
+<div align="center">
+GPLv3 · by <a href="https://github.com/bendalab">Bendalab</a>, University of Tübingen
+</div>
