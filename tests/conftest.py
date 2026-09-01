@@ -95,6 +95,69 @@ if _enum_mode_chosen is None:
 pg.setConfigOption("mouseRateLimit", 0)
 
 
+def _settings_stamp(path: Path):
+    """What the file is now, or None if it is not there.
+
+    Content as well as mtime: a test that writes and then restores the
+    timestamp would pass an mtime check, and the failure this guards against
+    is the file's *content* being replaced by a test's idea of it.
+    """
+    try:
+        return (path.stat().st_mtime_ns, path.read_bytes())
+    except OSError:
+        return None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_settings(tmp_path_factory):
+    """Point both persistent stores at a scratch directory for the whole run.
+
+    Ten test modules used to do this themselves, five of them covering only
+    the JSON half, one never restoring what it replaced, and three
+    module-scoped fixtures racing to decide which directory was live when a
+    deferred `save_panel_split` finally fired -- so which store a run wrote
+    to depended on collection order.  It was not hypothetical: the user's own
+    `settings.json` held a `panel-split` value a test had put there.
+
+    Doing it once here, session-scoped and autouse, runs before any module's
+    own fixture and makes those redirects harmless duplicates rather than the
+    thing standing between a test run and the reader's preferences.  The
+    modules that deliberately exercise the redirect machinery -- test_settings
+    and test_smoketest -- still work, because they capture and restore
+    whatever is installed when they run, which is now this instead of the real
+    path.
+
+    The assertion at the end is the part that cannot rot.  A redirect that
+    silently stops covering a newly added store looks exactly like one that
+    works; comparing the real files before and after is the only check that
+    keeps telling the truth as the code moves.
+    """
+    from PySide6.QtCore import QSettings
+
+    import audian.audian as audian_app
+
+    real_json = audian_app.settings_path()
+    real_ini = Path(QSettings("audian", "audian").fileName())
+    before = {p: _settings_stamp(p) for p in (real_json, real_ini)}
+
+    directory = tmp_path_factory.mktemp("settings")
+    audian_app.settings_path = lambda: directory / "settings.json"
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
+            QSettings.setPath(fmt, scope, os.fspath(directory))
+
+    yield directory
+
+    moved = [p for p, was in before.items() if _settings_stamp(p) != was]
+    if moved:
+        pytest.fail(
+            "the suite wrote to the real settings store: "
+            + ", ".join(str(p) for p in moved)
+            + ".  Some code path reaches a store this fixture does not "
+            "redirect -- find it rather than widening the comparison."
+        )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _qt_teardown():
     """Let Qt destroy its own objects before the interpreter frees them."""

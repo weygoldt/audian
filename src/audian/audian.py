@@ -1146,7 +1146,12 @@ def save_setting(key: str, value) -> None:
     path = settings_path()
     tmp = path.with_name(path.name + ".tmp")
     try:
-        audian_dirs.user_config_path.mkdir(parents=True, exist_ok=True)
+        # The directory of the path actually being written, not the one
+        # `settings_path` resolves to by default: the two differ whenever a
+        # test or the smoke harness redirects the store, and creating the real
+        # config directory while writing somewhere else is how a redirect ends
+        # up half-applied.
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(tmp, "w") as df:
             json.dump(values, df, indent=2)
             df.flush()
