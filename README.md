@@ -94,11 +94,19 @@ characteristic ways — it breaks one band in two where the frequency moved too
 fast, and it swaps two identities where they crossed — and neither is fixable
 by tracking harder. Both are obvious to a person looking at the picture.
 
-Bands come from one of three places: the built-in peak tracker over the
-visible window (fast enough to re-run while you tune it), the same tracker
-over the whole file on a background thread, or a **wavetracker** output
-directory. That directory is opened **read-only**: your edits go to a sidecar
-beside the recording, never back over the tracker's `.npy` files.
+Bands are found with **thunderfish's harmonic group finder** — the one
+wavetracker itself uses. It groups a peak with its own multiples and reports
+the *fundamental*, so a fish with four audible harmonics is one band rather
+than four, and it sets the mains aside instead of tracking 50, 100 and 150 Hz
+as three animals. On a 120 s four-channel test recording with five synthetic
+fish it returns 6 bands where a plain peak finder returns 22, and the two
+extra are the two places the tracker genuinely broke a band — which is the
+work you are here to do. Run it over the visible window while you tune the
+settings, then over the whole file on a background thread.
+
+Or import a **wavetracker** output directory, which is the case this was
+written for. That directory is opened **read-only**: your edits go to a
+sidecar beside the recording, never back over the tracker's `.npy` files.
 
 It replaces `wavetracker`'s `EODsorter`, and the differences are all about not
 losing work. Merging keeps every vertex, where `EODsorter.connect` silently

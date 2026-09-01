@@ -17,9 +17,11 @@ was written for: those bands already exist and only need curating.
 Then the work itself, which is all mouse:
 
 * **Click** a band to select it.  Selecting is what every button acts on, and
-  the selected band is drawn thicker and in the accent colour -- thicker as
-  well as coloured, so it is still obvious to a reader who cannot separate
-  the accent from the palette.
+  the selected band is drawn thicker as well as in a different colour, so it
+  is still obvious to a reader who cannot separate the two hues.  Both
+  colours are taken from the spectrogram's own colour map rather than fixed
+  -- see `overlay` for why that is what keeps a band legible on all eight of
+  them.
 * **Ctrl+click** adds a band to the selection, which is how two are chosen
   for a merge.
 * **Right-click** opens a menu for the band under the cursor: split it there,
@@ -114,6 +116,11 @@ SAVE_DEBOUNCE_MS = 1500
 DEFAULT_NFFT = 16384
 DEFAULT_MAX_HZ = 2000.0
 
+#: What "Find" is set to.  Strings rather than an enum because they are also
+#: the settings dictionary's value, carried to a worker on another thread.
+METHOD_HARMONIC = "harmonic"
+METHOD_PEAKS = "peaks"
+
 
 def open_recording(paths, tbuffer: float):
     """The recording, through audian's opener rather than `DataLoader`.
@@ -125,6 +132,57 @@ def open_recording(paths, tbuffer: float):
     """
     paths = list(paths)
     return open_files(paths if len(paths) > 1 else paths[0], tbuffer, 0.0)
+
+
+#: How far above the highest wanted fundamental the spectrum is kept when
+#: grouping harmonics.
+#:
+#: `harmonic_groups`' ``max_freq`` bounds the *fundamental*; a harmonic above
+#: it is still evidence for a group below it, and cutting the spectrum at the
+#: same place throws that evidence away -- a 900 Hz fish would be looked for
+#: with none of its multiples present and found by nothing.  Six is past
+#: `min_group_size` with room to spare, and is capped at Nyquist anyway.
+HARMONIC_HEADROOM = 6.0
+
+
+def frames_of_block(block, rate: float, settings: dict, token=None) -> list:
+    """One block of samples, as per-frame frequencies ready for `link`.
+
+    The single place the spectrogram is computed and the finder is chosen, so
+    the visible-window run and the whole-file sweep cannot drift apart in
+    what they do -- which is the failure mode of having tuned a preview that
+    the real run then disagrees with.
+    """
+    from thunderlab.powerspectrum import decibel, spectrogram
+
+    nfft = int(settings["nfft"])
+    freqs, times, spec = spectrogram(
+        block, rate, freq_resolution=rate / nfft, overlap_frac=0.75
+    )
+    max_hz = float(settings["max_hz"])
+    if settings.get("method", METHOD_HARMONIC) == METHOD_HARMONIC:
+        keep = freqs <= max_hz * HARMONIC_HEADROOM
+        return T.harmonic_frames(
+            times,
+            freqs[keep],
+            spec[keep].T,  # linear power: harmonic_groups takes its own log
+            settings.get("mains_hz", T.DEFAULT_MAINS_HZ),
+            settings.get("min_hz", T.DEFAULT_MIN_HZ),
+            max_hz,
+            T.DEFAULT_MIN_GROUP_SIZE,
+            settings["max_peaks"],
+            token,
+        )
+    keep = freqs <= max_hz
+    return T.peaks_of_block(
+        times,
+        freqs[keep],
+        decibel(spec).T[:, keep],
+        settings["threshold_db"],
+        settings["max_peaks"],
+        None,
+        token,
+    )
 
 
 class SweepWorker(QObject):
@@ -163,8 +221,6 @@ class SweepWorker(QObject):
         self.sigDone.emit(found, "")
 
     def _sweep(self) -> list:
-        from thunderlab.powerspectrum import decibel, spectrogram
-
         frames: list = []
         with open_recording(self.paths, CHUNK_S) as data:
             rate = float(data.rate)
@@ -180,20 +236,11 @@ class SweepWorker(QObject):
                 if stop - start < nfft:
                     break
                 block = np.asarray(data[start:stop, self.channel], dtype=np.float64)
-                freqs, times, spec = spectrogram(
-                    block, rate, freq_resolution=rate / nfft, overlap_frac=0.75
-                )
-                keep = freqs <= float(self.settings["max_hz"])
-                power = decibel(spec).T[:, keep]
+                offset = start / rate
                 frames.extend(
-                    T.peaks_of_block(
-                        times + start / rate,
-                        freqs[keep],
-                        power,
-                        self.settings["threshold_db"],
-                        self.settings["max_peaks"],
-                        None,
-                        self.token,
+                    (t + offset, hz)
+                    for t, hz in frames_of_block(
+                        block, rate, self.settings, self.token
                     )
                 )
                 start = stop
@@ -229,6 +276,9 @@ class BandPanel(QWidget):
 
         self._build_bands_group(box)
         self._build_find_group(box)
+        # the rows the chosen finder does not read are hidden from the start,
+        # not on the first change of it
+        self._sync_method()
         box.addStretch(1)
 
         self._save_timer = QTimer(self)
@@ -337,6 +387,39 @@ class BandPanel(QWidget):
     def _build_find_group(self, box) -> None:
         group = ParameterGroup("Find bands", self, caption=False, narrow=True)
 
+        self.methodw = narrow_combo(QComboBox(self))
+        self.methodw.addItem("Harmonic groups", METHOD_HARMONIC)
+        self.methodw.addItem("Strongest peaks", METHOD_PEAKS)
+        harmonics = T.harmonics_available()
+        if not harmonics:
+            # Offered but not selectable, and the tooltip says why.  Removing
+            # the entry would leave a reader who expected wavetracker's finder
+            # wondering whether this plugin has one at all.
+            self.methodw.model().item(0).setEnabled(False)
+            self.methodw.setCurrentIndex(1)
+        self.methodw.setToolTip(
+            "Harmonic groups is thunderfish's finder, the one wavetracker "
+            "uses: it groups a peak with its own multiples and reports the "
+            "fundamental, so a fish with four harmonics is one band rather "
+            "than four, and the mains is set aside rather than tracked. "
+            "Strongest peaks knows nothing about harmonics and is the "
+            "honest choice for a signal that has none."
+            + ("" if harmonics else "  thunderfish is not installed.")
+        )
+        self.methodw.currentIndexChanged.connect(lambda _i: self._sync_method())
+        group.add_row("Find", "", self.methodw)
+
+        self.mainsw = narrow_combo(QComboBox(self))
+        self.mainsw.addItem("50 Hz", 50.0)
+        self.mainsw.addItem("60 Hz", 60.0)
+        self.mainsw.addItem("none", 0.0)
+        self.mainsw.setToolTip(
+            "Mains frequency to set aside rather than track. Choose none for "
+            "a recording with no hum -- discounting a mains that is not "
+            "there throws away a real signal at that frequency."
+        )
+        self._mains_row = group.add_row("Mains", "", self.mainsw)
+
         self.thresholdw = pg.SpinBox(
             self, T.DEFAULT_THRESHOLD_DB, bounds=(1.0, 60.0), suffix=" dB", step=1.0
         )
@@ -345,7 +428,17 @@ class BandPanel(QWidget):
             "How far a peak must stand above the noise. Higher finds less; "
             "too low fills the silences with fragments."
         )
-        group.add_row("Threshold", "", self.thresholdw)
+        self._threshold_row = group.add_row("Threshold", "", self.thresholdw)
+
+        self.minhzw = pg.SpinBox(
+            self, T.DEFAULT_MIN_HZ, bounds=(0.0, 100000.0), suffix=" Hz", step=10.0
+        )
+        self._style(self.minhzw)
+        self.minhzw.setToolTip(
+            "Lowest fundamental to look for. The very bottom of a "
+            "spectrogram is drift rather than signal."
+        )
+        group.add_row("From", "", self.minhzw)
 
         self.tolerancew = pg.SpinBox(
             self, 6.0, bounds=(0.1, 5000.0), suffix=" Hz", step=1.0
@@ -440,6 +533,25 @@ class BandPanel(QWidget):
     def _style(self, spin) -> None:
         if hasattr(self.browser, "style_parameter_spinbox"):
             self.browser.style_parameter_spinbox(spin)
+
+    def method(self) -> str:
+        chosen = self.methodw.currentData()
+        return METHOD_HARMONIC if chosen is None else str(chosen)
+
+    def _sync_method(self) -> None:
+        """Show only the controls the chosen finder actually reads.
+
+        A threshold that does nothing is worse than an absent one: a reader
+        who turns it and sees no change concludes the tracker is broken.
+        Whole rows, caption included -- `ParameterGroup.add_row` returns the
+        caption with the fields for exactly this, because hiding the field
+        alone leaves a label beside nothing.
+        """
+        harmonic = self.method() == METHOD_HARMONIC
+        for widget in self._mains_row:
+            widget.setVisible(harmonic)
+        for widget in self._threshold_row:
+            widget.setVisible(not harmonic)
 
     # --- lifecycle --------------------------------------------------------
 
@@ -840,10 +952,7 @@ class BandPanel(QWidget):
         ids = [int(i) for i in ids if int(i) in self.bands]
         if not ids:
             return
-        edit = None
-        for bid in ids:
-            edit = self.bands.set_category(bid, name)
-        self._changed(edit)
+        self._changed(self.bands.set_category_many(ids, name))
 
     def _undo(self) -> None:
         edit = self.bands.undo()
@@ -891,11 +1000,14 @@ class BandPanel(QWidget):
 
     def _settings(self) -> dict:
         return {
+            "method": self.method(),
             "threshold_db": float(self.thresholdw.value()),
             "tolerance_hz": float(self.tolerancew.value()),
             "max_gap_s": float(self.gapw.value()),
             "min_duration_s": float(self.mindurw.value()),
+            "min_hz": float(self.minhzw.value()),
             "max_hz": float(self.maxhzw.value()),
+            "mains_hz": float(self.mainsw.currentData() or 0.0),
             "max_peaks": T.DEFAULT_MAX_PEAKS,
             "nfft": int(self.nfftw.currentData() or DEFAULT_NFFT),
         }
@@ -908,8 +1020,6 @@ class BandPanel(QWidget):
         return None
 
     def _find_in_view(self) -> None:
-        from thunderlab.powerspectrum import decibel, spectrogram
-
         window = self._visible_window()
         paths = self.source_paths()
         if window is None or not paths:
@@ -935,20 +1045,16 @@ class BandPanel(QWidget):
                 block = np.asarray(
                     data[start:stop, self.channel()], dtype=np.float64
                 )
-            freqs, times, spec = spectrogram(
-                block, rate, freq_resolution=rate / settings["nfft"], overlap_frac=0.75
-            )
-            keep = freqs <= settings["max_hz"]
-            power = decibel(spec).T[:, keep]
-            found = T.track(
-                times + start / rate,
-                freqs[keep],
-                power,
-                settings["threshold_db"],
+            offset = start / rate
+            frames = [
+                (t + offset, hz)
+                for t, hz in frames_of_block(block, rate, settings)
+            ]
+            found = T.link(
+                frames,
                 settings["tolerance_hz"],
                 settings["max_gap_s"],
                 settings["min_duration_s"],
-                settings["max_peaks"],
             )
         except Exception as exc:  # noqa: BLE001 - report, do not take the window down
             self.browser.notify("error", f"frequency bands: tracking failed ({exc})")

@@ -48,6 +48,19 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.optional-dependencies]
+# What a bundled plugin needs and audian itself does not.  `audian_plugins`
+# says extraction ends with "add its distribution to audian's extras"; this
+# is the same idea one step earlier, for a plugin still in the tree whose
+# dependency should not be everybody's.
+#
+# The band curator finds fundamentals with thunderfish's harmonic group
+# finder -- the one wavetracker uses -- and falls back to its own peak
+# finder when it is absent, saying so in the Find combo rather than
+# raising.  So `pip install audian` still curates bands; `pip install
+# audian[bands]` curates them well.
+bands = ["thunderfish"]
+
 [project.urls]
 Repository    = "https://github.com/bendalab/audian"
 

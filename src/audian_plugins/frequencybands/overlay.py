@@ -24,6 +24,41 @@ few hundred artists created and destroyed per keypress, and it is most of why
 that program felt the way it did.  The count here is bounded by the palette
 instead of by the data, and a pan re-uploads two arrays.
 
+Colours taken from the map, not chosen against it
+-------------------------------------------------
+
+audian offers eight spectrogram colour maps across two themes and they do not
+agree about which end is dark, so any fixed colour is wrong under some of
+them.  The first attempt here was `theme.FG_MUTED`, a grey-blue, which
+disappeared into every blue map on the list.
+
+So the marks are drawn in the map's *own* two ends, read off the lane:
+
+* The selected band takes a colour **opposed to the peak**: the peak's hue
+  turned half way round at full chroma, or magenta when the peak is white or
+  black and has no hue to oppose.  A band lies on a ridge and a ridge is the
+  top of the ramp, so opposing the top is opposing what is under the line.
+* An unlabelled band takes the map's **brightest** colour, lifted to full
+  value.
+* A labelled band keeps its category's colour, which is the answer to "which
+  of these is which" and is what the table beside it shows.
+
+The floor colour was tried for the unlabelled bands and is wrong, which is
+worth recording because the argument for it is a good one: a band sits on a
+ridge, so paint it in the colour the ridge is furthest from.  What that
+argument leaves out is how much of a spectrogram is *not* ridge.  With the
+levels set so the noise floor is black -- which is what audian's own
+`fit_levels` aims for, and what most of the picture then is -- a floor
+coloured band is a black line on a black field everywhere except the few
+pixels it is marking.  Measured on the four-lane synthetic recording, three
+of six bands were invisible.  Brightness is the property that survives, and
+the map's own bright end supplies it without this module knowing which map is
+on.
+
+`map_ends` reads the map from the lane's colour bar on every draw and the
+result is part of the redraw key, so changing the map repaints the bands in
+the new one's colours instead of leaving them in the old one's.
+
 Redrawing only when something changed
 -------------------------------------
 
@@ -51,6 +86,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 
 from audian.pluginapi import theme
 
@@ -64,12 +100,15 @@ TEXT_Z = 23
 
 #: Width of an ordinary band and of the selected one, in pixels.
 #:
-#: The selected band is thicker *as well as* differently coloured, because a
-#: reader who cannot separate the highlight colour from the palette can still
-#: see which band is selected -- and because on a dense lane the colour of a
-#: one-pixel line is the least legible thing on screen.
-BAND_WIDTH_PX = 1.6
-SELECTED_WIDTH_PX = 3.2
+#: Thick, because these are marks to be seen and aimed at rather than
+#: measurements to be read off: a band is a claim about which signal is which,
+#: and at one pixel over a busy spectrogram it was a claim nobody could
+#: follow across the picture.
+#:
+#: The selected band is thicker *as well as* differently coloured, so a reader
+#: who cannot separate the two hues can still see which band is selected.
+BAND_WIDTH_PX = 2.8
+SELECTED_WIDTH_PX = 4.6
 
 #: Most vertices to draw per pixel of lane width, per band.
 #:
@@ -84,12 +123,70 @@ PIXEL_DENSITY = 2.0
 #: where a reader looks one up when the lane is crowded.
 MAX_LABELS_DRAWN = 24
 
-#: Colour of a band nobody has labelled yet, which is most of them when a
-#: tracker has just run.  Deliberately not a marker colour: unlabelled is a
-#: state, not a category, and giving it one of the eight would make the
-#: first category a reader creates look like a change of label rather than
-#: the addition of one.
-UNLABELLED_TOKEN = "fg.muted"
+#: Key the unlabelled bands share in the per-colour item dictionaries.
+#: A string that cannot collide with a palette index.
+UNLABELLED_KEY = "unlabelled"
+
+#: Fallback selection colour when the map's bright end has no hue to oppose.
+#:
+#: Every map audian offers ends near white or near black, and the complement
+#: of an achromatic colour is not defined -- ``QColor('#fcf9f3').getHsv()``
+#: reports a saturation of 9, which is noise rather than a hue.  Magenta is
+#: the choice because it is the one strongly saturated colour that appears
+#: nowhere in a perceptually uniform dark-to-light ramp.
+ACHROMATIC_SELECTION = "#FF2BD6"
+
+#: Below this saturation a colour is treated as having no hue at all.
+ACHROMATIC_SATURATION = 60
+
+
+def map_ends(ax) -> tuple:
+    """The floor and peak colours of the colour map on this lane.
+
+    Read from the lane rather than fixed, so the marks stay legible when the
+    reader changes the map -- there are eight of them and they do not agree
+    about which end is dark.  `pg.ColorBarItem` is where a `SpectrogramPlot`
+    keeps the map it was built with.
+    """
+    cmap = None
+    cbar = getattr(ax, "cbar", None)
+    if cbar is not None and hasattr(cbar, "colorMap"):
+        try:
+            cmap = cbar.colorMap()
+        except Exception:  # noqa: BLE001 - a missing map is not a crash
+            cmap = None
+    if cmap is None:
+        cmap = theme.spectrogram_colormap(theme.DEFAULT_SPECTROGRAM_MAP)
+    return cmap.map(0.0, mode="qcolor"), cmap.map(1.0, mode="qcolor")
+
+
+def brightened(color) -> str:
+    """`color` at full value, as a hex string.
+
+    The map's bright end is what an unlabelled band is drawn in, and on a
+    map whose top is a strong hue rather than white -- inferno ends yellow,
+    CET-L18 ends amber -- taking it verbatim would draw the band in exactly
+    the colour of the loudest pixels it is sitting on.  Full value pushes it
+    clear of them while keeping the hue, so the marks still look like they
+    belong to the picture.
+    """
+    hue, saturation, _value, _alpha = color.getHsv()
+    if hue < 0:
+        return "#FFFFFF"
+    return QColor.fromHsv(hue, min(saturation, 90), 255).name()
+
+
+def opposed(color) -> str:
+    """A colour that stands against `color`, as a hex string.
+
+    Its hue turned half way round the wheel at full chroma.  Used against the
+    map's *bright* end, because that is what a band is lying on: a band marks
+    a ridge, and a ridge is where the ramp is at its top.
+    """
+    hue, saturation, _value, _alpha = color.getHsv()
+    if hue < 0 or saturation < ACHROMATIC_SATURATION:
+        return ACHROMATIC_SELECTION
+    return QColor.fromHsv((hue + 180) % 360, 255, 255).name()
 
 
 def _passive(item) -> None:
@@ -146,9 +243,21 @@ class BandOverlay:
         self.visible = True
         self.selection: tuple = ()
         self._drawn = None
+        #: the map's two ends and the selection colour taken from them,
+        #: refreshed on every draw so a change of map is followed
+        self.floor, self.peak = map_ends(ax)
+        self.selection_color = opposed(self.peak)
+        self.unlabelled_color = brightened(self.peak)
 
         self.curves: dict = {}
-        self.selected = pg.PlotCurveItem()
+        # Antialiased, unlike audian's own `TraceItem`, and the difference is
+        # in what is being drawn.  A trace is a million points wide and its
+        # pen is off by default because smoothing that many segments costs
+        # real time; a band is a few hundred points and is nearly horizontal,
+        # which is the worst case for aliasing -- an unsmoothed near-flat line
+        # steps a whole pixel wherever it crosses a row boundary, and reads as
+        # the frequency jumping rather than the renderer rounding.
+        self.selected = pg.PlotCurveItem(antialias=True)
         self.selected.setZValue(SELECTED_Z)
         _passive(self.selected)
         # ignoreBounds throughout: a bare addItem joins the lane's
@@ -178,12 +287,13 @@ class BandOverlay:
         """The curve item for one colour, made the first time it is needed."""
         item = self.curves.get(key)
         if item is None:
-            item = pg.PlotCurveItem()
+            item = pg.PlotCurveItem(antialias=True)
             item.setZValue(BAND_Z)
             _passive(item)
             self.ax.addItem(item, ignoreBounds=True)
             self.curves[key] = item
         return item
+
 
     def _text(self, index: int):
         while len(self.texts) <= index:
@@ -258,13 +368,30 @@ class BandOverlay:
 
     def _color_key(self, band) -> str:
         if not band.category:
-            return UNLABELLED_TOKEN
+            return UNLABELLED_KEY
         return str(self.colors.get(band.category, 0))
 
+    def _color(self, key: str) -> str:
+        """What one colour group is drawn in.
+
+        A band nobody has labelled is drawn in the **floor colour of the
+        colour map underneath it**.  That sounds like drawing it invisibly and
+        is the opposite: a band lies on a ridge, a ridge is the top of the
+        ramp, and the bottom of the ramp is the one colour guaranteed to be
+        far from it -- on every map, in both themes, without this module
+        knowing which map is on.  It was a fixed grey-blue before, which
+        disappeared into every blue map audian offers.
+
+        A band the reader has labelled keeps its category's colour, because
+        that colour is the answer to "which of these is which" and is what the
+        table beside it shows.
+        """
+        if key == UNLABELLED_KEY:
+            return self.unlabelled_color
+        return theme.marker_color(int(key))
+
     def _pen(self, key: str):
-        if key == UNLABELLED_TOKEN:
-            return theme.pen(theme.token(UNLABELLED_TOKEN), width=BAND_WIDTH_PX)
-        return theme.pen(theme.marker_color(int(key)), width=BAND_WIDTH_PX)
+        return theme.pen(self._color(key), width=BAND_WIDTH_PX)
 
     def update_plot(self) -> None:
         """Redraw the lane, or return having found nothing to redraw."""
@@ -280,6 +407,13 @@ class BandOverlay:
             round(y1, 6),
             round(self.width_px()),
         )
+        # Re-read the map every pass and put it in the redraw key, so
+        # changing the colour map repaints the bands in the new one's colours
+        # rather than leaving them in the previous map's.
+        self.floor, self.peak = map_ends(self.ax)
+        self.selection_color = opposed(self.peak)
+        self.unlabelled_color = brightened(self.peak)
+        state = (*state, self.unlabelled_color, self.selection_color)
         if state == self._drawn:
             return
         self._drawn = state
@@ -322,10 +456,12 @@ class BandOverlay:
 
         sx, sy = joined(chosen)
         self.selected.setPen(
-            theme.pen(theme.token("accent"), width=SELECTED_WIDTH_PX)
+            theme.pen(self.selection_color, width=SELECTED_WIDTH_PX)
         )
         self.selected.setData(x=sx, y=sy, connect="finite")
 
+        self.dots.setPen(theme.pen(self.unlabelled_color, width=1.0))
+        self.dots.setBrush(theme.brush(self.unlabelled_color))
         self.dots.setData(x=dots_x, y=dots_y)
 
         self._draw_ids(visible, x0, x1)
@@ -344,13 +480,9 @@ class BandOverlay:
                 item.setText(str(band.bid))
                 item.setColor(
                     theme.qcolor(
-                        theme.token("accent")
+                        self.selection_color
                         if selected
-                        else (
-                            theme.token(UNLABELLED_TOKEN)
-                            if not band.category
-                            else theme.marker_color(self.colors.get(band.category, 0))
-                        )
+                        else self._color(self._color_key(band))
                     )
                 )
                 item.setPos(float(band.times[inside]), float(band.freqs[inside]))

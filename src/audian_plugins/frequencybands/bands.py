@@ -445,6 +445,29 @@ class BandSet:
         )
         return self._apply(what, (band,), (replace(band, category=category),))
 
+    def set_category_many(self, bids: Iterable, category: str) -> Edit:
+        """Label several bands as *one* undoable step.
+
+        Labelling a selection of twelve is one thing the reader did, and
+        twelve presses of Undo to take it back is not a history.  Every other
+        multi-band edit here is already one step -- `delete_many`, `merge`,
+        `add_many` -- and this was the one that was not.
+        """
+        bids = [int(b) for b in bids if int(b) in self._bands]
+        if not bids:
+            return Edit("label no bands")
+        if len(bids) == 1:
+            return self.set_category(bids[0], category)
+        category = (category or "").strip()
+        removed = tuple(self._bands[b] for b in bids)
+        added = tuple(replace(band, category=category) for band in removed)
+        what = (
+            f"label {len(bids)} bands {category!r}"
+            if category
+            else f"clear the labels of {len(bids)} bands"
+        )
+        return self._apply(what, removed, added)
+
     def set_note(self, bid: int, note: str) -> Edit:
         band = self._bands[int(bid)]
         return self._apply(

@@ -1,35 +1,68 @@
-"""Finding bands to curate: peaks per frame, linked across frames.
+"""Finding bands to curate: fundamentals per frame, linked across frames.
+
+Two ways of answering "what is in this frame", and one way of joining the
+answers up.
+
+**Harmonic groups**, and the default, from `thunderfish.harmonics`: the same
+finder wavetracker itself uses.  It groups a peak with its own multiples and
+reports the *fundamental*, so a fish with four audible harmonics is one band
+rather than four, and it identifies the mains and its partials separately so
+a 50 Hz hum is not tracked as a fish.  `harmonic_frames`.
+
+**Strongest peaks**, the fallback: every local maximum that stands far enough
+above the noise, with no notion of harmonics at all.  It is what runs when
+thunderfish is not installed, and it is the honest choice for a signal that
+has no harmonic structure to group -- but on the reference recording it
+returned 62, 124, 187 and 249 Hz as four separate tracks of one animal, which
+is what the reader would then have had to undo by hand.  `peaks_of_block`.
+
+`link` joins either one's output into bands.
 
 Curation needs something to curate.  wavetracker produces bands of its own
-and `wavetracker_npy` imports them, but that is a directory a reader either
-has or does not, and a plugin that can only open somebody else's output
-cannot be tried at all on an ordinary recording -- which is most of them, and
-all of the ones in this repository.  So there is a tracker here.
+and `wavetracker` imports them, but that is a directory a reader either has
+or does not, and a plugin that can only open somebody else's output cannot be
+tried on an ordinary recording -- which is most of them, and all of the ones
+in this repository.
 
-It is deliberately a small one, and says so on screen.  Two stages:
+Why the peak finder is still here
+---------------------------------
+
+thunderfish is a dependency of this plugin and not of audian, so an
+installation without it must still work; `harmonics_available` is what the
+panel asks, and the peak finder is what it falls back to.  It is also the
+right answer for a signal with no harmonic structure to group.
 
 **Peaks.**  In each spectrogram frame, the local maxima that stand far enough
-above that frame's own median power.  Per-frame rather than global because a
-recording gets louder and quieter -- a gain change, an animal approaching --
-and a single global threshold either loses the quiet half or fills the loud
-half with noise.
+above that frame's own median power *and* above a floor drawn from the whole
+block.  Per-frame because a recording gets louder and quieter -- a gain
+change, an animal approaching -- and a single global threshold either loses
+the quiet half or fills the loud half with noise; the block floor because a
+per-frame threshold alone promotes the loudest noise of a silent frame, which
+is measured in `frame_peaks`.
 
-**Links.**  Each peak joins the band whose last frequency is nearest, if that
-is within `tolerance_hz`, and starts a new band otherwise.  A band that has
-had no peak for longer than `max_gap_s` is closed, so a signal that stops and
-restarts becomes two bands rather than one with a bridge across silence -- the
-conservative way round, because merging two bands is one keystroke here and
-un-merging a wrong bridge is a split at a place nobody can see.
+**Links.**  Each fundamental joins the band whose last frequency is nearest,
+if that is within `tolerance_hz`, and starts a new band otherwise.  A band
+that has gone unseen for longer than `max_gap_s` is closed, so a signal that
+stops and restarts becomes two bands rather than one bridged across silence
+-- the conservative way round, because merging two bands is one click here
+and un-merging a wrong bridge is a split at a place nobody can see.
 
 What it is not
 --------------
 
-Not a claim to be right.  It is greedy and nearest-neighbour, so it swaps
-identity when two bands cross -- the single hardest case, and the one this
-whole interface exists to let a reader fix by hand.  It does not follow
-harmonics, weight by amplitude continuity, or look ahead.  wavetracker's own
-tracker does considerably more and its output should be preferred when it
-exists.
+Not a claim to be right, and it does not need to be: everything here feeds an
+interface whose purpose is a person correcting it.
+
+`link` is greedy and nearest-neighbour, so it swaps identity where two bands
+cross and it does not weight by amplitude continuity or look ahead.  That is
+the single hardest case in tracking and the one this whole plugin exists to
+let a reader repair -- on the reference recording two Eigenmannia pass within
+1 Hz of each other, and the truth file says outright that they are "separable
+only by the per-electrode amplitude signature", which is a tracking problem
+and not a curation one.
+
+wavetracker's own tracker does considerably more, and its output should be
+preferred when it exists: `wavetracker.import_directory` is how.
 
 Nothing here imports Qt, and the only audian import is the cancellation
 vocabulary, so it can be exercised without a window and interrupted with one.
@@ -176,6 +209,170 @@ def peaks_of_block(
     return frames
 
 
+#: Mains frequency thunderfish is told to discount, in Hz.
+#:
+#: 50 rather than thunderfish's own default of 60, because this is a
+#: European laboratory's tool and the recordings it is aimed at were made
+#: beside 50 Hz wiring.  It is a control on the panel, and "off" is one of
+#: its entries -- a tank running on batteries has no hum to discount and
+#: discounting one throws away a real fish at that frequency.
+DEFAULT_MAINS_HZ = 50.0
+
+#: How many harmonics a group must have before it is believed.
+#:
+#: Three, which is thunderfish's own default, and it was measured rather
+#: than inherited.  Two was tried first, on the argument that a group here is
+#: only a candidate a reader is about to look at and that a fundamental
+#: missed where its third harmonic dipped below the floor is a band broken
+#: into pieces somebody must merge.  What two actually does is invent fish in
+#: noise: on eight seconds of a single 62 Hz tone in white noise it reported
+#: fundamentals at 464, 553, 617 and 755 Hz alongside the real one, groups
+#: assembled out of two coincidental peaks.  A fragmented band costs one
+#: click to repair and a phantom costs a reader deciding whether it is real.
+DEFAULT_MIN_GROUP_SIZE = 3
+
+#: Lowest fundamental to look for.  Above zero because the very bottom of a
+#: spectrogram is DC and drift rather than signal.
+DEFAULT_MIN_HZ = 20.0
+
+
+def harmonics_available() -> bool:
+    """Whether thunderfish's harmonic group finder can be imported.
+
+    Checked rather than assumed: thunderfish is a dependency of this plugin
+    and not of audian, so an audian installed without the extra still opens
+    every recording and still curates bands -- it just finds them with
+    `peaks_of_block` instead, and the panel says so rather than raising an
+    ImportError at the reader.
+    """
+    try:
+        from thunderfish.harmonics import harmonic_groups  # noqa: F401
+    except Exception:  # noqa: BLE001 - an optional dependency, absent is fine
+        return False
+    return True
+
+
+def harmonic_frames(
+    times,
+    freqs,
+    power,
+    mains_hz=DEFAULT_MAINS_HZ,
+    min_hz=DEFAULT_MIN_HZ,
+    max_hz=2000.0,
+    min_group_size=DEFAULT_MIN_GROUP_SIZE,
+    max_peaks=DEFAULT_MAX_PEAKS,
+    token: CancelToken | None = None,
+):
+    """One block's *fundamentals*, frame by frame, via thunderfish.
+
+    The same shape as `peaks_of_block` -- ``(time, frequencies)`` per frame,
+    ready for `link` -- and a much better answer to the same question.
+
+    `peaks_of_block` finds every strong peak, so one fish with four audible
+    harmonics becomes four bands: on the reference recording it returned 62,
+    124, 187 and 249 Hz as separate tracks of the same animal, and the
+    reader's first job was deleting three of them.  `harmonic_groups` groups
+    a peak with its own multiples and reports the *fundamental*, so that fish
+    is one band.  It also identifies the mains and its harmonics separately,
+    which is what keeps a 50 Hz hum and its 100 and 150 Hz partials from
+    being tracked as three fish.
+
+    **`power` is linear**, not decibels: `harmonic_groups` takes its own
+    logarithm, and handing it a spectrogram already in dB makes every
+    threshold in it meaningless.  This is the one place in the plugin where
+    the un-logged spectrogram is wanted, and it is why the panel keeps it.
+
+    ``max_freq`` bounds the *fundamental*, not the spectrum: a harmonic above
+    it is still used as evidence for a group whose fundamental is below it,
+    which is the whole point of grouping.
+    """
+    from thunderfish.harmonics import fundamental_freqs, harmonic_groups
+
+    times = np.asarray(times, dtype=np.float64)
+    freqs = np.asarray(freqs, dtype=np.float64)
+    power = np.asarray(power, dtype=np.float64)
+    if power.shape != (times.size, freqs.size):
+        raise ValueError(
+            f"power is {power.shape} but there are {times.size} times and "
+            f"{freqs.size} frequencies"
+        )
+    kwargs = dict(
+        min_freq=float(min_hz),
+        max_freq=float(max_hz),
+        min_group_size=int(min_group_size),
+        max_groups=int(max_peaks),
+    )
+    if mains_hz and mains_hz > 0:
+        kwargs["mains_freq"] = float(mains_hz)
+    else:
+        # 0 is how thunderfish is told there is no mains to discount
+        kwargs["mains_freq"] = 0.0
+
+    frames = []
+    for i in range(times.size):
+        if token is not None:
+            token.check()
+        try:
+            groups = harmonic_groups(freqs, power[i], **kwargs)[0]
+        except Exception:  # noqa: BLE001 - one bad frame, not the whole sweep
+            continue
+        if not len(groups):
+            continue
+        found = np.asarray(fundamental_freqs(groups), dtype=np.float64).ravel()
+        if not found.size:
+            continue
+        refined = np.array(
+            [
+                refine_fundamental(freqs, power[i], group, f0)
+                for group, f0 in zip(groups, found)
+            ]
+        )
+        frames.append((float(times[i]), np.sort(refined)))
+    return frames
+
+
+def refine_fundamental(freqs, frame, group, f0: float) -> float:
+    """`f0` again, off the frequency grid.
+
+    A fundamental from `harmonic_groups` is built out of peaks that sit on
+    spectrogram *bins*, so it lands on a grid of ``df / n`` for whichever
+    harmonic ``n`` it was derived from.  On the reference recording that is
+    0.24 Hz, against a fish whose frequency drifts over about 2 Hz -- so the
+    band drawn from it climbs in visible stair-steps and reads as the animal
+    jumping rather than the analysis rounding.
+
+    The fix is the same parabola `refine` fits for the peak finder, applied
+    to the group's **strongest** harmonic rather than to the fundamental
+    itself: the higher harmonic has the better signal to noise of the two and
+    its absolute error is divided by its own number on the way back down, so
+    the estimate is finer than the bin spacing rather than tied to it.
+
+    Falls back to `f0` unchanged whenever the arithmetic cannot be trusted --
+    a harmonic off the end of the block, a flat top, an unusable order.
+    """
+    group = np.asarray(group, dtype=np.float64)
+    if group.ndim != 2 or group.shape[0] == 0 or f0 <= 0:
+        return float(f0)
+    strongest = int(np.argmax(group[:, 1])) if group.shape[1] > 1 else 0
+    hz = float(group[strongest, 0])
+    order = int(round(hz / f0))
+    if order < 1 or hz <= 0:
+        return float(f0)
+    index = int(np.argmin(np.abs(freqs - hz)))
+    if index < 1 or index >= freqs.size - 1:
+        return float(f0)
+    position = refine(frame, index)
+    hz_refined = float(np.interp(position, np.arange(freqs.size), freqs))
+    if hz_refined <= 0:
+        return float(f0)
+    estimate = hz_refined / order
+    # A refinement that moves the answer by more than half a bin of the
+    # fundamental is not a refinement; it means the order was wrong.
+    if abs(estimate - f0) > 0.5 * abs(freqs[1] - freqs[0]):
+        return float(f0)
+    return estimate
+
+
 def block_floor(power_db, threshold_db=DEFAULT_THRESHOLD_DB):
     """The absolute floor a peak must clear, from a whole block's median."""
     power_db = np.asarray(power_db, dtype=np.float64)
@@ -199,6 +396,25 @@ def link(
     by start time, which is the order a reader reads them in and therefore
     the order the table shows.
     """
+    frames = list(frames)
+    # A band is closed when it has gone *unseen* for longer than max_gap_s,
+    # and the ordinary spacing between two frames is not it being unseen.
+    # Comparing the bare elapsed time against max_gap_s made the spectrogram's
+    # own hop count as a gap, so a max_gap_s below one hop closed every band
+    # after a single frame and the tracker returned nothing at all -- with no
+    # setting on the panel that explained why.  Measured on a 0.512 s hop, a
+    # 0.5 s gap found 28 fundamentals and produced 0 bands.
+    #
+    # So the hop is measured and added, which also gives max_gap_s = 0 the
+    # meaning a reader would expect: join consecutive frames, bridge nothing.
+    spacing = 0.0
+    if len(frames) > 1:
+        steps = np.diff([float(t) for t, _hz in frames])
+        steps = steps[steps > 0]
+        if steps.size:
+            spacing = float(np.median(steps))
+    close_after = float(max_gap_s) + spacing
+
     #: open bands, each ``[times, freqs, last_time, last_freq]``
     open_bands: list = []
     closed: list = []
@@ -210,7 +426,7 @@ def link(
         # cannot capture this frame's peak from a band that is still live.
         still_open = []
         for band in open_bands:
-            if now - band[2] > max_gap_s:
+            if now - band[2] > close_after:
                 closed.append(band)
             else:
                 still_open.append(band)

@@ -136,6 +136,19 @@ def test_an_unambiguous_merge_asks_nothing():
     assert B.merge_conflicts(list(store)) == []
 
 
+def test_labelling_a_selection_is_one_undo_step():
+    """Every multi-band edit is one step; this was the one that was not."""
+    store = B.BandSet()
+    for i in range(4):
+        store.add(*steady(t0=10.0 * i, t1=10.0 * i + 5.0))
+    store.forget_history()
+    store.set_category_many(store.ids(), "male")
+    assert [b.category for b in store] == ["male"] * 4
+    store.undo()
+    assert [b.category for b in store] == [""] * 4
+    assert not store.can_undo(), "it must have been a single step"
+
+
 def test_redo_is_dropped_when_a_new_edit_branches():
     store = B.BandSet()
     store.add(*steady())
@@ -301,6 +314,18 @@ def test_the_tracker_separates_two_tones():
     assert abs(centres[0] - 300.0) < 10.0 and abs(centres[1] - 700.0) < 10.0
 
 
+def test_a_gap_shorter_than_the_frame_spacing_still_links():
+    """The frame spacing is not the band going unseen.
+
+    Comparing bare elapsed time against `max_gap_s` made the spectrogram's
+    own hop count as a gap, so any gap below one hop closed every band after
+    a single frame and the tracker returned nothing -- with no setting on the
+    panel that explained why.
+    """
+    frames = [(i * 0.5, np.array([500.0])) for i in range(10)]
+    assert T.link(frames, tolerance_hz=5.0, max_gap_s=0.0, min_duration_s=1.0)
+
+
 def test_a_tone_that_stops_and_restarts_becomes_two_bands():
     """The conservative way round: merging is one gesture, unbridging is not."""
     times, freqs, power = spectrogram_of(
@@ -320,6 +345,120 @@ def test_the_global_floor_keeps_the_silences_empty():
     found = T.track(times, freqs, power, threshold_db=12.0, tolerance_hz=20.0,
                     max_gap_s=0.1, min_duration_s=0.3)
     assert len(found) == 1, f"the silent half produced {len(found) - 1} phantoms"
+
+
+# ------------------------------------------------- the harmonic group finder
+
+
+def harmonic_spectrogram(fundamentals, duration=8.0, rate=4000.0, nfft=4096,
+                         n_harmonics=4, noise=0.01):
+    """A real spectrogram of a synthetic signal, in *linear* power.
+
+    A signal and then a transform of it, rather than spikes painted into an
+    array: `harmonic_groups` estimates its own thresholds from the shape of
+    the noise floor, and a floor of uniform random numbers with delta
+    functions standing on it is not a shape any recording has -- it produced
+    fundamentals at 248 and 386 Hz from one 62 Hz fish.
+    """
+    from thunderlab.powerspectrum import spectrogram
+
+    t = np.arange(0.0, duration, 1.0 / rate)
+    rng = np.random.default_rng(7)
+    signal = rng.normal(0.0, noise, t.size)
+    for f0 in fundamentals:
+        for h in range(1, n_harmonics + 1):
+            if f0 * h >= 0.45 * rate:
+                break
+            signal += (1.0 / h) * np.sin(2 * np.pi * f0 * h * t)
+    freqs, times, spec = spectrogram(
+        signal, rate, freq_resolution=rate / nfft, overlap_frac=0.5
+    )
+    return times, freqs, spec.T
+
+
+def test_harmonics_are_available_here():
+    """thunderfish is this plugin's dependency; the suite pins that it loads."""
+    assert T.harmonics_available(), "thunderfish is not installed"
+
+
+def test_a_fish_with_harmonics_is_one_band_not_four():
+    """The reason the harmonic finder is the default.
+
+    `peaks_of_block` returns every strong peak, so one fish with four
+    audible harmonics becomes four tracks and the reader's first job is
+    deleting three of them.
+    """
+    pytest.importorskip("thunderfish")
+    times, freqs, power = harmonic_spectrogram([62.0])
+    frames = T.harmonic_frames(times, freqs, power, mains_hz=0.0,
+                               min_hz=20.0, max_hz=1000.0)
+    assert frames, "no fundamentals found at all"
+    found = np.concatenate([hz for _t, hz in frames])
+    # the fundamental itself, in most frames
+    hits = np.abs(found - 62.0) < 3.0
+    assert hits.sum() >= 0.5 * len(frames), f"62 Hz found in only {hits.sum()} frames"
+    # and none of its own multiples reported as a fundamental of their own,
+    # which is exactly what the peak finder does and why this is the default
+    for h in (2, 3, 4):
+        near = np.abs(found - 62.0 * h) < 3.0
+        assert not near.any(), f"harmonic {h} came back as a fundamental"
+
+
+def test_two_fish_are_two_fundamentals():
+    pytest.importorskip("thunderfish")
+    times, freqs, power = harmonic_spectrogram([62.0, 287.0])
+    frames = T.harmonic_frames(times, freqs, power, mains_hz=0.0,
+                               min_hz=20.0, max_hz=1000.0)
+    # a gap wide enough to bridge the frames where the weaker fish's third
+    # harmonic dips under the floor -- which is what the panel's Max gap is
+    # for, and why its default is a second rather than a hop
+    bands = T.link(frames, tolerance_hz=8.0, max_gap_s=2.0, min_duration_s=0.5)
+    centres = sorted(float(np.median(f)) for _t, f in bands)
+    assert len(bands) == 2, f"expected two bands, got {centres}"
+    assert abs(centres[0] - 62.0) < 4.0 and abs(centres[1] - 287.0) < 6.0
+
+
+def test_the_fundamental_is_not_pinned_to_the_frequency_grid():
+    """A band must be able to move by less than a bin.
+
+    `harmonic_groups` builds its fundamental from peaks that sit on bins, so
+    without refinement it lands on a grid of ``df / n`` and a drifting fish
+    is reported at one constant frequency -- the modulation is quantised
+    away, and the line drawn from it climbs in visible steps.
+    """
+    pytest.importorskip("thunderfish")
+    times, freqs, power = harmonic_spectrogram([62.0])
+    frames = T.harmonic_frames(times, freqs, power, mains_hz=0.0,
+                               min_hz=20.0, max_hz=1000.0)
+    found = np.concatenate([hz for _t, hz in frames])
+    near = found[np.abs(found - 62.0) < 3.0]
+    assert near.size > 4
+    df = float(freqs[1] - freqs[0])
+    off_grid = np.abs(near / df - np.round(near / df))
+    assert off_grid.max() > 1e-6, "every value sits exactly on a bin"
+
+
+def test_refinement_never_moves_a_fundamental_more_than_half_a_bin():
+    """A refinement that big means the harmonic order was wrong."""
+    freqs = np.linspace(0.0, 1000.0, 1001)
+    frame = np.zeros(freqs.size)
+    frame[124] = 10.0
+    group = np.array([[62.0, 1.0], [124.0, 9.0]])
+    out = T.refine_fundamental(freqs, frame, group, 62.0)
+    assert abs(out - 62.0) <= 0.5 * (freqs[1] - freqs[0])
+
+
+def test_a_degenerate_group_refines_to_itself():
+    freqs = np.linspace(0.0, 1000.0, 1001)
+    frame = np.zeros(freqs.size)
+    assert T.refine_fundamental(freqs, frame, np.zeros((0, 2)), 62.0) == 62.0
+    assert T.refine_fundamental(freqs, frame, np.array([[0.0, 0.0]]), 0.0) == 0.0
+
+
+def test_the_harmonic_finder_refuses_a_mismatched_block():
+    pytest.importorskip("thunderfish")
+    with pytest.raises(ValueError, match="but there are"):
+        T.harmonic_frames(np.zeros(5), np.zeros(7), np.zeros((5, 9)))
 
 
 def test_the_tracker_refuses_a_mismatched_block():
@@ -464,6 +603,22 @@ def test_joined_separates_polylines_with_a_break():
                    (np.array([2.0, 3.0]), np.array([7.0, 7.0]))])
     assert x.size == 5 and np.isnan(x[2])
     assert not np.isnan(x[-1]), "a trailing separator poisons the bounding box"
+
+
+def test_the_selection_colour_opposes_the_map_and_never_vanishes():
+    """Derived from the map, so it is right for all eight of them."""
+    from PySide6.QtGui import QColor
+
+    from audian_plugins.frequencybands.overlay import (
+        ACHROMATIC_SELECTION,
+        opposed,
+    )
+
+    # a hue gets its opposite
+    assert opposed(QColor("#ffff00")).lower() == "#0000ff"
+    # white and black have no hue to oppose, and must not yield themselves
+    for flat in ("#ffffff", "#000000", "#fcf9f3"):
+        assert opposed(QColor(flat)).upper() == ACHROMATIC_SELECTION
 
 
 def test_decimation_bounds_the_points_drawn():
