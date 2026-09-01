@@ -4,6 +4,7 @@ import numpy as np
 
 from thunderlab.powerspectrum import decibel, spectrogram
 
+from . import denoise
 from .buffereddata import BufferedData
 from .tasks.tokens import NEVER
 
@@ -77,6 +78,12 @@ class BufferedSpectrogram(BufferedData):
         self.nfft = nfft
         self.hop = 0
         self.overlap_frac = overlap_frac
+        #: Which entry of `denoise.DENOISERS` runs on each chunk, and the
+        #: two numbers it takes.  Held as the key rather than the object so
+        #: that the value is something a settings file can carry.
+        self.denoiser_key = denoise.NONE_KEY
+        self.denoise_threshold_db = denoise.DEFAULT_THRESHOLD_DB
+        self.denoise_softness_db = denoise.DEFAULT_SOFTNESS_DB
         self.set_hop()
         self.frequencies = np.zeros(0)
         self.fresolution = 1
@@ -127,6 +134,10 @@ class BufferedSpectrogram(BufferedData):
             nsource = len(source)
         extra = {}
         written = 0
+        # Read once, not per chunk: a denoiser swapped mid-buffer would
+        # leave the two halves treated differently, which is the same
+        # hazard `DataBrowser.request_recompute` joins the worker to avoid.
+        apply_denoiser = denoise.denoiser(self.denoiser_key).apply
         if nsource >= self.nfft:
             with np.errstate(under="ignore"):
                 while written < ndest:
@@ -147,7 +158,14 @@ class BufferedSpectrogram(BufferedData):
                     n = min(Sxx.shape[1], ndest - written)
                     if n < 1:
                         break
-                    dest[written : written + n] = Sxx.transpose((1, 2, 0))[:n]
+                    block = Sxx.transpose((1, 2, 0))[:n]
+                    if apply_denoiser is not None:
+                        block = apply_denoiser(
+                            block,
+                            self.denoise_threshold_db,
+                            self.denoise_softness_db,
+                        )
+                    dest[written : written + n] = block
                     written += n
                     extra["frequencies"] = freq
                     if progress is not None:
@@ -184,11 +202,31 @@ class BufferedSpectrogram(BufferedData):
         else:
             return False
 
-    def update(self, nfft=None, overlap_frac=None):
-        if self.prepare_update(nfft, overlap_frac):
+    def update(
+        self,
+        nfft=None,
+        overlap_frac=None,
+        denoiser_key=None,
+        denoise_threshold_db=None,
+        denoise_softness_db=None,
+    ):
+        if self.prepare_update(
+            nfft,
+            overlap_frac,
+            denoiser_key,
+            denoise_threshold_db,
+            denoise_softness_db,
+        ):
             self.recompute_all()
 
-    def prepare_update(self, nfft=None, overlap_frac=None) -> bool:
+    def prepare_update(
+        self,
+        nfft=None,
+        overlap_frac=None,
+        denoiser_key=None,
+        denoise_threshold_db=None,
+        denoise_softness_db=None,
+    ) -> bool:
         spec_update = False
         if nfft is not None:
             if nfft < 8:
@@ -211,7 +249,42 @@ class BufferedSpectrogram(BufferedData):
             self.tresolution = self.hop / self.source.rate
             self.fresolution = self.source.rate / self.nfft
             self.update_step(self.hop, more_shape=(self.nfft // 2 + 1,))
-        return spec_update
+
+        # A denoiser change leaves the buffer's shape alone -- same nfft,
+        # same hop -- so it must not go through `update_step()`, but the
+        # contents are stale and have to be transformed again.  Hence a
+        # second flag rather than folding it into `spec_update`.
+        denoiser_changed = False
+        params_changed = False
+        if denoiser_key is not None and denoiser_key != self.denoiser_key:
+            self.denoiser_key = denoise.denoiser(denoiser_key).key
+            denoiser_changed = True
+        if denoise_threshold_db is not None:
+            value = float(
+                np.clip(
+                    denoise_threshold_db,
+                    denoise.MIN_THRESHOLD_DB,
+                    denoise.MAX_THRESHOLD_DB,
+                )
+            )
+            if value != self.denoise_threshold_db:
+                self.denoise_threshold_db = value
+                params_changed = True
+        if denoise_softness_db is not None:
+            value = float(max(0.0, denoise_softness_db))
+            if value != self.denoise_softness_db:
+                self.denoise_softness_db = value
+                params_changed = True
+
+        # Switching denoisers always needs the buffer redone -- including
+        # switching *back* to None, which is the recompute that undoes the
+        # denoising.  Stepping a parameter only needs it when a denoiser is
+        # actually running: with None selected the number changes what a
+        # later switch will do, not the picture in front of the reader.
+        active = denoise.denoiser(self.denoiser_key).apply is not None
+        denoise_update = denoiser_changed or (params_changed and active)
+
+        return spec_update or denoise_update
 
     def visible_slice(self, t0: float, t1: float) -> tuple[int, int]:
         """Index range of `[t0, t1]` within the current buffer.

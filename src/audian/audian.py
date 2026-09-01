@@ -31,7 +31,7 @@ from PIL.PngImagePlugin import PngInfo
 from audioio.audioconverter import parse_load_kwargs
 from audioio import available_formats, PlayAudio, AudioLoader
 
-from . import theme
+from . import denoise, theme
 from .version import __version__, __year__, audian_dirs
 from .databrowser import ANNOTATION_SURFACE_TIPS, DataBrowser
 from .eventoverlay import SURFACE_LABELS, SURFACE_ORDER
@@ -1508,6 +1508,8 @@ class CheatSheet(QDialog):
                 "overlap_up",
                 "overlap_down",
                 "color_map_cycler",
+                "denoise_threshold_up",
+                "denoise_threshold_down",
                 "power_up",
                 "power_down",
                 "max_power_up",
@@ -3994,6 +3996,40 @@ class Audian(QMainWindow):
         if browser is not None and hasattr(browser, "set_peaking"):
             browser.set_peaking(checked)
 
+    def choose_denoiser(self, key: str) -> None:
+        """A radio item in Spectrogram > Denoising was picked."""
+        browser = self.browser()
+        if browser is not None and hasattr(browser, "set_denoiser"):
+            browser.set_denoiser(key)
+            # The browser refuses a denoiser it has too few channels for,
+            # and Qt has already moved the tick by the time we hear about
+            # it -- so put the tick back where the data says it is.
+            self.sync_denoise_actions(browser)
+
+    def sync_denoise_actions(self, browser) -> None:
+        """Point the Denoising radio list at what `browser` is running.
+
+        Called from `adapt_menu`, because the choice belongs to a browser
+        and not to the window: switching tabs has to move the tick, and an
+        entry that needs more channels than the newly shown recording has
+        must go grey rather than silently fail when picked.
+        """
+        if not isinstance(browser, DataBrowser) or browser.data is None:
+            return
+        active = browser.current_denoiser()
+        for entry in denoise.DENOISERS:
+            act = self.acts.denoisers.get(entry.key)
+            if act is None:
+                continue
+            usable = browser.denoiser_usable(entry.key)
+            act.setEnabled(usable)
+            blocked = act.blockSignals(True)
+            act.setChecked(entry.key == active)
+            act.blockSignals(blocked)
+        running = denoise.denoiser(active).apply is not None
+        self.acts.denoise_threshold_up.setEnabled(running)
+        self.acts.denoise_threshold_down.setEnabled(running)
+
     def dispatch_peaking(self):
         """Every tab agrees about peaking; see `dispatch_smoothing`."""
         on = self.browser().spec_peaking
@@ -4100,6 +4136,50 @@ class Audian(QMainWindow):
         )
         self.acts.toggle_peaking.toggled.connect(self.toggle_peaking)
 
+        # One checkable action per registry entry, in an exclusive group --
+        # a radio list, because denoisers are alternatives and not layers
+        # to be combined.  Built from `denoise.DENOISERS` rather than
+        # written out, so a new denoiser appears here by being registered.
+        self.denoise_group = QActionGroup(self)
+        self.denoise_group.setExclusive(True)
+        self.acts.denoisers = {}
+        for entry in denoise.DENOISERS:
+            act = QAction(entry.name, self)
+            act.setCheckable(True)
+            act.setChecked(entry.key == denoise.NONE_KEY)
+            if entry.tip:
+                act.setToolTip(entry.tip)
+                act.setStatusTip(entry.tip)
+            act.triggered.connect(
+                lambda checked, key=entry.key: self.choose_denoiser(key)
+            )
+            self.denoise_group.addAction(act)
+            self.acts.denoisers[entry.key] = act
+            # Also in the attribute bag under a generated name, so
+            # `tests/test_actioninventory` pins each entry's menu path and
+            # text.  Registering a new denoiser then shows up as a diff in
+            # the golden file, which is the review it should get.  The dict
+            # stays because it is what the sync code looks up by key.
+            setattr(self.acts, f"denoiser_{entry.key}", act)
+
+        self.acts.denoise_threshold_up = QAction("Increase denoising", self)
+        self.acts.denoise_threshold_up.setShortcut("Shift+U")
+        self.acts.denoise_threshold_up.setToolTip(
+            "Raise the spread a bin must show across electrodes to be kept"
+        )
+        self.acts.denoise_threshold_up.triggered.connect(
+            lambda x: self.browser().denoise_threshold_up()
+        )
+
+        self.acts.denoise_threshold_down = QAction("Decrease denoising", self)
+        self.acts.denoise_threshold_down.setShortcut("U")
+        self.acts.denoise_threshold_down.setToolTip(
+            "Lower the spread a bin must show across electrodes to be kept"
+        )
+        self.acts.denoise_threshold_down.triggered.connect(
+            lambda x: self.browser().denoise_threshold_down()
+        )
+
         self.acts.link_power = QAction("Link &power", self)
         self.acts.link_power.setShortcut("Alt+P")
         self.acts.link_power.setCheckable(True)
@@ -4178,6 +4258,15 @@ class Audian(QMainWindow):
         spec_menu.addAction(self.acts.overlap_down)
         spec_menu.addAction(self.acts.color_map_cycler)
         spec_menu.addAction(self.acts.toggle_peaking)
+
+        self.denoise_menu = spec_menu.addMenu("De&noising")
+        for entry in denoise.DENOISERS:
+            self.denoise_menu.addAction(self.acts.denoisers[entry.key])
+        self.denoise_menu.addSeparator()
+        self.denoise_menu.addAction(self.acts.denoise_threshold_up)
+        self.denoise_menu.addAction(self.acts.denoise_threshold_down)
+        self.data_menus.append(self.denoise_menu)
+
         spec_menu.addSeparator()
         spec_menu.addAction(self.acts.link_power)
         spec_menu.addAction(self.acts.power_up)
@@ -5252,6 +5341,7 @@ class Audian(QMainWindow):
             self.spectrogram_menu.menuAction().setVisible(len(browser.spec_acts) > 1)
             self.relabel_axis_actions(browser)
             self.sync_annotation_actions(browser)
+            self.sync_denoise_actions(browser)
             self.sync_side_panel(browser)
             browser.update()
         self.sync_toolbar(browser)

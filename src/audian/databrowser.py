@@ -40,7 +40,7 @@ from audioio import update_starttime
 from audioio import bext_history_str, add_history
 from thunderlab.datawriter import available_formats, write_data
 
-from . import smoothing, theme
+from . import denoise, smoothing, theme
 from .data import Data
 from .panels import Panel, Panels, peaking_colormap
 from .panelsplitter import PanelSplitter
@@ -9016,6 +9016,81 @@ class DataBrowser(QWidget):
         if self.spectrogram in self.data:
             hop_frac = 1 - self.current_overlap()
             self.update_resolution(overlap_frac=1 - hop_frac * 2)
+
+    def current_denoiser(self) -> str:
+        """Key of the denoiser the spectrogram is running, or "none"."""
+        if not self.spectrogram or self.spectrogram not in self.data:
+            return denoise.NONE_KEY
+        return self.data[self.spectrogram].denoiser_key
+
+    def current_denoise_threshold(self) -> float:
+        if not self.spectrogram or self.spectrogram not in self.data:
+            return denoise.DEFAULT_THRESHOLD_DB
+        return self.data[self.spectrogram].denoise_threshold_db
+
+    def denoiser_usable(self, key: str) -> bool:
+        """Whether `key` has the channels it needs on this recording.
+
+        Asked by the menu so an entry that cannot work is shown greyed
+        rather than left out: a reader opening a mono file should be able
+        to see that spatial coherence exists and why it is unavailable,
+        not wonder where the menu item went.
+        """
+        return self.data.channels >= denoise.denoiser(key).min_channels
+
+    def set_denoiser(self, key: str, dispatch: bool = True) -> None:
+        """Run `key` on the spectrogram, or nothing if it is "none".
+
+        Not debounced, unlike `update_resolution`: choosing from a menu is
+        one event, not the burst of them a dragged slider emits, so the
+        coalescing timer would only add latency.
+        """
+        if self.setting:
+            return
+        if not self.spectrogram or self.spectrogram not in self.data:
+            return
+        if not self.denoiser_usable(key):
+            self.notify(
+                "warning",
+                f"{denoise.denoiser(key).name.replace('&', '')} needs at "
+                f"least {denoise.denoiser(key).min_channels} channels; "
+                f"this recording has {self.data.channels}",
+            )
+            return
+        with self.updating():
+            self.request_recompute(
+                self.data[self.spectrogram], denoiser_key=key
+            )
+        if dispatch:
+            self.notify(
+                "info",
+                f"spectrogram denoising: "
+                f"{denoise.denoiser(key).name.replace('&', '')}",
+            )
+
+    def step_denoise_threshold(self, delta_db: float) -> None:
+        """Move the gate by `delta_db` and say where it landed.
+
+        The threshold has no widget in the parameter bar, so the message
+        is the only feedback there is -- without it the reader is stepping
+        a number they cannot see.
+        """
+        if not self.spectrogram or self.spectrogram not in self.data:
+            return
+        spectrogram = self.data[self.spectrogram]
+        value = spectrogram.denoise_threshold_db + delta_db
+        with self.updating():
+            self.request_recompute(spectrogram, denoise_threshold_db=value)
+        self.notify(
+            "info",
+            f"denoising threshold {spectrogram.denoise_threshold_db:.0f} dB",
+        )
+
+    def denoise_threshold_up(self):
+        self.step_denoise_threshold(denoise.THRESHOLD_STEP_DB)
+
+    def denoise_threshold_down(self):
+        self.step_denoise_threshold(-denoise.THRESHOLD_STEP_DB)
 
     def set_color_map(
         self, color_map=None, dispatch: bool = True, save: bool = True
