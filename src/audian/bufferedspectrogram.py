@@ -4,6 +4,7 @@ import numpy as np
 
 from thunderlab.powerspectrum import decibel, spectrogram
 
+from . import denoise
 from .buffereddata import BufferedData
 from .tasks.tokens import NEVER
 
@@ -77,6 +78,13 @@ class BufferedSpectrogram(BufferedData):
         self.nfft = nfft
         self.hop = 0
         self.overlap_frac = overlap_frac
+        #: Which registered denoisers run on each chunk, and what
+        #: each of them is set to.  Keys and plain numbers rather than
+        #: objects, so both are things a settings file can carry.  Every
+        #: denoiser keeps its parameters whether or not it is enabled, so
+        #: that turning one off and on again does not reset it.
+        self.denoisers = ()
+        self.denoise_params = denoise.defaults()
         self.set_hop()
         self.frequencies = np.zeros(0)
         self.fresolution = 1
@@ -127,6 +135,11 @@ class BufferedSpectrogram(BufferedData):
             nsource = len(source)
         extra = {}
         written = 0
+        # Read once, not per chunk: a denoiser swapped mid-buffer would
+        # leave the two halves treated differently, which is the same
+        # hazard `DataBrowser.request_recompute` joins the worker to avoid.
+        enabled = denoise.ordered(self.denoisers)
+        params = {k: dict(v) for k, v in self.denoise_params.items()}
         if nsource >= self.nfft:
             with np.errstate(under="ignore"):
                 while written < ndest:
@@ -147,7 +160,12 @@ class BufferedSpectrogram(BufferedData):
                     n = min(Sxx.shape[1], ndest - written)
                     if n < 1:
                         break
-                    dest[written : written + n] = Sxx.transpose((1, 2, 0))[:n]
+                    block = Sxx.transpose((1, 2, 0))[:n]
+                    if enabled:
+                        block = denoise.apply_chain(
+                            block, freq, enabled, params
+                        )
+                    dest[written : written + n] = block
                     written += n
                     extra["frequencies"] = freq
                     if progress is not None:
@@ -184,11 +202,18 @@ class BufferedSpectrogram(BufferedData):
         else:
             return False
 
-    def update(self, nfft=None, overlap_frac=None):
-        if self.prepare_update(nfft, overlap_frac):
+    def update(self, nfft=None, overlap_frac=None, denoisers=None,
+               denoise_params=None):
+        if self.prepare_update(nfft, overlap_frac, denoisers, denoise_params):
             self.recompute_all()
 
-    def prepare_update(self, nfft=None, overlap_frac=None) -> bool:
+    def prepare_update(
+        self,
+        nfft=None,
+        overlap_frac=None,
+        denoisers=None,
+        denoise_params=None,
+    ) -> bool:
         spec_update = False
         if nfft is not None:
             if nfft < 8:
@@ -211,7 +236,44 @@ class BufferedSpectrogram(BufferedData):
             self.tresolution = self.hop / self.source.rate
             self.fresolution = self.source.rate / self.nfft
             self.update_step(self.hop, more_shape=(self.nfft // 2 + 1,))
-        return spec_update
+
+        # A denoiser change leaves the buffer's shape alone -- same nfft,
+        # same hop -- so it must not go through `update_step()`, but the
+        # contents are stale and have to be transformed again.  Hence a
+        # second flag rather than folding it into `spec_update`.
+        chain_changed = False
+        if denoisers is not None:
+            wanted = denoise.ordered(denoisers)
+            if wanted != denoise.ordered(self.denoisers):
+                self.denoisers = wanted
+                chain_changed = True
+
+        # A parameter of a denoiser that is switched off changes what
+        # enabling it will do, not the picture in front of the reader -- so
+        # it is stored either way and only counts as a change when its own
+        # denoiser is running.  Clamped here rather than at the widget, so
+        # a value from a settings file is bounded too.
+        touched_running = False
+        if denoise_params:
+            running = set(denoise.ordered(self.denoisers))
+            for key, values in denoise_params.items():
+                entry = denoise.denoiser(key)
+                if entry is None:
+                    continue
+                current = self.denoise_params.setdefault(key, entry.defaults())
+                for pkey, value in values.items():
+                    param = entry.parameter(pkey)
+                    if param is None or value is None:
+                        continue
+                    clamped = param.clamp(value)
+                    if clamped != current.get(pkey):
+                        current[pkey] = clamped
+                        if key in running:
+                            touched_running = True
+
+        # Enabling or disabling always needs the buffer redone -- including
+        # disabling, which is the recompute that undoes the denoising.
+        return spec_update or chain_changed or touched_running
 
     def visible_slice(self, t0: float, t1: float) -> tuple[int, int]:
         """Index range of `[t0, t1]` within the current buffer.

@@ -7,6 +7,7 @@ import sys
 from importlib import metadata
 from pathlib import Path
 
+from . import denoise
 from .bufferedfilter import BufferedFilter
 from .bufferedspectrogram import BufferedSpectrogram
 
@@ -31,6 +32,7 @@ class Plugins(object):
         self.add_trace_factory(default_setup_traces)
         self.analyzer_factories = []
         self.panel_factories = []
+        self.denoiser_factories = []
         #: module names already bound, so overlapping discovery paths do
         #: not put the same plugin in the menu twice
         self._bound = set()
@@ -68,6 +70,49 @@ class Plugins(object):
     def clear_panel_factories(self):
         self.panel_factories = []
 
+    def add_denoiser_factory(self, factory_func):
+        """Register a callable returning `denoise.Denoiser` objects.
+
+        Unlike the traces, the analyzers and the panels, a denoiser factory
+        takes no browser and is called once: which denoisers *exist* is a
+        property of what is installed, while which of them are *enabled* is
+        a property of a browser and lives on its spectrogram.
+
+            def audian_myfilter_denoisers():
+                return [Denoiser(key="mine", ...)]
+
+        Discovered by the same naming convention the others use.
+        """
+        self.denoiser_factories.append(factory_func)
+
+    def clear_denoiser_factories(self):
+        self.denoiser_factories = []
+
+    def setup_denoisers(self) -> None:
+        """Put every factory's denoisers in the registry.
+
+        Called once, from `load_plugins`, before any browser is built --
+        the Spectrogram menu and the side panel are both generated from the
+        registry when a window opens, so a denoiser registered later would
+        have no row and no menu entry.
+
+        One bad factory loses its own denoisers and not everybody's, which
+        is the rule `load_bundled` already follows for one bad import.
+        """
+        for factory in self.denoiser_factories:
+            try:
+                entries = factory()
+            except Exception as exc:  # noqa: BLE001 - one bad plugin, not all
+                log.exception("denoiser factory %r failed", factory)
+                print(f"could not add denoisers from {factory}: {exc}")
+                continue
+            for entry in entries or []:
+                try:
+                    denoise.register(entry)
+                except (TypeError, ValueError) as exc:
+                    log.exception("bad denoiser from %r", factory)
+                    print(f"ignoring denoiser from {factory}: {exc}")
+
     def bind(self, module, name: str = "") -> bool:
         """Register every ``audian_*`` callable a module exposes.
 
@@ -95,6 +140,8 @@ class Plugins(object):
                 self.add_trace_factory(value)
             elif key.endswith("analyzer"):
                 self.add_analyzer_factory(value)
+            elif key.endswith("denoisers"):
+                self.add_denoiser_factory(value)
             elif key.endswith("panel"):
                 self.add_panel_factory(value)
             else:
@@ -193,6 +240,10 @@ class Plugins(object):
         self.load_bundled()
         self.load_installed()
         self.load_local()
+        # After all three, so that a denoiser dropped in the working
+        # directory can override a bundled one under the same key -- which
+        # is the same precedence the discovery order above sets up.
+        self.setup_denoisers()
 
     def setup_traces(self, browser):
         for f in self.trace_factories:
@@ -267,6 +318,30 @@ def panel_menu_path(factory) -> tuple:
         return (path,)
     parts = tuple(str(p).strip() for p in path if str(p).strip())
     return parts or (panel_label(factory),)
+
+
+def panel_menu_tip(factory) -> str:
+    """One line of hover help for this panel's entry in the Plugins menu.
+
+    A plugin sets ``menu_tip`` on its factory, the same way it sets
+    ``menu_path``.  Failing that the factory's docstring speaks for it, and
+    failing that the entry gets a sentence built from its own name -- which
+    says nothing a reader could not already see, but is better than a menu
+    where some items explain themselves and others do not.
+
+    A plugin entry needs this more than most: its name is chosen by
+    somebody else, it is the only entry in the bar whose wording audian
+    cannot review, and it is the one a reader is least likely to recognise.
+    """
+    tip = getattr(factory, "menu_tip", None)
+    if tip:
+        return str(tip).strip()
+    doc = (factory.__doc__ or "").strip()
+    if doc:
+        first = doc.split("\n\n", 1)[0].replace("\n", " ").strip()
+        if first:
+            return " ".join(first.split())
+    return f"Show the {panel_menu_path(factory)[-1]} panel"
 
 
 def build_panel(factory, browser):

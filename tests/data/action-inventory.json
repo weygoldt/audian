@@ -164,6 +164,42 @@
     "path": "View \u203a Editable labels",
     "text": "Delete selected label"
   },
+  "denoise_threshold_down": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "U"
+    ],
+    "path": "Spectrogram \u203a Denoising",
+    "text": "Decrease spatial threshold"
+  },
+  "denoise_threshold_up": {
+    "checkable": false,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Shift+U"
+    ],
+    "path": "Spectrogram \u203a Denoising",
+    "text": "Increase spatial threshold"
+  },
+  "denoiser_mains": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "Spectrogram \u203a Denoising",
+    "text": "Mains hum"
+  },
+  "denoiser_spatial": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [],
+    "path": "Spectrogram \u203a Denoising",
+    "text": "Spatial coherence"
+  },
   "envelope_down": {
     "checkable": false,
     "checked": false,
