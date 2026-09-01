@@ -377,8 +377,37 @@ def harmonic_spectrogram(fundamentals, duration=8.0, rate=4000.0, nfft=4096,
 
 
 def test_harmonics_are_available_here():
-    """thunderfish is this plugin's dependency; the suite pins that it loads."""
+    """thunderfish is this plugin's extra; the suite pins that it loads."""
     assert T.harmonics_available(), "thunderfish is not installed"
+
+
+def test_an_installation_without_thunderfish_still_finds_bands():
+    """`pip install audian` must still curate; only `[bands]` curates well.
+
+    The README says so and the Find combo disables the entry it cannot
+    offer, so the absence has to be a reported state rather than an
+    ImportError in front of a reader.
+    """
+
+    class Blocker:
+        def find_spec(self, name, path=None, target=None):
+            if name == "thunderfish" or name.startswith("thunderfish."):
+                raise ImportError("thunderfish is not installed")
+            return None
+
+    blocker = Blocker()
+    hidden = {m: sys.modules.pop(m) for m in list(sys.modules)
+              if m.startswith("thunderfish")}
+    sys.meta_path.insert(0, blocker)
+    try:
+        assert not T.harmonics_available()
+        times, freqs, power = spectrogram_of([(500.0, 40.0, 0.0, 4.0)])
+        found = T.track(times, freqs, power, threshold_db=10.0,
+                        tolerance_hz=20.0, max_gap_s=0.1, min_duration_s=0.5)
+        assert len(found) == 1, "the peak finder must still work"
+    finally:
+        sys.meta_path.remove(blocker)
+        sys.modules.update(hidden)
 
 
 def test_a_fish_with_harmonics_is_one_band_not_four():
@@ -654,9 +683,16 @@ def pump(seconds):
         time.sleep(0.005)
 
 
-@pytest.fixture
-def browser(app, tmp_path):
-    """A real window on a two channel recording showing a spectrogram."""
+@pytest.fixture(scope="module")
+def browser(app, tmp_path_factory):
+    """A real window on a two channel recording showing a spectrogram.
+
+    One window for the whole module, not one per test.  Building and tearing
+    down a full `Audian` costs a couple of seconds and, more to the point,
+    leaves Qt objects for Python's collector to free at a moment Qt did not
+    choose -- the race `conftest` exists to contain.  Each test here opens its
+    own plugin tab and closes it again, so there is no state to share.
+    """
     soundfile = pytest.importorskip("soundfile")
     from PySide6.QtCore import QSettings
 
@@ -664,6 +700,7 @@ def browser(app, tmp_path):
     from audian import theme
     from audian.plugins import Plugins
 
+    tmp_path = tmp_path_factory.mktemp("bands-browser")
     rate = 8000
     frames = rate * 4
     signal = np.zeros((frames, 2), dtype=np.float32)
@@ -701,6 +738,30 @@ def browser(app, tmp_path):
     for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
         for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
             QSettings.setPath(fmt, scope, os.fspath(home))
+
+
+@pytest.fixture(autouse=True)
+def _clean_sidecar(request):
+    """Take the band sidecar away before and after each windowed test.
+
+    The window is built once for the module, so the tests share one recording
+    -- and the panel saves automatically, which would otherwise leave one
+    test's bands lying beside the recording for the next one to load.
+    """
+    if "browser" not in request.fixturenames:
+        yield
+        return
+    view = request.getfixturevalue("browser")
+    path = Path(view.data.file_path)
+
+    def clear():
+        for sidecar in (B.csv_path(path), B.npz_path(path)):
+            if sidecar.exists():
+                sidecar.unlink()
+
+    clear()
+    yield
+    clear()
 
 
 def test_a_sweep_covers_every_file_of_a_split_recording(browser):
@@ -814,7 +875,7 @@ def test_a_click_selects_the_nearest_band(browser):
     pump(0.2)
 
 
-def test_edits_survive_a_close_and_reopen(browser, tmp_path):
+def test_edits_survive_a_close_and_reopen(browser):
     """Closing the tab saves, and reopening reads it back."""
     from audian_plugins.frequencybands import audian_frequency_bands_panel
 

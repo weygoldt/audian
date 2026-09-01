@@ -594,6 +594,11 @@ class BandPanel(QWidget):
         for.
         """
         self._cancel()
+        # Stop the debounce before saving, not after: a pending tick belongs
+        # to edits this save is about to write anyway, and a timer left armed
+        # on a closed tab fires into a panel the reader has dismissed and
+        # writes its bands over whatever is beside the recording by then.
+        self._save_timer.stop()
         if self.bands.is_dirty():
             self.save_now()
         self.detach()
