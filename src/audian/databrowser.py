@@ -10554,15 +10554,29 @@ class DataBrowser(QWidget):
                     vmarker.setValue(-1)
 
     def analyze_region(self, t0, t1, channel):
+        # The override cursor is application-global and stacked, so a restore
+        # that is skipped is not a cosmetic slip: every window in the process
+        # shows a wait cursor until audian is restarted.  `Analyzer.analyze`
+        # is a plugin extension point and may raise, and one that does used
+        # to leave exactly that.  A raising analyzer costs its own row here
+        # and nothing else, which is the rule `plugins.build_panel` already
+        # follows for a panel that will not construct.
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        if t0 < 0:
-            t0 = 0
-        if t1 > self.data.data.frames / self.data.data.rate:
-            t1 = self.data.data.frames / self.data.data.rate
-        traces = self.data.get_region(t0, t1, channel)
-        for a in self.analyzers:
-            a.analyze(t0, t1, channel, traces)
-        QApplication.restoreOverrideCursor()
+        try:
+            if t0 < 0:
+                t0 = 0
+            if t1 > self.data.data.frames / self.data.data.rate:
+                t1 = self.data.data.frames / self.data.data.rate
+            traces = self.data.get_region(t0, t1, channel)
+            for a in self.analyzers:
+                try:
+                    a.analyze(t0, t1, channel, traces)
+                except Exception:
+                    name = type(a).__name__
+                    log.exception("analyzer %s failed", name)
+                    self.notify("error", f"{name} failed; see the log")
+        finally:
+            QApplication.restoreOverrideCursor()
         if self.analysis_table is None:
             self.analysis_results()
         else:
