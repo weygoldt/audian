@@ -5265,6 +5265,38 @@ class DataBrowser(QWidget):
 
     # -- the overlays --
 
+    def spectrogram_axes(self) -> list:
+        """Every spectrogram lane, one per channel, in layout order.
+
+        The one thing a plugin that draws in frequency needs and could not
+        otherwise have.  `labels`, `data` and `notify` let a plugin read the
+        recording and say something about it; nothing in
+        `pluginapi.PLUGIN_BROWSER_ATTRS` let it put a mark of its own shape
+        on the spectrogram, and the traversal that finds the lanes -- over
+        `panels`, skipping spacers and power plots, then over `Panel.axs` --
+        is exactly the internal shape that list exists to keep plugins away
+        from.
+
+        So the traversal is named here and promised, rather than every plugin
+        that wants a lane learning to walk `panels` and breaking the next time
+        a panel kind is added.  `attach_label_overlays` does the same walk for
+        two surfaces at once and keeps its own copy for that reason.
+
+        The lanes, not the overlays: what a caller does with a lane is add
+        items to it and connect to its view box, which is what
+        `LabelOverlay` does and what a plugin doing the same should copy --
+        `addItem(item, ignoreBounds=True)`, and a redraw on
+        ``sigRangeChanged``.
+        """
+        axs = []
+        for panel in self.panels.values():
+            if panel.is_spacer() or panel.is_power():
+                continue
+            if not panel.is_spectrogram():
+                continue
+            axs.extend(panel.axs)
+        return axs
+
     def attach_label_overlays(self) -> None:
         """Give every trace, spectrogram and navigator plot a label overlay.
 

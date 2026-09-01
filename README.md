@@ -56,7 +56,8 @@ cheat sheet. Almost everything has one.
 - **A navigator strip** showing the whole recording, so you always know where
   you are in it.
 - **Plugins** for computed traces, analyses and side panels — including a
-  few-shot event detector that ships with it.
+  few-shot event detector and a curator for tracked frequency bands, both of
+  which ship with it.
 
 ## Detecting events
 
@@ -75,6 +76,63 @@ The defaults were measured rather than guessed: which way of combining several
 examples survives noise, why the threshold is relative to the noise floor
 instead of an absolute score, and where the whole approach stops working. See
 [`engine.py`](src/audian_plugins/eventdetection/engine.py) for the numbers.
+
+## Curating tracked frequency bands
+
+A tracker finds the bands. You fix the ones it got wrong.
+
+![bands](docs/shots/bands.png)
+
+**Plugins → Frequency bands** draws every tracked band over the spectrogram
+and gives you the mouse to correct them. Click a band to select it, Ctrl+click
+to add a second, right-click for a menu that acts on the band under the
+cursor: split it there, merge it with what you have selected, label it, delete
+it. Every one of those is undoable.
+
+This is the job that cannot be automated away. A tracker fails in two
+characteristic ways — it breaks one band in two where the frequency moved too
+fast, and it swaps two identities where they crossed — and neither is fixable
+by tracking harder. Both are obvious to a person looking at the picture.
+
+**It tracks the spectrogram you are looking at.** Set the band-pass, choose a
+window length, take the mains out with the denoisers — then track, and the
+bands come from that picture rather than from a second one computed behind it.
+In the visible window nothing is recomputed at all: the tracker reads the
+block the lane drew. Over the whole file the same chain is reproduced, every
+channel through the denoisers before one is picked, because the mains denoiser
+tells a fish from the mains by comparing across the array. A line under the
+control names the window, overlap, filter and denoisers the next run will
+read, and it says so when the window is too coarse for the tolerance you asked
+for — audian's default 256 puts 78 Hz in a bin, which cannot separate two fish
+6 Hz apart.
+
+Bands are found with **thunderfish's harmonic group finder** — the one
+wavetracker itself uses. It groups a peak with its own multiples and reports
+the *fundamental*, so a fish with four audible harmonics is one band rather
+than four, and it sets the mains aside instead of tracking 50, 100 and 150 Hz
+as three animals. On one channel of a 120 s four-channel test recording it
+returns 6 bands where a plain peak finder returns 22: four fish, and two
+places the tracker genuinely broke a band — which is the work you are here to
+do. The fifth fish in that file sits 6 Hz from another and is not separated on
+that channel, which is the crossing problem and not a threshold you can turn.
+Run it over the visible window while you tune the settings, then over the
+whole file on a background thread.
+
+It needs `pip install audian[bands]`; without thunderfish the plugin falls
+back to a plain peak finder and says so in the **Find** menu.
+
+Or import a **wavetracker** output directory, which is the case this was
+written for. That directory is opened **read-only**: your edits go to a
+sidecar beside the recording, never back over the tracker's `.npy` files.
+
+It replaces `wavetracker`'s `EODsorter`, and the differences are all about not
+losing work. Merging keeps every vertex, where `EODsorter.connect` silently
+discarded the detections two traces shared. Saving is atomic and beside the
+recording, where `EODsorter.save` overwrote the tracker's only copy in place
+with no backup. Band ids are never reused. An inconsistent set of input arrays
+is reported rather than drawn as though it were true. See
+[`bands.py`](src/audian_plugins/frequencybands/bands.py) for what is stored and
+why it is two files.
 
 ## Two themes
 

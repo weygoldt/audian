@@ -30,6 +30,23 @@ bar are narrow, so build with ``ParameterGroup(title, self, caption=False,
 narrow=True)`` -- the tab already carries the name, and stacked captions are
 what keeps a group under the panel's 220 px floor.
 
+Drawing on the spectrogram
+--------------------------
+
+`browser.spectrogram_axes()` is the lanes, one per channel.  A plugin that
+marks something in *frequency* -- a tracked band, a ridge, a harmonic stack
+-- needs them, and the walk that finds them (over `panels`, skipping the
+spacers and the power plots, then over each `Panel.axs`) is internal shape
+that would break the first time a panel kind is added.
+
+Add to a lane the way `labeloverlay` does: ``ax.addItem(item,
+ignoreBounds=True)``, because a bare `addItem` joins the lane's
+`childrenBounds` and moves its auto-range somewhere no data is; and redraw
+from the view box's ``sigRangeChanged`` rather than on a timer.  Grow the
+items once and hide the spare ones, rather than clearing and rebuilding on
+every pan -- a redraw that allocates is the difference between a plugin that
+scrolls and one that stutters.
+
 Reading a recording
 -------------------
 
@@ -78,6 +95,7 @@ PLUGIN_BROWSER_ATTRS = (
     "notify",           # (level, message) to the message log
     "redraw_labels",    # after changing the label set
     "schedule_label_save",
+    "spectrogram_axes", # the lanes, for a plugin that draws in frequency
 )
 
 __all__ = [
