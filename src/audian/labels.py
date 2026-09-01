@@ -61,11 +61,12 @@ from __future__ import annotations
 
 import csv
 import math
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
+
+from .atomicwrite import replace_atomically
 
 #: A category placed one sample at a time: a pulse, an onset, a click.
 #:
@@ -319,9 +320,9 @@ class LabelSet:
         self.dirty = False
         #: where `save` last wrote, or would write
         self.path: Optional[Path] = None
-        #: Why this store must not write, or "".  Set by `read` whenever the
-        #: sidecar existed and did not come back whole -- an OSError, a
-        #: decoding failure, or rows that named no category or no start time.
+        #: Why this store must not write, or "".  Set by `read` only when the
+        #: sidecar could not be *understood* at all -- an OSError, a decoding
+        #: failure, a malformed CSV.
         #:
         #: The alternative is a silent hole in someone's data: a file that
         #: read as empty because it could not be parsed looks exactly like a
@@ -330,6 +331,23 @@ class LabelSet:
         #: sidecar is not an empty one, so the store refuses to overwrite it
         #: and says why.
         self.blocked = ""
+        #: Why the file that was read is not the whole story, or "".  Set by
+        #: `read` when the file decoded fine and some rows could not be
+        #: placed.
+        #:
+        #: Distinct from `blocked`, and it used to be the same field.  The
+        #: two cases are not equivalent: a file that decoded and had one bad
+        #: row is *fully understood*, and the store is holding every good row
+        #: from it.  Refusing to write in that state let the reader carry on
+        #: adding, moving and deleting labels behind a READ-ONLY note in a
+        #: status line, and then dropped every one of those edits at close --
+        #: because `flush_labels` calls `save`, which returned the refusal.
+        #: Work silently lost is worse than a file overwritten, and there was
+        #: no way to clear the flag without editing the file outside audian.
+        #:
+        #: So a damaged file is written, and the original is kept beside it
+        #: first.  See `write`.
+        self.damaged = ""
         #: How to take back the last change, or None.  See `undo`.
         self._undo: Optional[tuple] = None
         self.set_categories(categories)
@@ -680,6 +698,7 @@ class LabelSet:
         self.revision += 1
         self.dirty = False
         self.blocked = ""
+        self.damaged = ""
         if not path.exists():
             return ReadReport()
         try:
@@ -708,7 +727,7 @@ class LabelSet:
                 added.append(label.category)
             self.labels.append(label)
         if dropped:
-            self.blocked = (
+            self.damaged = (
                 f"{dropped} row(s) of {path.name} name no category or no start time"
             )
         self.revision += 1
@@ -718,15 +737,16 @@ class LabelSet:
         """Write the sidecar atomically.  Returns "" or the error to report.
 
         Hand-made labels are the only user-authored data this application
-        holds, and nothing else in the tree writes atomically -- every other
-        write is a plain ``open(path, "w")``, so an interrupted one truncates
-        the real file.  This one writes a temp file in the same directory,
-        fsyncs it and `os.replace`s it into place, which is atomic within a
-        filesystem: a reader either sees the whole previous file or the whole
-        new one, never a truncated one.
+        holds, so this goes through `atomicwrite.replace_atomically`: a
+        reader either sees the whole previous file or the whole new one,
+        never a truncated one.
 
-        The temp file is in the same directory and not in the system temp,
-        because `os.replace` across filesystems is not atomic and raises.
+        This used to spell the recipe out here, with a temporary named
+        ``<name>.tmp``.  That is safe against a crash and not against a
+        second writer -- the name is the same in every process, so two
+        browsers each with their own save timer could publish each other's
+        half-written file under the real name.  The helper's temporary
+        carries the pid.
 
         Never raises.  The caller reports the returned message to the reader
         rather than logging it -- a settings write that fails quietly costs a
@@ -738,22 +758,37 @@ class LabelSet:
         if self.blocked:
             return f"refusing to overwrite labels: {self.blocked}"
         self.path = path
-        tmp = path.with_name(path.name + ".tmp")
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+
+        # A damaged file is understood, not unreadable: every good row of it
+        # is in this store.  Writing over it loses only the rows that named
+        # no category and no start time -- but "only" is not a judgement to
+        # make on someone else's data, so the file as it arrived is kept
+        # beside it first, once.  The reader then has both: their work saved,
+        # and the original to look at.
+        #
+        # Once, and never overwriting an existing keepsake: the interesting
+        # copy is the first one, and a second save should not replace it with
+        # a file this audian already rewrote.
+        if self.damaged and path.exists():
+            keep = path.with_name(path.stem + ".damaged" + path.suffix)
+            try:
+                if not keep.exists():
+                    keep.write_bytes(path.read_bytes())
+            except OSError as e:
+                return f"could not keep a copy of the damaged file: {e}"
+            self.damaged = ""
+
+        def write_rows(tmp: Path) -> None:
             with open(tmp, "w", newline="", encoding="utf-8") as fp:
                 writer = csv.writer(fp)
                 writer.writerow(COLUMNS)
                 for label in self.labels:
                     writer.writerow(label.row())
-                fp.flush()
-                os.fsync(fp.fileno())
-            os.replace(tmp, path)
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            replace_atomically(path, write_rows)
         except OSError as e:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
             return str(e)
         self.dirty = False
         return ""
@@ -776,6 +811,15 @@ class LabelSet:
             self.dirty = False
             return ""
         try:
+            # Same rule as `write`: a damaged file is about to stop existing,
+            # so keep the copy before it does.
+            if self.damaged:
+                keep = self.path.with_name(
+                    self.path.stem + ".damaged" + self.path.suffix
+                )
+                if not keep.exists():
+                    keep.write_bytes(self.path.read_bytes())
+                self.damaged = ""
             self.path.unlink()
         except OSError as e:
             return str(e)

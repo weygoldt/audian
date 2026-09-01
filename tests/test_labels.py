@@ -300,12 +300,14 @@ def test_the_write_leaves_no_temporary_behind(store, tmp_path):
 
 
 def test_a_failed_write_leaves_the_previous_file_whole(store, tmp_path, monkeypatch):
-    """The reason this write is the first atomic one in the tree.
+    """Why this write goes through `atomicwrite` at all.
 
-    Every other write in `src/audian` is a plain ``open(path, "w")``, which
-    truncates the real file before it knows whether the new content can be
-    produced.  Here the failure happens at the rename, and the old file is
-    untouched.
+    A plain ``open(path, "w")`` truncates the real file before it knows
+    whether the new content can be produced.  Here the failure happens at
+    the rename, the old file is untouched, and no temporary is left behind.
+
+    Patched on `atomicwrite.os` rather than on `labels.os`: the recipe moved
+    into the shared helper, and this is now the seam it fails at.
     """
     path = tmp_path / "rec-editable-labels.csv"
     store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0))
@@ -314,7 +316,7 @@ def test_a_failed_write_leaves_the_previous_file_whole(store, tmp_path, monkeypa
 
     store.add(Label("pulse", KIND_POINT, 0, 3.0))
     monkeypatch.setattr(
-        "audian.labels.os.replace",
+        "audian.atomicwrite.os.replace",
         lambda *a, **k: (_ for _ in ()).throw(OSError("no space left on device")),
     )
     message = store.write(path)
@@ -940,24 +942,58 @@ def test_a_drag_that_starts_on_a_cutoff_still_makes_a_label(labelling):
         settle()
 
 
-def test_a_sidecar_that_did_not_read_whole_is_never_written_over(tmp_path):
-    """The failure mode this guard exists for.
+def test_a_file_with_a_dropped_row_is_saved_with_the_original_kept_beside_it(tmp_path):
+    """A damaged file is understood; an unreadable one is not.
 
-    A file that could not be parsed reads as an empty set, which on screen is
-    indistinguishable from a recording nobody has labelled yet.  Add one
-    label to that and the autosave replaces whatever was really in the file.
-    So a store that did not get its sidecar back whole refuses to write --
-    and refuses to delete, which is the worse of the two.
+    Both used to set `blocked`, and the store then refused to write for the
+    rest of the session.  But the reader could still add, move and delete
+    labels -- only a status line said READ-ONLY -- and every one of those
+    edits was dropped at close, because `flush_labels` calls `save`, which
+    returned the refusal.  There was no way to clear the flag without
+    editing the file outside audian.
+
+    So the two cases separate.  A file that decoded and lost a row is saved,
+    with the file as it arrived kept beside it, which loses nothing and
+    interrupts nobody.
     """
     path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS) + "\nevent,span,0,1.0,2.0,,,\n,span,0,,,,,\n",
         encoding="utf-8",
     )
-    before = path.read_bytes()
+    original = path.read_bytes()
     store = LabelSet(DEFAULT_CATEGORIES)
     report = store.read(path)
     assert report.dropped == 1
+    assert store.damaged
+    assert store.blocked == "", "a file that decoded is not read-only"
+
+    store.add(Label("event", KIND_SPAN, 0, 5.0, 6.0))
+    assert store.write(path) == ""
+
+    kept = tmp_path / "rec-editable-labels.damaged.csv"
+    assert kept.read_bytes() == original, "the file as it arrived is still there"
+    assert len(read_rows(path)) == 3  # header, the good row, and the new one
+    assert store.damaged == "", "keeping the copy is a one-time debt"
+
+    # and a second save does not replace the keepsake with a rewritten file
+    store.add(Label("event", KIND_SPAN, 0, 7.0, 8.0))
+    assert store.write(path) == ""
+    assert kept.read_bytes() == original
+
+
+def test_an_unreadable_sidecar_is_still_never_written_over(tmp_path):
+    """The half of the old rule that was right.
+
+    A file that could not be parsed reads as an empty set, which on screen is
+    indistinguishable from a recording nobody has labelled yet.  Add one
+    label to that and the autosave replaces whatever was really in the file.
+    """
+    path = tmp_path / "rec-editable-labels.csv"
+    path.write_bytes(b"category,kind\n\xff\xfe not utf-8 at all\n")
+    before = path.read_bytes()
+    store = LabelSet(DEFAULT_CATEGORIES)
+    store.read(path)
     assert store.blocked
     store.add(Label("event", KIND_SPAN, 0, 5.0, 6.0))
     assert "refusing to overwrite" in store.write(path)

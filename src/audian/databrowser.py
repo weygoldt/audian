@@ -5199,16 +5199,16 @@ class DataBrowser(QWidget):
             self.notify("error", f'could not read "{path.name}": {report.error}')
             return
         if report.dropped:
-            # and the store will now refuse to write over that file --
-            # `LabelSet.blocked` says why.  Reported as an error rather than
-            # a warning because labelling this recording is now read-only
-            # until the reader deals with the file.
+            # A warning and not an error: every other row is loaded, and
+            # labelling carries on normally.  The file as it arrived is kept
+            # beside it at the next save -- see `LabelSet.damaged` -- so the
+            # dropped rows are recoverable and nothing is read-only.
             self.notify(
-                "error",
+                "warning",
                 f"{report.dropped} label row(s) of "
-                f'"{path.name}" name no category or no start time; '
-                "labels for this recording will not be saved until it is "
-                "fixed or moved away",
+                f'"{path.name}" name no category or no start time and were '
+                "not loaded; the file will be kept as "
+                f'"{Path(path).stem}.damaged.csv" when these labels are saved',
             )
         if report.added:
             self.notify(
@@ -6063,7 +6063,10 @@ class DataBrowser(QWidget):
         if self.labels.blocked:
             # ahead of everything else: a reader labelling into a store that
             # cannot save is doing work that will be lost, and the count
-            # would read as "saved" the moment they stopped
+            # would read as "saved" the moment they stopped.  Only a file
+            # that could not be READ at all gets here; one that merely had
+            # rows dropped is saved normally, with the original kept beside
+            # it, and says so below rather than refusing.
             return f"READ-ONLY -- {self.labels.blocked}"
         if self.label_error:
             return f"{count} labels -- SAVE FAILED: {self.label_error}"

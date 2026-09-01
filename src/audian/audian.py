@@ -32,6 +32,7 @@ from audioio.audioconverter import parse_load_kwargs
 from audioio import available_formats, PlayAudio, AudioLoader
 
 from . import denoise, theme
+from .atomicwrite import replace_atomically
 from .version import __version__, __year__, audian_dirs
 from .databrowser import ANNOTATION_SURFACE_TIPS, DataBrowser
 from .eventoverlay import SURFACE_LABELS, SURFACE_ORDER
@@ -1133,18 +1134,25 @@ def theme_preference(stored) -> str:
 def save_setting(key: str, value) -> None:
     """Update one preference in place.  Never raises.
 
-    Written to a temporary file in the same directory and moved into place,
-    the recipe `LabelSet.write` uses, because this is a read-modify-write of
-    the *whole* document for one key: an interrupted `open(path, "w")`
-    truncates the file and takes every other preference with it, including
-    the reader's label vocabulary, which is not a preference at all but
-    data they typed.  `os.replace` is atomic within a filesystem, so a
-    reader who loses power mid-write keeps the previous file entire.
+    Through `atomicwrite.replace_atomically`, because this is a
+    read-modify-write of the *whole* document for one key: an interrupted
+    ``open(path, "w")`` truncates the file and takes every other preference
+    with it, including the reader's label vocabulary, which is not a
+    preference at all but data they typed.
+
+    This file is the one of the three that is genuinely shared between
+    concurrent audian processes, so the pid in the helper's temporary name
+    matters most here: the fixed ``settings.json.tmp`` this used to write
+    was the same name in every process.
     """
     values = settings()
     values[key] = value
     path = settings_path()
-    tmp = path.with_name(path.name + ".tmp")
+
+    def write_json(tmp) -> None:
+        with open(tmp, "w") as df:
+            json.dump(values, df, indent=2)
+
     try:
         # The directory of the path actually being written, not the one
         # `settings_path` resolves to by default: the two differ whenever a
@@ -1152,17 +1160,9 @@ def save_setting(key: str, value) -> None:
         # config directory while writing somewhere else is how a redirect ends
         # up half-applied.
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(tmp, "w") as df:
-            json.dump(values, df, indent=2)
-            df.flush()
-            os.fsync(df.fileno())
-        os.replace(tmp, path)
+        replace_atomically(path, write_json)
     except OSError as e:
         log.debug("could not write settings: %s", e)
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 class StartupPage(QWidget):
