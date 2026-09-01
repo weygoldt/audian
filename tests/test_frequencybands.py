@@ -598,6 +598,83 @@ def test_the_importer_writes_nothing(tmp_path):
     assert before == after
 
 
+# ------------------------------------------------- tracking what is displayed
+
+
+def four_channel_block(rate=4000.0, duration=4.0, hz=300.0):
+    """Four channels, the tone loud on one of them and faint on the rest."""
+    t = np.arange(0.0, duration, 1.0 / rate)
+    rng = np.random.default_rng(3)
+    block = rng.normal(0.0, 0.02, (t.size, 4))
+    for c in range(4):
+        block[:, c] += (1.0 if c == 0 else 0.08) * np.sin(2 * np.pi * hz * t)
+    return block
+
+
+def test_the_denoise_chain_sees_every_channel_not_just_the_tracked_one():
+    """A cross-channel denoiser is a no-op on one channel, silently.
+
+    `denoisers/engine.py` returns the block untouched below two channels, so
+    handing it only the channel being tracked would drop the denoising the
+    reader can see on screen and never say so.
+    """
+    from audian import denoise
+    from audian_plugins.denoisers import audian_builtin_denoisers
+    from audian_plugins.frequencybands.panel import power_of_block
+
+    for entry in audian_builtin_denoisers():
+        denoise.register(entry)
+
+    block = four_channel_block()
+    common = dict(nfft=1024, overlap_frac=0.5, channel=0, denoise_params={})
+    _t, _f, plain = power_of_block(block, 4000.0, {**common, "denoisers": ()})
+    _t, _f, cleaned = power_of_block(
+        block, 4000.0, {**common, "denoisers": ("spatial",)}
+    )
+    assert plain.shape == cleaned.shape
+    assert not np.allclose(plain, cleaned), (
+        "the denoiser did nothing, which is what happens when it is handed "
+        "a single channel"
+    )
+
+
+def test_the_displayed_filter_is_applied_before_the_transform():
+    """The band-pass the reader set has to reach the tracker."""
+    from scipy.signal import butter
+
+    from audian_plugins.frequencybands.panel import power_of_block
+
+    block = four_channel_block(hz=300.0)
+    common = dict(nfft=1024, overlap_frac=0.5, channel=0, denoisers=(),
+                  denoise_params={})
+    _t, freqs, plain = power_of_block(block, 4000.0, common)
+    sos = butter(4, 1000.0, "highpass", fs=4000.0, output="sos")
+    _t, _f, filtered = power_of_block(block, 4000.0, {**common, "sos": sos})
+    at_tone = int(np.argmin(np.abs(freqs - 300.0)))
+    assert filtered[:, at_tone].mean() < 0.01 * plain[:, at_tone].mean(), (
+        "a high-pass well above the tone must remove it"
+    )
+
+
+def test_a_block_of_displayed_power_tracks_without_touching_the_recording():
+    """`frames_of_power` takes the lane's own block, in linear power."""
+    from audian_plugins.frequencybands.panel import (
+        METHOD_PEAKS,
+        frames_of_power,
+    )
+
+    times, freqs, power_db = spectrogram_of([(500.0, 40.0, 0.0, 4.0)])
+    linear = 10.0 ** (power_db / 10.0)
+    frames = frames_of_power(
+        times, freqs, linear,
+        {"method": METHOD_PEAKS, "max_hz": 1000.0, "threshold_db": 10.0,
+         "max_peaks": 8},
+    )
+    found = T.link(frames, tolerance_hz=20.0, max_gap_s=0.1, min_duration_s=0.5)
+    assert len(found) == 1
+    assert abs(np.median(found[0][1]) - 500.0) < 10.0
+
+
 # ------------------------------------------------------------- registration
 
 
@@ -816,6 +893,72 @@ def test_the_channel_to_track_is_the_recording_s_channels(browser):
     assert panel.channel() == 1
     panel.close()
     pump(0.2)
+
+
+def test_the_tracker_follows_the_displayed_spectrogram_by_default(browser):
+    """The reader tunes one spectrogram, not two."""
+    from audian_plugins.frequencybands import audian_frequency_bands_panel
+
+    _title, panel = audian_frequency_bands_panel(browser)
+    panel.show()
+    pump(0.3)
+    try:
+        assert panel.follows_display()
+        spec = panel.spectrogram_trace()
+        assert spec is not None, "no spectrogram trace to follow"
+        pipeline = panel.display_pipeline()
+        assert pipeline["nfft"] == int(spec.nfft)
+        assert pipeline["overlap_frac"] == float(spec.overlap_frac)
+        # and the settings the run uses take those, not the panel's own
+        settings = panel._settings()
+        assert settings["nfft"] == int(spec.nfft)
+        # the line says which spectrogram, so "as displayed" is checkable
+        assert str(spec.nfft) in panel.pipelinew.text()
+    finally:
+        panel.close()
+        pump(0.2)
+
+
+def test_choosing_raw_audio_uses_the_panels_own_window(browser):
+    from audian_plugins.frequencybands import audian_frequency_bands_panel
+    from audian_plugins.frequencybands.panel import SOURCE_OWN
+
+    _title, panel = audian_frequency_bands_panel(browser)
+    panel.show()
+    pump(0.3)
+    try:
+        panel.sourcew.setCurrentIndex(panel.sourcew.findData(SOURCE_OWN))
+        pump(0.1)
+        assert not panel.follows_display()
+        assert panel._settings()["nfft"] == int(panel.nfftw.currentData())
+        assert "raw audio" in panel.pipelinew.text()
+    finally:
+        panel.close()
+        pump(0.2)
+
+
+def test_a_window_too_coarse_for_the_tolerance_is_reported(browser):
+    """A 78 Hz bin cannot answer a 6 Hz question, and must not pretend to."""
+    from audian_plugins.frequencybands import audian_frequency_bands_panel
+
+    _title, panel = audian_frequency_bands_panel(browser)
+    panel.show()
+    pump(0.3)
+    said = []
+    panel.browser = type(
+        "B", (), {"data": browser.data, "notify": lambda _s, lvl, msg: said.append((lvl, msg))}
+    )()
+    try:
+        panel.warn_if_too_coarse({"nfft": 64, "tolerance_hz": 6.0})
+        assert said and said[0][0] == "warning"
+        assert "wider than" in said[0][1]
+        said.clear()
+        panel.warn_if_too_coarse({"nfft": 1 << 20, "tolerance_hz": 6.0})
+        assert not said, "a fine window must not be complained about"
+    finally:
+        panel.browser = browser
+        panel.close()
+        pump(0.2)
 
 
 def test_a_recording_has_lanes_to_draw_on(browser):

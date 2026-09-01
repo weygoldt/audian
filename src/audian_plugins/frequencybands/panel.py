@@ -113,8 +113,21 @@ PICK_RADIUS_PX = 12.0
 #: Idle time before an edit is written to the sidecar.
 SAVE_DEBOUNCE_MS = 1500
 
+#: How often the panel re-reads the display's transform chain while
+#: its tab is open.  Only while open, and only four attributes.
+PIPELINE_POLL_MS = 1000
+
 DEFAULT_NFFT = 16384
 DEFAULT_MAX_HZ = 2000.0
+
+#: Which spectrogram the tracker reads.
+#:
+#: "As displayed" is the default because it is the only one that can
+#: be tuned by looking: the reader denoises, sets a window, takes the
+#: mains out, and the tracker then reads that picture rather than a
+#: second one computed behind it with different settings.
+SOURCE_DISPLAYED = "displayed"
+SOURCE_OWN = "own"
 
 #: What "Find" is set to.  Strings rather than an enum because they are also
 #: the settings dictionary's value, carried to a worker on another thread.
@@ -145,6 +158,59 @@ def open_recording(paths, tbuffer: float):
 HARMONIC_HEADROOM = 6.0
 
 
+def power_of_block(block, rate: float, settings: dict):
+    """``(times, freqs, power)`` for one block of samples, as displayed.
+
+    `block` is ``(samples, channels)``.  The whole of what the reader sees is
+    reproduced here and in this order, because a tracker that runs on a
+    different picture from the one on screen is a tracker whose settings
+    cannot be tuned by looking:
+
+    1. the band-pass, taken as the live filter's own second-order sections
+       rather than rebuilt from its cutoffs;
+    2. the spectrogram, at the browser's ``nfft`` and overlap;
+    3. the denoiser chain, through `denoise.apply_chain`.
+
+    **Every channel goes through the chain, and one is chosen afterwards.**
+    That is not an optimisation to skip: the mains denoiser tells a fish from
+    the mains by comparing power *across* the array, and
+    ``denoisers/engine.py`` returns the block untouched when it is given
+    fewer than two channels.  Denoising one channel would therefore do
+    nothing at all, silently, and the sweep would disagree with the picture
+    exactly where the reader had done the most work.
+    """
+    from thunderlab.powerspectrum import spectrogram
+
+    from audian import denoise
+
+    block = np.asarray(block, dtype=np.float64)
+    if block.ndim == 1:
+        block = block[:, None]
+    sos = settings.get("sos")
+    if sos is not None:
+        from scipy.signal import sosfilt
+
+        block = sosfilt(sos, block, axis=0)
+    nfft = int(settings["nfft"])
+    freqs, times, spec = spectrogram(
+        block,
+        rate,
+        freq_resolution=rate / nfft,
+        overlap_frac=float(settings.get("overlap_frac", 0.5)),
+    )
+    if spec.ndim == 2:
+        spec = spec[:, :, None]
+    power = spec.transpose((1, 2, 0))  # (time, channel, frequency)
+    enabled = settings.get("denoisers") or ()
+    if enabled:
+        power = denoise.apply_chain(
+            power, freqs, enabled, settings.get("denoise_params") or {}
+        )
+    channel = int(settings.get("channel", 0))
+    channel = min(max(channel, 0), power.shape[1] - 1)
+    return times, freqs, power[:, channel, :]
+
+
 def frames_of_block(block, rate: float, settings: dict, token=None) -> list:
     """One block of samples, as per-frame frequencies ready for `link`.
 
@@ -153,19 +219,28 @@ def frames_of_block(block, rate: float, settings: dict, token=None) -> list:
     what they do -- which is the failure mode of having tuned a preview that
     the real run then disagrees with.
     """
-    from thunderlab.powerspectrum import decibel, spectrogram
+    times, freqs, power = power_of_block(block, rate, settings)
+    return frames_of_power(times, freqs, power, settings, token)
 
-    nfft = int(settings["nfft"])
-    freqs, times, spec = spectrogram(
-        block, rate, freq_resolution=rate / nfft, overlap_frac=0.75
-    )
+
+def frames_of_power(times, freqs, power, settings: dict, token=None) -> list:
+    """Per-frame frequencies from a spectrogram block already in hand.
+
+    `power` is ``(time, frequency)`` in **linear** power, which is what
+    audian's own spectrogram buffer holds -- `decibel` is applied at the
+    image and nowhere earlier -- so the block a lane is drawing can be handed
+    straight here without a round trip through raw audio.
+    """
+    from thunderlab.powerspectrum import decibel
+
     max_hz = float(settings["max_hz"])
+    power = np.asarray(power, dtype=np.float64)
     if settings.get("method", METHOD_HARMONIC) == METHOD_HARMONIC:
         keep = freqs <= max_hz * HARMONIC_HEADROOM
         return T.harmonic_frames(
             times,
             freqs[keep],
-            spec[keep].T,  # linear power: harmonic_groups takes its own log
+            power[:, keep],  # linear: harmonic_groups takes its own log
             settings.get("mains_hz", T.DEFAULT_MAINS_HZ),
             settings.get("min_hz", T.DEFAULT_MIN_HZ),
             max_hz,
@@ -177,7 +252,7 @@ def frames_of_block(block, rate: float, settings: dict, token=None) -> list:
     return T.peaks_of_block(
         times,
         freqs[keep],
-        decibel(spec).T[:, keep],
+        decibel(power[:, keep]),
         settings["threshold_db"],
         settings["max_peaks"],
         None,
@@ -235,7 +310,11 @@ class SweepWorker(QObject):
                 # a tail of a few samples is not a band anybody is missing.
                 if stop - start < nfft:
                     break
-                block = np.asarray(data[start:stop, self.channel], dtype=np.float64)
+                # Every channel, not just the tracked one: the chain the
+                # display applies includes a denoiser that compares power
+                # across the array, and it is a no-op on a single channel.
+                # `power_of_block` picks the wanted one after the chain.
+                block = np.asarray(data[start:stop, :], dtype=np.float64)
                 offset = start / rate
                 frames.extend(
                     (t + offset, hz)
@@ -288,6 +367,20 @@ class BandPanel(QWidget):
 
         if hasattr(browser, "sigRangesChanged"):
             browser.sigRangesChanged.connect(self._ranges_changed)
+        for name in ("sigResolutionChanged", "sigFilterChanged"):
+            signal = getattr(browser, name, None)
+            if signal is not None:
+                signal.connect(self._describe_pipeline)
+
+        # Nothing is emitted when the denoiser chain changes -- the browser
+        # calls `request_recompute` and no signal goes with it -- so the
+        # only way for the line to stay true while a reader is turning
+        # those switches is to look.  It is four attribute reads a second,
+        # and the alternative is a panel that claims "no denoising" over a
+        # denoised picture until the next run.
+        self._pipeline_timer = QTimer(self)
+        self._pipeline_timer.setInterval(PIPELINE_POLL_MS)
+        self._pipeline_timer.timeout.connect(self._describe_pipeline)
 
         self._refresh()
 
@@ -386,6 +479,24 @@ class BandPanel(QWidget):
 
     def _build_find_group(self, box) -> None:
         group = ParameterGroup("Find bands", self, caption=False, narrow=True)
+
+        self.sourcew = narrow_combo(QComboBox(self))
+        self.sourcew.addItem("As displayed", SOURCE_DISPLAYED)
+        self.sourcew.addItem("Raw audio", SOURCE_OWN)
+        self.sourcew.setToolTip(
+            "As displayed tracks the spectrogram in front of you: the same "
+            "filter, window and denoisers, so what you tuned by eye is what "
+            "the tracker reads. Raw audio ignores all of that and transforms "
+            "the recording again with the window below."
+        )
+        self.sourcew.currentIndexChanged.connect(lambda _i: self._sync_method())
+        group.add_row("Track", "", self.sourcew)
+
+        self.pipelinew = QLabel("", self)
+        self.pipelinew.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+        theme.tint(self.pipelinew, "fg.muted")
+        self.pipelinew.setWordWrap(True)
+        group.add_span_row(self.pipelinew)
 
         self.methodw = narrow_combo(QComboBox(self))
         self.methodw.addItem("Harmonic groups", METHOD_HARMONIC)
@@ -490,7 +601,7 @@ class BandPanel(QWidget):
             "two close frequencies and blurs a fast change; this is not the "
             "spectrogram you are looking at."
         )
-        group.add_row("Window", "", self.nfftw)
+        self._nfft_row = group.add_row("Window", "", self.nfftw)
 
         buttons = QWidget(self)
         row = QHBoxLayout(buttons)
@@ -552,6 +663,41 @@ class BandPanel(QWidget):
             widget.setVisible(harmonic)
         for widget in self._threshold_row:
             widget.setVisible(not harmonic)
+        # The window length belongs to whoever owns the spectrogram.  Left
+        # visible while following the display it would be a control that
+        # changes nothing, which reads as the tracker being broken.
+        follows = self.follows_display()
+        for widget in self._nfft_row:
+            widget.setVisible(not follows)
+        self._describe_pipeline()
+
+    def _describe_pipeline(self) -> None:
+        """Say which spectrogram the next run will read, in one line.
+
+        Following the display is only trustworthy if the reader can see that
+        it is following, and see *what* -- otherwise "as displayed" is a
+        promise they have to take on faith while turning knobs somewhere
+        else on the window.
+        """
+        if not self.follows_display():
+            nfft = int(self.nfftw.currentData() or DEFAULT_NFFT)
+            self.pipelinew.setText(f"raw audio, own window of {nfft}")
+            return
+        pipeline = self.display_pipeline()
+        if not pipeline:
+            self.pipelinew.setText(
+                "no spectrogram panel; the recording will be read instead"
+            )
+            return
+        parts = [f"window {pipeline['nfft']}",
+                 f"overlap {round(100 * pipeline['overlap_frac'])}%"]
+        if pipeline.get("sos") is not None:
+            parts.append("filtered")
+        enabled = pipeline.get("denoisers") or ()
+        parts.append(
+            "denoise: " + ", ".join(enabled) if enabled else "no denoising"
+        )
+        self.pipelinew.setText(" · ".join(parts))
 
     # --- lifecycle --------------------------------------------------------
 
@@ -559,6 +705,10 @@ class BandPanel(QWidget):
         super().showEvent(event)
         self.attach()
         self.fill_channels()
+        # the reader may have spent the time since the tab was last open
+        # changing exactly the settings this line reports
+        self._describe_pipeline()
+        self._pipeline_timer.start()
         self.load_for_recording()
 
     def fill_channels(self) -> None:
@@ -594,6 +744,7 @@ class BandPanel(QWidget):
         for.
         """
         self._cancel()
+        self._pipeline_timer.stop()
         # Stop the debounce before saving, not after: a pending tick belongs
         # to edits this save is about to write anyway, and a timer left armed
         # on a closed tab fires into a panel the reader has dismissed and
@@ -1003,8 +1154,57 @@ class BandPanel(QWidget):
 
     # --- finding ----------------------------------------------------------
 
+    def spectrogram_trace(self):
+        """The `BufferedSpectrogram` the lanes are drawing, or None.
+
+        This is the object every spectrogram control on the parameter bar
+        writes to -- nfft, overlap, and the denoiser chain -- so it is where
+        "what the reader is actually looking at" is written down.
+        """
+        data = getattr(self.browser, "data", None)
+        name = getattr(self.browser, "spectrogram", None)
+        if data is None or name is None:
+            return None
+        try:
+            return data[name]
+        except (KeyError, TypeError):
+            return None
+
+    def display_pipeline(self) -> dict:
+        """The transform chain behind the picture on screen.
+
+        Read afresh each run rather than cached, because the whole point is
+        to follow controls the reader is still turning.  Absent pieces come
+        back as None and the caller falls back to its own settings, so a
+        recording with no spectrogram panel does not stop the tracker.
+        """
+        spec = self.spectrogram_trace()
+        if spec is None:
+            return {}
+        pipeline = {
+            "nfft": int(getattr(spec, "nfft", DEFAULT_NFFT)),
+            "overlap_frac": float(getattr(spec, "overlap_frac", 0.5)),
+            "denoisers": tuple(getattr(spec, "denoisers", ()) or ()),
+            "denoise_params": {
+                key: dict(values)
+                for key, values in (getattr(spec, "denoise_params", {}) or {}).items()
+            },
+        }
+        # The filter's own sections, not a band-pass rebuilt from its
+        # cutoffs: the two would agree today and drift the first time the
+        # filter's order or type changes, and the reader would have no way
+        # to see which of the two they had tuned.
+        source = getattr(spec, "source", None)
+        sos = getattr(source, "sos", None)
+        if sos is not None:
+            pipeline["sos"] = sos
+        return pipeline
+
+    def follows_display(self) -> bool:
+        return self.sourcew.currentData() == SOURCE_DISPLAYED
+
     def _settings(self) -> dict:
-        return {
+        settings = {
             "method": self.method(),
             "threshold_db": float(self.thresholdw.value()),
             "tolerance_hz": float(self.tolerancew.value()),
@@ -1015,7 +1215,16 @@ class BandPanel(QWidget):
             "mains_hz": float(self.mainsw.currentData() or 0.0),
             "max_peaks": T.DEFAULT_MAX_PEAKS,
             "nfft": int(self.nfftw.currentData() or DEFAULT_NFFT),
+            "overlap_frac": 0.75,
+            "channel": self.channel(),
         }
+        if self.follows_display():
+            # The display wins on everything it knows about.  A reader who
+            # has spent ten minutes on the denoisers and the window length
+            # has said what spectrogram they mean; asking them to say it
+            # again over here is how the two come to disagree.
+            settings.update(self.display_pipeline())
+        return settings
 
     def _visible_window(self) -> Optional[tuple]:
         for overlay in self.overlays:
@@ -1033,7 +1242,13 @@ class BandPanel(QWidget):
             )
             return
         settings = self._settings()
+        self.warn_if_too_coarse(settings)
         t0, t1 = window
+        if self.follows_display():
+            found = self._find_in_displayed_block(settings, t0, t1)
+            if found is not None:
+                self._add_found(found, f"{t0:.1f}-{t1:.1f} s as displayed")
+                return
         try:
             with open_recording(paths, max(CHUNK_S, t1 - t0)) as data:
                 rate = float(data.rate)
@@ -1066,6 +1281,99 @@ class BandPanel(QWidget):
             return
         self._add_found(found, f"{t0:.1f}-{t1:.1f} s")
 
+    def warn_if_too_coarse(self, settings: dict) -> None:
+        """Say so when the spectrogram cannot resolve what is being asked.
+
+        Following the display is only an improvement while the display can
+        answer the question.  A window of 256 at 20 kHz puts 78 Hz in a bin,
+        and a reader looking for two fish 6 Hz apart will get neither -- they
+        will get whatever the noise did inside that bin, at length, and no
+        setting in this panel explains it because the setting that matters is
+        on the Spectrogram page.
+
+        A warning and not a refusal: a coarse window is the right one for
+        plenty of recordings, and this plugin does not get to decide that the
+        reader meant something else.
+        """
+        rate = float(getattr(getattr(self.browser, "data", None), "rate", 0.0))
+        nfft = int(settings.get("nfft", 0) or 0)
+        if rate <= 0 or nfft <= 0:
+            return
+        width = rate / nfft
+        tolerance = float(settings.get("tolerance_hz", 0.0))
+        if tolerance <= 0 or width <= tolerance:
+            return
+        where = (
+            "the spectrogram's window"
+            if self.follows_display()
+            else "the window below"
+        )
+        self.browser.notify(
+            "warning",
+            f"frequency bands: {where} is {nfft} samples, so a bin is "
+            f"{width:.1f} Hz -- wider than the {tolerance:.1f} Hz tolerance "
+            "you asked for. Lengthen the window on the Spectrogram page, or "
+            "the bands will be whatever the noise did inside one bin.",
+        )
+
+    def _find_in_displayed_block(self, settings: dict, t0: float, t1: float):
+        """Track the pixels the lane is drawing, or None to fall back.
+
+        The exact block, not a reproduction of it: `visible_block` is what
+        the image was built from, already filtered, already transformed at
+        the browser's own nfft, already through the denoiser chain.  Nothing
+        can disagree with the picture because nothing is recomputed -- and it
+        costs no read and no transform, which is what makes this the control
+        a reader tunes the settings against.
+
+        Linear power, because that is what the buffer holds; `decibel` is
+        applied at the image and nowhere earlier.
+
+        Returns None when there is no such block to take -- no spectrogram
+        panel, a lane not yet filled -- and the caller then reads the
+        recording instead rather than telling the reader nothing was found.
+        """
+        lane = self._lane_for_channel()
+        if lane is None:
+            return None
+        block = lane.visible_block()
+        spec = getattr(lane, "spec_data", None)
+        if block is None or spec is None:
+            return None
+        freqs = np.asarray(getattr(spec, "frequencies", ()), dtype=np.float64)
+        power = np.asarray(block, dtype=np.float64)
+        if freqs.size != power.shape[-1] or power.shape[0] < 2:
+            return None
+        rate = float(getattr(spec, "rate", 0.0))
+        if rate <= 0:
+            return None
+        # `visible_block` clamps its own slice, so the first frame it
+        # returned is not necessarily at t0.  Rebuild the axis from the
+        # index it started at rather than from the view range.
+        start = max(0, int(t0 * rate))
+        times = (np.arange(power.shape[0]) + start) / rate
+        frames = frames_of_power(times, freqs, power, settings)
+        return T.link(
+            frames,
+            settings["tolerance_hz"],
+            settings["max_gap_s"],
+            settings["min_duration_s"],
+        )
+
+    def _lane_for_channel(self):
+        """The spectrogram lane showing the channel the tracker is set to."""
+        wanted = self.channel()
+        fallback = None
+        for overlay in self.overlays:
+            lane = overlay.ax
+            if not hasattr(lane, "visible_block"):
+                continue
+            if fallback is None:
+                fallback = lane
+            if int(getattr(lane, "channel", -1)) == wanted:
+                return lane
+        return fallback
+
     def _add_found(self, found, where: str) -> None:
         if not found:
             self.browser.notify(
@@ -1084,9 +1392,11 @@ class BandPanel(QWidget):
         if not paths:
             self.browser.notify("warning", "frequency bands: no recording is open")
             return
+        settings = self._settings()
+        self.warn_if_too_coarse(settings)
         self._token = CancelToken()
         self._worker = SweepWorker(
-            paths, self._settings(), self.channel(), self._token
+            paths, settings, self.channel(), self._token
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
