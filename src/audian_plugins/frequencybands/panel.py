@@ -303,13 +303,19 @@ class SweepWorker(QObject):
             rate = float(data.rate)
             total = len(data)
             nfft = int(self.settings["nfft"])
+            # The transform's own step, derived the way thunderlab derives it
+            # (`n_overlap = int(n_fft * overlap_frac)`), because the chunk
+            # walk below has to land on the same grid it does.
+            hop = max(nfft - int(nfft * float(self.settings.get("overlap_frac", 0.5))), 1)
             step = int(CHUNK_S * rate)
             start = 0
             while start < total:
                 self.token.check()
                 stop = min(total, start + step)
-                # A chunk shorter than the window cannot be transformed, and
-                # a tail of a few samples is not a band anybody is missing.
+                # A chunk shorter than the window cannot be transformed.  With
+                # the stepping below this also means no complete window is
+                # left anywhere, so it ends the sweep rather than skipping a
+                # chunk.
                 if stop - start < nfft:
                     break
                 # Every channel, not just the tracked one: the chain the
@@ -324,7 +330,24 @@ class SweepWorker(QObject):
                         block, rate, self.settings, self.token
                     )
                 )
-                start = stop
+                # Resume on the window grid, not at the chunk edge.  A window
+                # needs `nfft` samples, so the last one this chunk can
+                # complete starts at `start + J*hop` with
+                # `J = (stop - start - nfft) // hop`, and the next one begins
+                # one hop after that.  Stepping to `stop` instead skipped
+                # every window straddling the seam: with the panel's own
+                # settings -- nfft 16384, overlap 0.75, so hop 4096 -- that
+                # is four frames, 0.61 s of a 20 kHz recording, at every
+                # boundary.  A fish singing across a seam had no vertices
+                # there.  It did not usually break the band, because the
+                # Max gap control defaults to 1.0 s and the seam is shorter
+                # than that, but it does at any tighter tolerance -- and the
+                # missing frames are missing either way.
+                #
+                # Landing on the grid also keeps the phase: `step` is not a
+                # multiple of `hop`, so resuming at the chunk edge shifted
+                # every subsequent frame time by `(step % hop) / rate`.
+                start += ((stop - start - nfft) // hop + 1) * hop
                 done = int(100 * start / max(1, total))
                 self.sigProgress.emit(
                     done, f"{start / rate:.0f} s of {total / rate:.0f} s"

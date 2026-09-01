@@ -1221,3 +1221,61 @@ def test_edits_survive_a_close_and_reopen(browser):
     assert next(iter(again.bands)).category == "male"
     again.close()
     pump(0.2)
+
+
+class _NeverCancelled:
+    def check(self) -> None:
+        pass
+
+
+def test_a_sweep_leaves_no_gap_in_the_frame_grid_at_a_chunk_boundary(tmp_path, monkeypatch):
+    """The seam used to swallow every window straddling it.
+
+    `_sweep` walked the recording in `CHUNK_S` steps with `start = stop`, so
+    the windows needing samples from both sides of a boundary were never
+    transformed: with the panel's own settings -- nfft 16384, overlap 0.75,
+    hop 4096 -- four frames, 0.61 s of a 20 kHz recording, at every seam.
+    A fish singing across one had no vertices there.
+
+    It also shifted the phase, because `step` is not a multiple of `hop`:
+    every frame after a seam moved by `(step % hop) / rate`.
+
+    `frames_of_block` is stubbed with a left-edge grid.  What is under test
+    is the *walk* -- which windows the sweep visits -- and a stub makes the
+    expected answer exact rather than a property of thunderfish.
+    """
+    soundfile = pytest.importorskip("soundfile")
+    from audian_plugins.frequencybands import panel as P
+
+    rate = 2000
+    seconds = 150.0  # two chunk boundaries at CHUNK_S = 60
+    nframes = int(rate * seconds)
+    signal = np.zeros((nframes, 1), dtype=np.float32)
+    recording = tmp_path / "long.wav"
+    soundfile.write(recording, signal, rate)
+
+    nfft, hop = 256, 128
+
+    def fake_frames_of_block(block, block_rate, settings, token=None):
+        n = (len(block) - nfft) // hop + 1
+        return [(j * hop / block_rate, np.array([100.0])) for j in range(n)]
+
+    monkeypatch.setattr(P, "frames_of_block", fake_frames_of_block)
+
+    worker = P.SweepWorker(
+        [str(recording)],
+        {"nfft": nfft, "overlap_frac": 0.5},
+        0,
+        _NeverCancelled(),
+    )
+    times = np.array([t for t, _hz in worker._sweep()])
+
+    assert times.size > 0
+    steps = np.diff(times)
+    expected = hop / rate
+    assert np.allclose(steps, expected), (
+        "the frame grid is not uniform across a chunk boundary: "
+        f"largest step {steps.max():.6f} s against one hop of {expected:.6f} s"
+    )
+    # and the sweep reaches the end rather than stopping a window short of it
+    assert times[-1] >= seconds - (nfft / rate) - expected
