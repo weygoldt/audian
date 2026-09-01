@@ -56,7 +56,8 @@ cheat sheet. Almost everything has one.
 - **A navigator strip** showing the whole recording, so you always know where
   you are in it.
 - **Plugins** for computed traces, analyses and side panels — including a
-  few-shot event detector that ships with it.
+  few-shot event detector and a curator for tracked frequency bands, both of
+  which ship with it.
 
 ## Detecting events
 
@@ -75,6 +76,38 @@ The defaults were measured rather than guessed: which way of combining several
 examples survives noise, why the threshold is relative to the noise floor
 instead of an absolute score, and where the whole approach stops working. See
 [`engine.py`](src/audian_plugins/eventdetection/engine.py) for the numbers.
+
+## Curating tracked frequency bands
+
+A tracker finds the bands. You fix the ones it got wrong.
+
+![bands](docs/shots/bands.png)
+
+**Plugins → Frequency bands** draws every tracked band over the spectrogram
+and gives you the mouse to correct them. Click a band to select it, Ctrl+click
+to add a second, right-click for a menu that acts on the band under the
+cursor: split it there, merge it with what you have selected, label it, delete
+it. Every one of those is undoable.
+
+This is the job that cannot be automated away. A tracker fails in two
+characteristic ways — it breaks one band in two where the frequency moved too
+fast, and it swaps two identities where they crossed — and neither is fixable
+by tracking harder. Both are obvious to a person looking at the picture.
+
+Bands come from one of three places: the built-in peak tracker over the
+visible window (fast enough to re-run while you tune it), the same tracker
+over the whole file on a background thread, or a **wavetracker** output
+directory. That directory is opened **read-only**: your edits go to a sidecar
+beside the recording, never back over the tracker's `.npy` files.
+
+It replaces `wavetracker`'s `EODsorter`, and the differences are all about not
+losing work. Merging keeps every vertex, where `EODsorter.connect` silently
+discarded the detections two traces shared. Saving is atomic and beside the
+recording, where `EODsorter.save` overwrote the tracker's only copy in place
+with no backup. Band ids are never reused. An inconsistent set of input arrays
+is reported rather than drawn as though it were true. See
+[`bands.py`](src/audian_plugins/frequencybands/bands.py) for what is stored and
+why it is two files.
 
 ## Two themes
 
