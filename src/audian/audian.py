@@ -1870,6 +1870,7 @@ class Audian(QMainWindow):
         self.menus = [m for m in (file_menu, region_menu, spec_menu, view_menu,
                                   plugin_menu, help_menu) if m is not None]
         self.setup_mnemonics()
+        self.show_menu_tooltips()
 
         # chrome that needs the actions:
         self.setup_statusbar()
@@ -3020,6 +3021,32 @@ class Audian(QMainWindow):
         self.acts.cheat_sheet.setShortcuts(["?", "Shift+/"])
         self.acts.cheat_sheet.triggered.connect(self.cheat_sheet)
         self.addAction(self.acts.cheat_sheet)
+
+    def show_menu_tooltips(self) -> None:
+        """Let every menu show the tool tips its actions already carry.
+
+        `QMenu` hides action tool tips unless asked, and nothing had ever
+        asked: measured on a four channel recording, 107 of 145 actions
+        carried a tool tip and not one of them could be read.  Every
+        sentence of hover help written for this application -- most of it
+        the only explanation an action has anywhere outside the cheat sheet
+        -- was reaching nobody.
+
+        Done here, once, over the whole bar rather than at each
+        `addMenu` call, so a menu added later cannot forget it.  Submenus
+        are separate `QMenu` objects and need it separately, which is what
+        the recursion is for.
+        """
+
+        def walk(menu):
+            menu.setToolTipsVisible(True)
+            for act in menu.actions():
+                sub = act.menu()
+                if sub is not None:
+                    walk(sub)
+
+        for menu in self.menus:
+            walk(menu)
 
     def all_actions(self):
         """Every menu action with its menu path, walked from self.menus."""
@@ -4251,16 +4278,73 @@ class Audian(QMainWindow):
             lambda x: self.browser().lpfw.stepDown()
         )
 
+        # Hover help for this page, written together rather than beside each
+        # action, because it is prose and prose is easier to keep even when
+        # it can be read in one place.  Measured before this went in: one of
+        # the eighteen entries here said anything a reader could not already
+        # read off its own label, on the page where most of the work is
+        # done.
+        #
+        # Each says what the entry is *for* and not what it does -- "finer
+        # in frequency, blurrier in time" rather than "increase nfft" --
+        # since the label already carries the verb and a tool tip that only
+        # restates it is worse than none.
+        for name, tip in (
+            ("frequency_resolution_up",
+             "A longer Fourier window: finer in frequency, blurrier in time"),
+            ("frequency_resolution_down",
+             "A shorter Fourier window: sharper in time, coarser in frequency"),
+            ("overlap_up",
+             "Overlap the Fourier windows further -- a smoother picture, and "
+             "more of them to compute"),
+            ("overlap_down",
+             "Overlap the Fourier windows less -- quicker, and blockier in time"),
+            ("color_map_cycler",
+             "Step through the colour maps, all of them perceptually uniform"),
+            ("link_power",
+             "Hold every open recording at the same power scale, so two of "
+             "them can be compared by eye"),
+            ("power_up",
+             "Slide the whole colour scale up, keeping its span: brings the "
+             "loud parts back out of saturation"),
+            ("power_down",
+             "Slide the whole colour scale down, keeping its span: brings the "
+             "quiet parts up out of the floor"),
+            ("max_power_up", "Raise the top of the colour scale"),
+            ("max_power_down",
+             "Lower the top of the colour scale, so less of it is saturated"),
+            ("min_power_up",
+             "Raise the bottom of the colour scale, cutting more of the noise "
+             "floor out of the picture"),
+            ("min_power_down",
+             "Lower the bottom of the colour scale, showing more of the noise "
+             "floor"),
+            ("link_filter",
+             "Hold every open recording at the same filter band"),
+            ("highpass_up", "Raise the high-pass cutoff, drawn on the spectrogram"),
+            ("highpass_down", "Lower the high-pass cutoff, drawn on the spectrogram"),
+            ("lowpass_up", "Raise the low-pass cutoff, drawn on the spectrogram"),
+            ("lowpass_down", "Lower the low-pass cutoff, drawn on the spectrogram"),
+        ):
+            act = getattr(self.acts, name, None)
+            if act is not None:
+                act.setToolTip(tip)
+
         spec_menu = menu.addMenu("&Spectrogram")
         self.spectrogram_group = QActionGroup(self)
         self.spectrogram_menu = spec_menu.addMenu("&Active")
         self.data_menus.append(self.spectrogram_menu)
+        # Four groups, separated, and in the order the picture is made:
+        # what is computed, how it is drawn, what the colours mean, and
+        # what is drawn on top.  Denoising belongs in the first group and
+        # not after the appearance entries where it first landed -- it
+        # changes the numbers in the buffer and costs a recompute, which
+        # is what it has in common with the window and the overlap and
+        # what a colour map has with neither.
         spec_menu.addAction(self.acts.frequency_resolution_up)
         spec_menu.addAction(self.acts.frequency_resolution_down)
         spec_menu.addAction(self.acts.overlap_up)
         spec_menu.addAction(self.acts.overlap_down)
-        spec_menu.addAction(self.acts.color_map_cycler)
-        spec_menu.addAction(self.acts.toggle_peaking)
 
         self.denoise_menu = spec_menu.addMenu("De&noising")
         for entry in denoise.all_denoisers():
@@ -4269,6 +4353,10 @@ class Audian(QMainWindow):
         self.denoise_menu.addAction(self.acts.denoise_threshold_up)
         self.denoise_menu.addAction(self.acts.denoise_threshold_down)
         self.data_menus.append(self.denoise_menu)
+
+        spec_menu.addSeparator()
+        spec_menu.addAction(self.acts.color_map_cycler)
+        spec_menu.addAction(self.acts.toggle_peaking)
 
         spec_menu.addSeparator()
         spec_menu.addAction(self.acts.link_power)
@@ -4406,6 +4494,8 @@ class Audian(QMainWindow):
                 self.toggle_menu.addAction(cact)
             self.acts.channels.append(cact)
             sact = QAction(f"Show channel {c}", self)
+            # "Show" reads as "reveal it as well"; it does the opposite.
+            sact.setToolTip(f"Hide every channel except {c}")
             sact.triggered.connect(lambda x, channel=c: self.show_channel(channel))
             setattr(self.acts, f"select_channel{c}", sact)
             if self.show_menu:
@@ -5252,7 +5342,7 @@ class Audian(QMainWindow):
         application is missing something, when it means this reader has no
         plugins.
         """
-        from .plugins import panel_menu_path
+        from .plugins import panel_menu_path, panel_menu_tip
 
         entries = self.plugins.panel_entries() if self.plugins is not None else []
         self.plugin_acts = []
@@ -5273,7 +5363,9 @@ class Audian(QMainWindow):
                 parent = headings[key]
             act = QAction(path[-1], self)
             act.setCheckable(True)
-            act.setStatusTip(f"Show the {path[-1]} panel")
+            tip = panel_menu_tip(factory)
+            act.setToolTip(tip)
+            act.setStatusTip(tip)
             act.toggled.connect(
                 lambda on, name=label: self.toggle_plugin_panel(name, on)
             )

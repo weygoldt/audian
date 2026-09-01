@@ -2533,11 +2533,18 @@ class DataBrowser(QWidget):
             self.notify("warning", message)
 
         # add traces to menu:
+        #
+        # These entries are named after the data, so their names say what
+        # they are and not what ticking them does -- and a menu of bare
+        # nouns is the one place hover help has to carry the verb.  Written
+        # from the trace rather than by hand because which traces exist
+        # depends on what the plugins registered.
         self.trace_acts = []
         for t in self.data.traces:
             act = QAction(t.name, self)
             act.setCheckable(True)
             act.setChecked(True)
+            act.setToolTip(f"Draw the {t.name} trace in the channel stack")
             act.toggled.connect(lambda x, name=t.name: self.toggle_trace(x, name))
             self.trace_acts.append(act)
         # add spectrogram selection to menu:
@@ -2546,6 +2553,10 @@ class DataBrowser(QWidget):
             act = QAction(spec, self)
             act.setCheckable(True)
             act.setChecked(False)
+            act.setToolTip(
+                f"Show the {spec} spectrogram, and point the resolution, "
+                f"level and denoising controls at it"
+            )
             act.toggled.connect(lambda x, name=spec: self.set_spectrogram(x, name))
             self.spec_acts.append(act)
 

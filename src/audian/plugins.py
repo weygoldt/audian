@@ -320,6 +320,30 @@ def panel_menu_path(factory) -> tuple:
     return parts or (panel_label(factory),)
 
 
+def panel_menu_tip(factory) -> str:
+    """One line of hover help for this panel's entry in the Plugins menu.
+
+    A plugin sets ``menu_tip`` on its factory, the same way it sets
+    ``menu_path``.  Failing that the factory's docstring speaks for it, and
+    failing that the entry gets a sentence built from its own name -- which
+    says nothing a reader could not already see, but is better than a menu
+    where some items explain themselves and others do not.
+
+    A plugin entry needs this more than most: its name is chosen by
+    somebody else, it is the only entry in the bar whose wording audian
+    cannot review, and it is the one a reader is least likely to recognise.
+    """
+    tip = getattr(factory, "menu_tip", None)
+    if tip:
+        return str(tip).strip()
+    doc = (factory.__doc__ or "").strip()
+    if doc:
+        first = doc.split("\n\n", 1)[0].replace("\n", " ").strip()
+        if first:
+            return " ".join(first.split())
+    return f"Show the {panel_menu_path(factory)[-1]} panel"
+
+
 def build_panel(factory, browser):
     """Call one plugin's factory, or return `None` if it misbehaved.
 

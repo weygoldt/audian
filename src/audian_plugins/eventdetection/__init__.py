@@ -36,3 +36,12 @@ def audian_event_detection_panel(browser):
 #: the heading is what makes the second one cheap to add.
 audian_event_detection_panel.menu_path = ("Event detection",
                                          "Normalised cross-correlation")
+
+#: Hover help for that entry.  Set explicitly rather than left to the
+#: docstring above, which explains the naming contract to whoever maintains
+#: this file and would tell a reader nothing about what ticking the box
+#: does.  One sentence, about the reader's work and not the method's name.
+audian_event_detection_panel.menu_tip = (
+    "Mark a few examples of a call by hand, then find the rest of them by "
+    "matching their shape -- on the waveform or on the spectrogram"
+)
