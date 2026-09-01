@@ -98,11 +98,16 @@ Bands are found with **thunderfish's harmonic group finder** — the one
 wavetracker itself uses. It groups a peak with its own multiples and reports
 the *fundamental*, so a fish with four audible harmonics is one band rather
 than four, and it sets the mains aside instead of tracking 50, 100 and 150 Hz
-as three animals. On a 120 s four-channel test recording with five synthetic
-fish it returns 6 bands where a plain peak finder returns 22, and the two
-extra are the two places the tracker genuinely broke a band — which is the
-work you are here to do. Run it over the visible window while you tune the
-settings, then over the whole file on a background thread.
+as three animals. On one channel of a 120 s four-channel test recording it
+returns 6 bands where a plain peak finder returns 22: four fish, and two
+places the tracker genuinely broke a band — which is the work you are here to
+do. The fifth fish in that file sits 6 Hz from another and is not separated on
+that channel, which is the crossing problem and not a threshold you can turn.
+Run it over the visible window while you tune the settings, then over the
+whole file on a background thread.
+
+It needs `pip install audian[bands]`; without thunderfish the plugin falls
+back to a plain peak finder and says so in the **Find** menu.
 
 Or import a **wavetracker** output directory, which is the case this was
 written for. That directory is opened **read-only**: your edits go to a
