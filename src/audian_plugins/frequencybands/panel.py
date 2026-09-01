@@ -379,6 +379,15 @@ class BandPanel(QWidget):
         self.maxhzw.setToolTip("Ignore everything above this frequency")
         group.add_row("Up to", "", self.maxhzw)
 
+        self.channelw = narrow_combo(QComboBox(self))
+        self.channelw.setToolTip(
+            "Which electrode to track. A band is found in one channel's "
+            "spectrogram and then drawn on every lane, because a band is a "
+            "signal in the water rather than a property of the electrode "
+            "that heard it best."
+        )
+        group.add_row("Channel", "", self.channelw)
+
         self.nfftw = narrow_combo(QComboBox(self))
         for n in (2048, 4096, 8192, 16384, 32768):
             self.nfftw.addItem(str(n), n)
@@ -437,7 +446,32 @@ class BandPanel(QWidget):
     def showEvent(self, event):  # noqa: N802 - Qt's spelling
         super().showEvent(event)
         self.attach()
+        self.fill_channels()
         self.load_for_recording()
+
+    def fill_channels(self) -> None:
+        """List the recording's channels, keeping the reader's choice.
+
+        Filled here rather than in the constructor because a panel is built
+        once and a recording is opened many times; a combo listing four
+        electrodes while a one-channel file is open is an offer that cannot
+        be taken.
+        """
+        channels = int(getattr(getattr(self.browser, "data", None), "channels", 1) or 1)
+        if self.channelw.count() == channels:
+            return
+        wanted = self.channelw.currentData()
+        self.channelw.blockSignals(True)
+        self.channelw.clear()
+        for c in range(channels):
+            self.channelw.addItem(f"{c:02d}", c)
+        if wanted is not None and 0 <= int(wanted) < channels:
+            self.channelw.setCurrentIndex(int(wanted))
+        self.channelw.blockSignals(False)
+
+    def channel(self) -> int:
+        chosen = self.channelw.currentData()
+        return 0 if chosen is None else int(chosen)
 
     def closeEvent(self, event):  # noqa: N802 - Qt's spelling
         """Stop the worker and take the marks off the lanes.
@@ -898,7 +932,9 @@ class BandPanel(QWidget):
                         "out or choose a shorter window",
                     )
                     return
-                block = np.asarray(data[start:stop, 0], dtype=np.float64)
+                block = np.asarray(
+                    data[start:stop, self.channel()], dtype=np.float64
+                )
             freqs, times, spec = spectrogram(
                 block, rate, freq_resolution=rate / settings["nfft"], overlap_frac=0.75
             )
@@ -938,7 +974,9 @@ class BandPanel(QWidget):
             self.browser.notify("warning", "frequency bands: no recording is open")
             return
         self._token = CancelToken()
-        self._worker = SweepWorker(paths, self._settings(), 0, self._token)
+        self._worker = SweepWorker(
+            paths, self._settings(), self.channel(), self._token
+        )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)

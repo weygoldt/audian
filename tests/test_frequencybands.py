@@ -583,6 +583,25 @@ def test_a_sweep_covers_every_file_of_a_split_recording(browser):
         pump(0.2)
 
 
+def test_the_channel_to_track_is_the_recording_s_channels(browser):
+    """A grid recording is the case this plugin is for; channel 0 is a default.
+
+    The combo is filled from the open recording rather than at construction,
+    because a panel is built once and recordings are opened many times.
+    """
+    from audian_plugins.frequencybands import audian_frequency_bands_panel
+
+    _title, panel = audian_frequency_bands_panel(browser)
+    panel.show()
+    pump(0.3)
+    assert panel.channelw.count() == 2, "the fixture recording has two channels"
+    assert panel.channel() == 0
+    panel.channelw.setCurrentIndex(1)
+    assert panel.channel() == 1
+    panel.close()
+    pump(0.2)
+
+
 def test_a_recording_has_lanes_to_draw_on(browser):
     assert browser.spectrogram_axes(), "no spectrogram lane to hang a band on"
 
