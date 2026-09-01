@@ -62,6 +62,7 @@ from __future__ import annotations
 import csv
 import math
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
@@ -571,6 +572,26 @@ class LabelSet:
         the reader made, presented as the whole of it.
         """
         self._undo = None
+
+    @contextmanager
+    def undo_undisturbed(self):
+        """Make a bulk change without spending the reader's one undo.
+
+        For a change the reader did not make.  The detector's live preview
+        rewrites a whole category on every debounce tick, and it used to
+        call `forget_undo` afterwards on the honest reasoning that fifty
+        steps of "the slider moved" is not an edit history -- but the slot
+        it cleared was not the preview's, it was the reader's, so a box
+        drawn by hand stopped being undoable the moment a timer fired.
+
+        Both halves are right and they are about different things: the
+        preview must not *record* an undo, and it must not *destroy* one.
+        """
+        keep = self._undo
+        try:
+            yield
+        finally:
+            self._undo = keep
 
     def can_undo(self) -> bool:
         return self._undo is not None

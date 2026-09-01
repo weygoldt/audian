@@ -43,9 +43,17 @@ Two decisions about that loop are worth stating.
 set as a category of their own, so what appears on screen is drawn by the
 same overlay, in the same colours, as everything else -- and is the same
 code path the Run button commits.  There is no second renderer to disagree
-with the first.  The category is rewritten in place on every change and
-`forget_undo` is called after, so a slider drag does not fill the undo
-history with fifty versions of the same answer.
+with the first.  The category is rewritten in place on every change, under
+`LabelSet.undo_undisturbed`, so a slider drag neither fills the undo history
+with fifty versions of the same answer nor spends the one undo the reader
+was holding for a box they drew by hand.
+
+Being in the reader's store is a loan, not a gift: an uncommitted preview is
+cleared when the tab closes.  Otherwise up to `PREVIEW_LIMIT` machine-made
+spans stayed behind, and `flush_labels` wrote them into the hand-authored
+sidecar beside the recording, where nothing said which marks were guesses.
+A finished Run is the exception -- the reader asked for those and a CSV was
+written beside them, so they stay.
 
 **Moving the sensitivity slider does not re-run the detector.**  The score
 curve is cached and only the threshold is reapplied, which measured 0.12 ms
@@ -716,8 +724,13 @@ class DetectorPanel(QWidget):
         labels = getattr(self.browser, "labels", None)
         if labels is None:
             return
-        if labels.remove_category(self._category_name()):
-            labels.forget_undo()
+        # Dropping this panel's own category is not an edit to the reader's
+        # labels, so it neither records an undo nor spends theirs --
+        # `remove_category` calls `forget_undo` itself, which is what this
+        # has to hold back.
+        with labels.undo_undisturbed():
+            removed = labels.remove_category(self._category_name())
+        if removed:
             redraw = getattr(self.browser, "redraw_labels", None)
             if redraw is not None:
                 redraw()
@@ -799,6 +812,17 @@ class DetectorPanel(QWidget):
 
     def closeEvent(self, event):  # noqa: N802 - Qt's spelling
         self._debounce.stop()
+        # A preview is this panel's working state, not the reader's work.  It
+        # is written into their label set so that tuning is drawn by the code
+        # that draws a committed run, and up to PREVIEW_LIMIT machine-made
+        # spans could be sitting there when the tab closes -- after which
+        # `flush_labels` writes them into the hand-authored sidecar beside
+        # the recording, indistinguishable from marks the reader made.
+        #
+        # A finished Run is different: `_committed` says the reader asked for
+        # those and a CSV was written beside them, so they stay.
+        if not self._committed:
+            self._clear_found()
         if self.recording is not None:
             self.recording.close()
             self.recording = None
@@ -1199,8 +1223,14 @@ class DetectorPanel(QWidget):
 
         Written straight into the label set rather than into an overlay of
         this panel's own, so that what the reader tunes against is drawn by
-        the same code that will draw what Run commits.  `forget_undo` after,
-        because fifty steps of "the slider moved" is not an edit history.
+        the same code that will draw what Run commits.
+
+        Under `undo_undisturbed` rather than followed by `forget_undo`.  The
+        reasoning for clearing was right -- fifty steps of "the slider moved"
+        is not an edit history -- but the slot being cleared belonged to the
+        reader, so a box they drew by hand stopped being undoable as soon as
+        a debounce fired.  The preview neither records an undo nor spends
+        one.
         """
         labels = getattr(self.browser, "labels", None)
         if labels is None:
@@ -1210,15 +1240,15 @@ class DetectorPanel(QWidget):
             found = []
             self._say(f"over {PREVIEW_LIMIT} matches -- not drawn. Lower the "
                       f"sensitivity.")
-        labels.remove_category(name)
-        labels.add_category(name, KIND_SPAN, labels.next_color())
         channel = self._channel()
-        for candidate in found:
-            labels.add(Label(name, KIND_SPAN, channel, candidate.t0,
-                             candidate.t1, candidate.f_low_hz,
-                             candidate.f_high_hz,
-                             f"score {candidate.score:.3f}"))
-        labels.forget_undo()
+        with labels.undo_undisturbed():
+            labels.remove_category(name)
+            labels.add_category(name, KIND_SPAN, labels.next_color())
+            for candidate in found:
+                labels.add(Label(name, KIND_SPAN, channel, candidate.t0,
+                                 candidate.t1, candidate.f_low_hz,
+                                 candidate.f_high_hz,
+                                 f"score {candidate.score:.3f}"))
         for call in ("revalidate_selection", "redraw_labels",
                      "update_label_status"):
             fn = getattr(self.browser, call, None)

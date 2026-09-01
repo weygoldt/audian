@@ -1157,3 +1157,64 @@ def test_the_panel_divider_is_wider_than_the_lane_divider(window):
     browser = window.browser()
     assert browser.parambar.split.objectName() == "audianPanelSplit"
     assert browser.parambar.split.handleWidth() >= 12
+
+
+def test_a_preview_does_not_spend_the_reader_s_undo(panel):
+    """The one undo belongs to the reader, not to a debounce.
+
+    `_draw` used to call `forget_undo` after rewriting its category, on the
+    honest reasoning that fifty steps of "the slider moved" is not an edit
+    history -- but the slot it cleared was the reader's, so a box drawn by
+    hand stopped being undoable the moment a timer fired.
+    """
+    browser = panel.browser
+    _select(panel)
+    browser.set_times(0.0, 4.0)
+    pump(0.4)
+
+    browser.labels.add(Label("pulse", KIND_SPAN, None, 9.0, 9.1, 600.0, 2000.0))
+    assert browser.labels.can_undo()
+
+    panel.preview()
+    pump(0.2)
+    assert browser.labels.count_in(panel._category_name()) > 0
+
+    assert browser.labels.can_undo(), (
+        "the preview consumed the undo of a label the reader drew by hand"
+    )
+    assert browser.labels.undo() == "add"
+
+
+def test_closing_the_tab_takes_an_uncommitted_preview_with_it(panel):
+    """Preview marks are this panel's working state, not the reader's work.
+
+    They are written into the reader's own store so tuning is drawn by the
+    code that draws a committed run.  Left there when the tab closes,
+    `flush_labels` writes up to PREVIEW_LIMIT machine-made spans into the
+    hand-authored sidecar beside the recording, where nothing distinguishes
+    them from marks the reader made.
+    """
+    browser = panel.browser
+    _select(panel)
+    browser.set_times(0.0, 4.0)
+    pump(0.4)
+    panel.preview()
+    pump(0.2)
+    name = panel._category_name()
+    assert browser.labels.count_in(name) > 0
+    assert not panel._committed
+    # Counted per category rather than by total, and the reader's count is
+    # read here rather than assumed to be SHOTS: the fixture is module
+    # scoped, so an earlier test may have left a mark of its own, and a
+    # test that fails because of its neighbour is worse than no test.
+    mine = browser.labels.count_in("pulse")
+
+    panel.close()
+    pump(0.3)
+
+    assert browser.labels.count_in(name) == 0
+    # and the reader's own marks are all still there.  Not a total: other
+    # tests sharing this fixture leave categories of their own behind, and
+    # this is a claim about the found category and the source category, not
+    # about the whole store.
+    assert browser.labels.count_in("pulse") == mine
