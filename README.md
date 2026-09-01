@@ -94,6 +94,18 @@ characteristic ways — it breaks one band in two where the frequency moved too
 fast, and it swaps two identities where they crossed — and neither is fixable
 by tracking harder. Both are obvious to a person looking at the picture.
 
+**It tracks the spectrogram you are looking at.** Set the band-pass, choose a
+window length, take the mains out with the denoisers — then track, and the
+bands come from that picture rather than from a second one computed behind it.
+In the visible window nothing is recomputed at all: the tracker reads the
+block the lane drew. Over the whole file the same chain is reproduced, every
+channel through the denoisers before one is picked, because the mains denoiser
+tells a fish from the mains by comparing across the array. A line under the
+control names the window, overlap, filter and denoisers the next run will
+read, and it says so when the window is too coarse for the tolerance you asked
+for — audian's default 256 puts 78 Hz in a bin, which cannot separate two fish
+6 Hz apart.
+
 Bands are found with **thunderfish's harmonic group finder** — the one
 wavetracker itself uses. It groups a peak with its own multiples and reports
 the *fundamental*, so a fish with four audible harmonics is one band rather
