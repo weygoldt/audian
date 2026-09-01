@@ -74,6 +74,7 @@ half of either.
 from __future__ import annotations
 
 import csv
+import math
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -144,9 +145,15 @@ def _number(text: str) -> Optional[float]:
     if not text:
         return None
     try:
-        return float(text)
+        value = float(text)
     except ValueError:
         return None
+    # "nan", "inf" and "1e400" all parse, and `_integer` then raises
+    # ValueError or OverflowError out of `read` and out of the caller that
+    # opens the recording.  Same rule as `labels._number`.
+    if not math.isfinite(value):
+        return None
+    return value
 
 
 def _integer(text: str) -> Optional[int]:
@@ -797,7 +804,11 @@ def read(recording: Path | str, reference: bool = False) -> tuple:
                         (row.get("category") or "").strip(),
                         (row.get("note") or "").strip(),
                     )
-        except (OSError, csv.Error) as exc:
+        # Not just OSError and csv.Error: the row loop parses cells, and a
+        # parse that raises would otherwise leave `read` and take the
+        # recording's bands with it.  A CSV that cannot be read costs the
+        # labels, never the geometry -- the geometry is already loaded above.
+        except (OSError, csv.Error, ValueError, TypeError) as exc:
             complaints.append(
                 f"{csv_file.name} could not be read ({exc}); the bands were "
                 "loaded without their labels"

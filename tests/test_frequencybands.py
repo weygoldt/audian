@@ -235,6 +235,24 @@ def test_a_csv_naming_a_band_the_geometry_lacks_is_reported(tmp_path):
     assert any("which the geometry does not contain" in c for c in complaints)
 
 
+def test_a_non_finite_band_id_costs_its_row_and_not_the_geometry(tmp_path):
+    """"nan" parses as a float, and `int(nan)` raises out of `read`.
+
+    `read`'s guard named only OSError and csv.Error, so the exception left
+    the reader and took the recording's bands with it.  The geometry is
+    already loaded by then; a bad claims row must cost at most its label.
+    """
+    recording = tmp_path / "rec.wav"
+    store = B.BandSet()
+    store.add(*steady())
+    B.write(store, recording)
+    with B.csv_path(recording).open("a", encoding="utf-8") as stream:
+        stream.write("nan,ghost,,0.0,1.0,1.0,1.0,1.0,2,\n")
+    back, complaints = B.read(recording)
+    assert back.ids() == [1]
+    assert len(back) == 1
+
+
 def test_a_labels_only_sidecar_is_reported(tmp_path):
     recording = tmp_path / "rec.wav"
     B.csv_path(recording).write_text("band,category\n1,male\n", encoding="utf-8")

@@ -60,6 +60,7 @@ because inference typed six of them wrongly.  There is nothing here to pin.
 from __future__ import annotations
 
 import csv
+import math
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -121,9 +122,19 @@ def _number(text: str) -> Optional[float]:
     if not text:
         return None
     try:
-        return float(text)
+        value = float(text)
     except ValueError:
         return None
+    # `float` accepts "nan", "inf" and "1e400", and every one of them breaks
+    # something downstream rather than here: `int(nan)` raises ValueError and
+    # `int(inf)` OverflowError out of `_integer`, and a NaN t0 makes a label
+    # whose `overlaps` is false for every window -- invisible, unpickable,
+    # undeletable through the UI, and written straight back out on the next
+    # save.  A cell that cannot be placed on an axis is a cell this viewer
+    # cannot read, which is what None already means.
+    if not math.isfinite(value):
+        return None
+    return value
 
 
 def _integer(text: str) -> Optional[int]:
@@ -659,7 +670,15 @@ class LabelSet:
         dropped = 0
         added = []
         for row in rows:
-            label = Label.from_row(row)
+            # `from_row` is meant to return None rather than raise, and the
+            # cells it reads are guarded one at a time.  This catches what
+            # that guarantee does not: a row shaped in some way nobody
+            # anticipated still costs its own row and not the recording's
+            # labels, which is what the contract above promises.
+            try:
+                label = Label.from_row(row)
+            except Exception:
+                label = None
             if label is None:
                 dropped += 1
                 continue

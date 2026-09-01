@@ -199,6 +199,58 @@ def test_an_unknown_category_is_added_rather_than_dropped(tmp_path):
     assert len(store) == 1
 
 
+def test_a_non_finite_channel_costs_its_row_and_not_the_recording(tmp_path):
+    """`float` accepts "nan", and `int(nan)` raises.
+
+    The read loop used to let that out of `read`, out of `load_labels` and
+    out of `open()`, so one hand-typed cell stopped the recording opening
+    at all.
+    """
+    path = tmp_path / "rec-editable-labels.csv"
+    path.write_text(
+        ",".join(COLUMNS)
+        + "\nevent,span,nan,1.0,2.0,,,\nevent,span,0,3.0,4.0,,,\n",
+        encoding="utf-8",
+    )
+    store = LabelSet(DEFAULT_CATEGORIES)
+    report = store.read(path)
+    assert len(store) == 2
+    assert report.dropped == 0
+    # the unreadable cell is absent, not zero: channel 0 is a real channel
+    assert store.labels[0].channel is None
+    assert store.labels[1].channel == 0
+
+
+def test_a_non_finite_start_time_drops_the_row(tmp_path):
+    """A NaN t0 makes a label no window ever overlaps.
+
+    It would be invisible, unpickable and undeletable through the UI, and
+    written straight back out on the next save -- so it has to be dropped at
+    the door like any other row that cannot be placed.
+    """
+    path = tmp_path / "rec-editable-labels.csv"
+    path.write_text(
+        ",".join(COLUMNS)
+        + "\nevent,span,0,nan,2.0,,,\nevent,span,0,inf,2.0,,,\nevent,span,0,5.0,6.0,,,\n",
+        encoding="utf-8",
+    )
+    store = LabelSet(DEFAULT_CATEGORIES)
+    report = store.read(path)
+    assert (report.read, report.dropped) == (1, 2)
+    assert store.labels[0].t0 == 5.0
+
+
+def test_an_overflowing_number_is_read_as_absent(tmp_path):
+    """"1e400" parses as inf, and `int(inf)` raises OverflowError."""
+    path = tmp_path / "rec-editable-labels.csv"
+    path.write_text(
+        ",".join(COLUMNS) + "\nevent,span,1e400,1.0,2.0,,,\n", encoding="utf-8"
+    )
+    store = LabelSet(DEFAULT_CATEGORIES)
+    store.read(path)
+    assert store.labels[0].channel is None
+
+
 def test_a_missing_sidecar_reads_as_an_empty_set(tmp_path):
     store = LabelSet(DEFAULT_CATEGORIES)
     report = store.read(tmp_path / "nothing-labels.csv")
