@@ -817,3 +817,167 @@ def test_the_tab_carries_audians_own_close_mark(window):
     assert not browser.plugin_panel_open("Detector")
     assert not act.isChecked()
     assert browser.parambar.plugins is None
+
+
+# ------------------------------------------------------- a globbed session
+
+
+SESSION_FILES = 3
+SESSION_FILE_S = 6.0
+
+
+def session_signal(index):
+    """One file of a session, with the pulse train running through it."""
+    n = int(PULSE_S * RATE)
+    tone = (np.sin(2 * np.pi * CARRIER_HZ * np.arange(n) / RATE)
+            * np.hanning(n)).astype(np.float32)
+    rng = np.random.default_rng(100 + index)
+    frames = int(SESSION_FILE_S * RATE)
+    signal = rng.normal(0.0, 0.002, (frames, 2)).astype(np.float32)
+    onsets, t = [], FIRST_S
+    while t + PULSE_S < SESSION_FILE_S:
+        i = int(round(t * RATE))
+        signal[i:i + n, 0] += tone
+        signal[i:i + n, 1] += tone
+        onsets.append(index * SESSION_FILE_S + t)
+        t += EVERY_S
+    return signal, onsets
+
+
+@pytest.fixture(scope="module")
+def session(app, tmp_path_factory):
+    """A browser over three files audian joins into one timeline.
+
+    The timestamps are the whole fixture.  `soundfile` writes no metadata,
+    and without a start time `DataLoader.open_multiple` stops after the
+    first file and `audian.data.open_files` refuses the set outright -- so
+    they go in through `audioio` at creation, the way a recorder writes
+    them.  Getting that wrong does not produce a subtly short recording; it
+    produces a `ValueError` naming the files it could not open.
+    """
+    pytest.importorskip("soundfile")
+    import datetime
+
+    import audian.audian as audian_app
+    from audioio import write_audio
+    from PySide6.QtCore import QSettings
+    from audian import theme
+    from audian.plugins import Plugins
+
+    directory = tmp_path_factory.mktemp("detector-session")
+    start = datetime.datetime(2026, 8, 31, 10, 0, 0)
+    paths, onsets = [], []
+    for index in range(SESSION_FILES):
+        signal, marks = session_signal(index)
+        onsets.extend(marks)
+        stamp = start + datetime.timedelta(seconds=index * SESSION_FILE_S)
+        path = directory / f"rec-{index:02d}.wav"
+        write_audio(str(path), signal, RATE, metadata=dict(BEXT=dict(
+            OriginationDate=stamp.strftime("%Y-%m-%d"),
+            OriginationTime=stamp.strftime("%H:%M:%S"),
+        )))
+        paths.append(str(path))
+
+    original_load = Plugins.load_plugins
+    original_path = audian_app.settings_path
+    home = Path(QSettings("audian", "audian").fileName()).parent.parent
+    audian_app.settings_path = lambda: directory / "settings.json"
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
+            QSettings.setPath(fmt, scope, os.fspath(directory))
+    theme.apply(app)
+    plugins = Plugins()
+    plugins.add_panel_factory(audian_detector.audian_detector_panel)
+    win = audian_app.Audian(paths, {}, plugins, [], 0, None, False, 0, None)
+    win.resize(1200, 900)
+    win.show()
+    pump(2.0)
+    Plugins.load_plugins = original_load
+
+    browser = win.browser()
+    browser.labels.clear()
+    browser.labels.add_category("pulse", KIND_SPAN, 0)
+    # one example in each file, so a detector that sees only the first
+    # cannot learn all three
+    for index in range(SESSION_FILES):
+        onset = onsets[index * len(onsets) // SESSION_FILES + 1]
+        browser.labels.add(Label("pulse", KIND_SPAN, None, onset,
+                                 onset + PULSE_S, 600.0, 2000.0))
+    browser.labels.forget_undo()
+
+    browser.open_plugin_panel("Detector")
+    pump(1.0)
+    panel = browser.plugin_panels["Detector"]
+    yield panel, browser, onsets
+
+    browser.close_plugin_panel("Detector")
+    win.close()
+    win.setParent(None)
+    win.deleteLater()
+    pump(0.3)
+    audian_app.settings_path = original_path
+    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
+            QSettings.setPath(fmt, scope, os.fspath(home))
+
+
+def test_the_detector_sees_the_same_timeline_the_browser_does(session):
+    """It opens the recording a second time, so the two can disagree.
+
+    A globbed session is several files joined by their timestamps.  A loader
+    that drops one leaves the detector scanning a shorter recording than the
+    reader is looking at, silently, with every label past the join landing
+    nowhere.
+    """
+    panel, browser, _onsets = session
+    recording = panel._open()
+    assert recording is not None
+    assert len(recording.paths) == SESSION_FILES
+    shown = len(browser.data.data) / browser.data.rate
+    assert recording.duration == pytest.approx(shown, abs=0.01)
+    assert recording.duration == pytest.approx(
+        SESSION_FILES * SESSION_FILE_S, abs=0.01)
+
+
+def test_examples_are_learned_from_every_file_of_the_session(session):
+    """One example per file, and a template has to come back for each."""
+    panel, _browser, _onsets = session
+    _select(panel)
+    assert len(panel.examples()) == SESSION_FILES
+    templates = panel._learn()
+    assert templates is not None
+    assert len(templates) == SESSION_FILES
+
+
+def test_a_run_crosses_every_file_boundary(session):
+    """The complaint was that this breaks; it must find all of them.
+
+    Per file rather than in total, because a detector that reads only the
+    first file still returns a respectable-looking count.
+    """
+    panel, browser, onsets = session
+    _select(panel)
+    panel._calibrate()
+    for _ in range(400):
+        pump(0.05)
+        if panel._thread is None:
+            break
+    panel._run_clicked()
+    for _ in range(600):
+        pump(0.05)
+        if panel._thread is None:
+            break
+    assert panel._thread is None, "the sweep never finished"
+
+    found = sorted(la.t0 for la in browser.labels
+                   if la.category == panel._category_name())
+    assert found, f"nothing found: {panel.statusw.text()}"
+    for index in range(SESSION_FILES):
+        lo = index * SESSION_FILE_S
+        hi = lo + SESSION_FILE_S
+        here = [t for t in found if lo <= t < hi]
+        wanted = [t for t in onsets if lo <= t < hi]
+        assert len(here) == pytest.approx(len(wanted), abs=2), (
+            f"file {index}: {len(here)} found against {len(wanted)} present")
+    assert found[-1] > (SESSION_FILES - 1) * SESSION_FILE_S, (
+        "nothing was found in the last file of the session")
