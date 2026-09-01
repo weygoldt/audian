@@ -2585,6 +2585,18 @@ QSplitter::handle:vertical {
 }
 QSplitter::handle:hover { border-color: $edge; }
 
+/* The side panel's own divider, between audian's controls and whatever
+   plugins the reader has open.  Wider than the shared handle because the
+   two sides hold unrelated things: at 6 px they read as one list with a
+   line through it, and a reader looking for their plugin's controls finds
+   the bottom of the built-in group first.  Scoped by object name and not
+   raised globally -- `panelsplitter` divides lanes of the same picture,
+   where every pixel is lane height and the seam should stay tight. */
+QSplitter#audianPanelSplit::handle:vertical {
+    height: ${s16}px;
+    border-top: ${hairline}px solid $border;
+}
+
 /* --- scrollbars ----------------------------------------------------- */
 
 QScrollBar:horizontal, QScrollBar:vertical {

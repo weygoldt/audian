@@ -964,6 +964,13 @@ class SidePanel(QWidget):
         # so with no plugins this splitter holds one child, shows no
         # handle, and costs exactly what a plain box would.
         self.split = QSplitter(Qt.Orientation.Vertical, self)
+        # Its own name so theme.py can give this one handle more room than
+        # the lane splitter's.  The two regions hold unrelated things --
+        # audian's own controls above, somebody else's below -- and at the
+        # shared 6 px they read as one list that happens to have a line in
+        # it.  The lane splitter divides lanes of the same picture and wants
+        # to stay tight, so this cannot be a change to the global rule.
+        self.split.setObjectName("audianPanelSplit")
         self.split.setChildrenCollapsible(False)
         box.addWidget(self.split, 1)
         #: the plugins' tab set, or None while no plugin has registered one
@@ -1009,6 +1016,40 @@ class SidePanel(QWidget):
             self.split.setStretchFactor(0, 0)
             self.split.setStretchFactor(1, 1)
         return self.plugins
+
+    def plugin_frame(self, widget: QWidget) -> QScrollArea:
+        """A plugin's widget in a scroll area, as one tab's content.
+
+        A plugin is somebody else's layout and can be any height it likes.
+        Unwrapped it got exactly the room the splitter gave it and shrank
+        its own controls to fit, so a tall panel either dominated the side
+        bar or squeezed itself unusable -- and stacking a second plugin on
+        top made both worse.  Scrolled, the region can be any size the
+        reader drags it to and the plugin keeps the height it asked for.
+
+        The same shape `ParameterTabs` uses for the built-in pages: a
+        stretch under the widget so the layout has somewhere to put slack
+        rather than spreading it through the rows, and a **Fixed** vertical
+        policy on the widget itself, which is what makes the content keep
+        its size hint and the viewport scroll instead of compressing it.
+        Horizontal scrolling stays off: the panel has a 220 px floor and a
+        control that needs more width than that is a control to rebuild,
+        not one to put on a slider.
+        """
+        content = QWidget(self)
+        column = QVBoxLayout(content)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(widget, 0)
+        column.addStretch(1)
+        widget.setSizePolicy(QSizePolicy.Policy.Preferred,
+                             QSizePolicy.Policy.Fixed)
+        area = QScrollArea(self)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setWidget(content)
+        return area
 
     def close_button(self, on_click) -> QToolButton:
         """The flat close mark a plugin tab carries.
@@ -1874,6 +1915,9 @@ class DataBrowser(QWidget):
         self.plugin_offers = []
         #: ``{label: widget}`` for the panels actually open.
         self.plugin_panels = {}
+        #: ``{label: scroll area}`` -- the tab's content, which wraps the
+        #: plugin's widget so a tall panel scrolls instead of squeezing.
+        self.plugin_frames = {}
         #: How wide the side panel is when it is open, in pixels.
         #:
         #: Kept while it is shut, and that is deliberate: closing the panel
@@ -3967,7 +4011,7 @@ class DataBrowser(QWidget):
             return False
         if label in self.plugin_panels:
             region = self.parambar.plugin_region()
-            region.setCurrentWidget(self.plugin_panels[label])
+            region.setCurrentWidget(self.plugin_frames[label])
             return True
         factory = dict(self.plugin_offers).get(label)
         if factory is None:
@@ -3981,15 +4025,19 @@ class DataBrowser(QWidget):
             self.sigPluginPanelsChanged.emit()
             return False
         region = self.parambar.plugin_region()
-        index = region.addTab(widget, str(title))
+        # the tab holds the scroll area; `plugin_panels` keeps the plugin's
+        # own widget, which is what a plugin and its tests ask for
+        frame = self.parambar.plugin_frame(widget)
+        index = region.addTab(frame, str(title))
         region.tabBar().setTabButton(
             index, QTabBar.ButtonPosition.RightSide,
             self.parambar.close_button(
                 lambda _checked=False, name=label: self.close_plugin_panel(name)
             ),
         )
-        region.setCurrentWidget(widget)
+        region.setCurrentWidget(frame)
         self.plugin_panels[label] = widget
+        self.plugin_frames[label] = frame
         self.sigPluginPanelsChanged.emit()
         return True
 
@@ -4003,18 +4051,25 @@ class DataBrowser(QWidget):
         """
         label = str(label)
         widget = self.plugin_panels.pop(label, None)
+        frame = self.plugin_frames.pop(label, None)
         if widget is None:
             return
         if self.parambar is not None and self.parambar.plugins is not None:
             region = self.parambar.plugins
-            index = region.indexOf(widget)
+            # the tab holds the scroll area, not the plugin's own widget
+            index = region.indexOf(frame) if frame is not None else -1
             if index >= 0:
                 region.removeTab(index)
             if region.count() == 0:
                 self.parambar.drop_plugin_region()
+        # the plugin first, so its `closeEvent` runs while it still has a
+        # parent and can stop a worker; then the wrapper it was living in
         widget.close()
         widget.setParent(None)
         widget.deleteLater()
+        if frame is not None:
+            frame.setParent(None)
+            frame.deleteLater()
         self.sigPluginPanelsChanged.emit()
 
     def toggle_plugin_panel(self, label: str, wanted: bool) -> None:
@@ -4028,9 +4083,9 @@ class DataBrowser(QWidget):
         """The reader pressed a plugin tab's own close button."""
         if self.parambar is None or self.parambar.plugins is None:
             return
-        widget = self.parambar.plugins.widget(index)
-        for label, open_widget in list(self.plugin_panels.items()):
-            if open_widget is widget:
+        shown = self.parambar.plugins.widget(index)
+        for label, frame in list(self.plugin_frames.items()):
+            if frame is shown:
                 self.close_plugin_panel(label)
                 return
 

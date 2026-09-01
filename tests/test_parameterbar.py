@@ -128,6 +128,7 @@ class _StubPanelBrowser:
         self.said = []
         self.plugin_offers = []
         self.plugin_panels = {}
+        self.plugin_frames = {}
         self.sigPluginPanelsChanged = _StubSignal()
 
     offer_plugin_panel = DataBrowser.offer_plugin_panel

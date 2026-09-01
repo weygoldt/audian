@@ -39,6 +39,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from PySide6.QtWidgets import QScrollArea  # noqa: E402
+
 from test_panelsplitter import app, build_window, pump  # noqa: E402,F401
 
 from audian_plugins import eventdetection  # noqa: E402
@@ -770,7 +772,11 @@ def test_the_menu_entry_opens_and_closes_the_panel(window):
     region = browser.parambar.plugins
     assert region is not None
     assert [region.tabText(i) for i in range(region.count())] == ["Detector"]
-    assert isinstance(region.widget(0), detector_panel.DetectorPanel)
+    # the tab holds a scroll area so a tall plugin scrolls rather than
+    # squeezing itself; the plugin's own widget is inside it
+    assert isinstance(region.widget(0), QScrollArea)
+    assert isinstance(browser.plugin_panels["Event detection"],
+                      detector_panel.DetectorPanel)
 
     act.setChecked(False)
     pump(0.5)
@@ -1097,3 +1103,57 @@ def test_touching_a_control_after_a_run_says_that_it_replaces_it(panel):
     assert panel._drawing
     assert not panel._committed
     assert "Run" in panel.statusw.text(), panel.statusw.text()
+
+
+def test_a_tall_plugin_scrolls_instead_of_squeezing_itself(window):
+    """A plugin is somebody else's layout and can be any height it likes.
+
+    Unwrapped it got exactly the room the splitter gave it and compressed
+    its own controls to fit, so a tall panel either dominated the side bar
+    or made itself unusable -- and opening a second one made both worse.
+    Measured at three region heights: the panel holds ~604 px throughout and
+    the scrollbar takes up the difference.
+    """
+    from PySide6.QtWidgets import QScrollArea
+
+    browser = window.browser()
+    act = _detector_action(window)
+    act.setChecked(True)
+    pump(0.6)
+
+    panel = browser.plugin_panels["Event detection"]
+    frame = browser.plugin_frames["Event detection"]
+    assert isinstance(frame, QScrollArea)
+    assert frame.widgetResizable()
+    natural = panel.minimumSizeHint().height()
+    assert natural > 200, "the fixture panel is too short to prove anything"
+
+    split = browser.parambar.split
+    ranges = []
+    for region_h in (400, 200, 120):
+        total = sum(split.sizes())
+        split.setSizes([max(total - region_h, 60), region_h])
+        pump(0.4)
+        assert panel.height() >= natural, (
+            f"squeezed to {panel.height()} px with {natural} px asked for")
+        ranges.append(frame.verticalScrollBar().maximum())
+
+    assert ranges == sorted(ranges), (
+        f"a smaller region must scroll further, got {ranges}")
+    assert ranges[-1] > 0, "nothing scrolls even at 120 px"
+
+    act.setChecked(False)
+    pump(0.4)
+
+
+def test_the_panel_divider_is_wider_than_the_lane_divider(window):
+    """Audian's controls and somebody else's need a seam between them.
+
+    At the shared handle width the two regions read as one list with a line
+    through it.  Scoped by object name rather than raised globally, because
+    `panelsplitter` divides lanes of the same picture where every pixel is
+    lane height.
+    """
+    browser = window.browser()
+    assert browser.parambar.split.objectName() == "audianPanelSplit"
+    assert browser.parambar.split.handleWidth() >= 12
