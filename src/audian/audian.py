@@ -5160,19 +5160,32 @@ class Audian(QMainWindow):
         application is missing something, when it means this reader has no
         plugins.
         """
+        from .plugins import panel_menu_path
+
         entries = self.plugins.panel_entries() if self.plugins is not None else []
         self.plugin_acts = []
         if not entries:
             return None
         plugin_menu = menu.addMenu("&Plugins")
-        for label, _factory in entries:
-            act = QAction(label, self)
+        # Submenus are made on demand and shared by name, so two detectors
+        # that both file themselves under "Event detection" land in one
+        # heading rather than in two headings that read the same.
+        headings = {}
+        for label, factory in entries:
+            path = panel_menu_path(factory)
+            parent = plugin_menu
+            for heading in path[:-1]:
+                key = (id(parent), heading)
+                if key not in headings:
+                    headings[key] = parent.addMenu(heading)
+                parent = headings[key]
+            act = QAction(path[-1], self)
             act.setCheckable(True)
-            act.setStatusTip(f"Show the {label} panel")
+            act.setStatusTip(f"Show the {path[-1]} panel")
             act.toggled.connect(
                 lambda on, name=label: self.toggle_plugin_panel(name, on)
             )
-            plugin_menu.addAction(act)
+            parent.addAction(act)
             self.plugin_acts.append((label, act))
         return plugin_menu
 

@@ -173,6 +173,112 @@ def test_normalizing_settings_twice_changes_nothing():
     assert once.normalized() == once
 
 
+def test_settings_normalize_values_from_non_gui_callers():
+    settings = detection.Settings(
+        domain="nowhere",
+        representation="linear",
+        combiner="unknown",
+        k=float("inf"),
+        duration_tolerance=-2.0,
+        merge_gap_s=-1.0,
+        nms_enabled=0,
+        nms_overlap=4.0,
+        power_floor_db=4.0,
+        nfft=0,
+        hop=-3,
+    ).normalized()
+    assert settings.domain == detection.SPECTROGRAM
+    assert settings.representation == "pcen"
+    assert settings.combiner in detection.combiners_for(settings.domain)
+    assert settings.k == detection.default_k(settings.domain)
+    assert settings.duration_tolerance == 1.0
+    assert settings.merge_gap_s is None
+    assert settings.nms_enabled is False
+    assert settings.nms_overlap == 1.0
+    assert settings.power_floor_db == 0.0
+    assert settings.nfft == 1
+    assert settings.hop == 1
+
+
+def test_the_level_gate_rejects_a_quiet_shape_match():
+    templates = detection.Templates(
+        patches=[np.asarray([0.0, 1.0])],
+        domain=detection.TRACE,
+        duration_s=0.1,
+        rate=10.0,
+    )
+    score = np.asarray([0.0, 0.9, 0.0, 0.8, 0.0])
+    times = np.arange(score.size, dtype=float) / 10.0
+    level = np.asarray([-80.0, -5.0, -80.0, -30.0, -80.0])
+
+    open_gate = detection.pick(
+        score, times, level, templates,
+        detection.Settings(domain=detection.TRACE, k=detection.MIN_K),
+    )
+    gated = detection.pick(
+        score, times, level, templates,
+        detection.Settings(domain=detection.TRACE, k=detection.MIN_K,
+                           power_floor_db=-20.0),
+    )
+    assert [c.t0 for c in open_gate] == pytest.approx([0.1, 0.3])
+    assert [c.t0 for c in gated] == pytest.approx([0.1])
+
+
+def test_scipy_peak_distance_applies_equal_interval_iou_nms():
+    """At 50% IoU the weaker close peak goes, while a farther one survives."""
+    templates = detection.Templates(
+        patches=[np.asarray([0.0, 1.0])],
+        domain=detection.TRACE,
+        duration_s=1.0,
+        rate=10.0,
+    )
+    score = np.zeros(30)
+    score[[10, 12, 14]] = [0.9, 0.8, 0.85]
+    times = np.arange(score.size, dtype=float) / 10.0
+
+    found = detection.pick(
+        score, times, None, templates,
+        detection.Settings(domain=detection.TRACE, k=detection.MIN_K,
+                           nms_enabled=True, nms_overlap=0.5),
+    )
+    assert [candidate.t0 for candidate in found] == pytest.approx([1.0, 1.4])
+
+
+def test_non_maximum_suppression_can_be_disabled():
+    templates = detection.Templates(
+        patches=[np.asarray([0.0, 1.0])],
+        domain=detection.TRACE,
+        duration_s=1.0,
+        rate=10.0,
+    )
+    score = np.zeros(30)
+    score[[10, 12, 14]] = [0.9, 0.8, 0.85]
+    times = np.arange(score.size, dtype=float) / 10.0
+
+    found = detection.pick(
+        score, times, None, templates,
+        detection.Settings(domain=detection.TRACE, k=detection.MIN_K,
+                           nms_enabled=False),
+    )
+    assert [candidate.t0 for candidate in found] == pytest.approx([1.0, 1.2, 1.4])
+
+
+def test_stream_postprocessing_joins_candidates_across_block_boundaries():
+    templates = detection.Templates(
+        patches=[np.asarray([0.0, 1.0])], duration_s=0.1,
+    )
+    found = [
+        detection.Candidate(9.90, 10.00, 0.8),
+        detection.Candidate(10.02, 10.12, 0.9),
+    ]
+    settings = detection.Settings(merge_gap_s=0.03, duration_tolerance=3.0)
+    joined = detection.tidy(found, templates, settings)
+    assert len(joined) == 1
+    assert joined[0].t0 == pytest.approx(9.90)
+    assert joined[0].t1 == pytest.approx(10.12)
+    assert joined[0].score == pytest.approx(0.9)
+
+
 # ------------------------------------------------------- the correlation
 
 
@@ -247,6 +353,22 @@ def test_the_spectrogram_honours_the_resolution_it_is_asked_for():
     power, freqs, times = detection._spectrogram_of(samples, 96000.0, 256, 64)
     assert freqs.size == 129, f"asked for nfft 256, got {freqs.size} bins"
     assert times.size > 3000, f"asked for hop 64, got {times.size} frames"
+
+
+def test_a_mean_spectrogram_averages_power_not_opposite_phase_waveforms():
+    rate = 8000.0
+    time = np.arange(4096) / rate
+    signal = np.sin(2.0 * np.pi * 1000.0 * time)
+    channels = np.column_stack((signal, -signal))
+    mean_power, freqs, times = detection._spectrogram_of(
+        channels, rate, 256, 64,
+    )
+    one_power, one_freqs, one_times = detection._spectrogram_of(
+        signal, rate, 256, 64,
+    )
+    assert mean_power == pytest.approx(one_power)
+    assert freqs == pytest.approx(one_freqs)
+    assert times == pytest.approx(one_times)
 
 
 def test_the_window_is_short_enough_to_resolve_the_event():
@@ -501,6 +623,29 @@ def test_the_streaming_margin_covers_an_event_on_a_block_edge(recording, example
     templates = detection.learn(data, rate, examples["syllable"],
                                 detection.Settings())
     assert detection.margin_s(templates) >= templates.duration_s
+
+
+def test_far_apart_examples_are_learned_through_bounded_reads():
+    rate = 1000.0
+    examples = [
+        detection.Example(1.0, 1.1),
+        detection.Example(1000.0, 1000.1),
+    ]
+    reads = []
+
+    def reader(t0, t1):
+        reads.append((t0, t1))
+        count = int(np.ceil((t1 - t0) * rate))
+        time = np.arange(count) / rate
+        return np.sin(2.0 * np.pi * 80.0 * time), t0
+
+    templates = detection.learn_from_reader(
+        reader, rate, examples,
+        detection.Settings(domain=detection.TRACE),
+    )
+    assert len(templates) == 2
+    assert len(reads) == 2
+    assert max(t1 - t0 for t0, t1 in reads) < 1.0
 
 
 def test_detections_carry_the_band_and_channel_the_examples_had(

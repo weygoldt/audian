@@ -23,7 +23,11 @@ for viewing and analyzing recordings of animal vocalizations.
 - Hide and show channels as well as plot panels.
 - Overlay events from an alignment CSV on traces, spectrogram and the navigator strip, backed by polars and windowed to the visible range.
 - Extensive and intuitive key shortcuts for most functions.
-- Plugins for additional computed traces, plot panels, and analysis.
+- Plugins for additional computed traces, on-demand side panels, and analysis.
+- An example few-shot event detector that learns normalized cross-correlation
+  templates from every editable label, reports training recall, previews the
+  visible window, offers adjustable non-maximum suppression, and scans a whole
+  recording in the background.
 
 ``` sh
 audian data.wav
@@ -66,7 +70,7 @@ handles all GUI aspects.
 - [ ] Improve zoom stack behavior!!!
 - [ ] Add events and marker ranges to the Data class
   - [ ] Load events from csv files provide along with the raw data.
-  - [ ] Provide interface for event detectors
+  - [x] Provide interface for event detectors
   - [ ] Provide interface for event filters?
 - [ ] Implement a proper layout for showing the plot panels:
   - [x] Support additional plots from plugins
@@ -200,9 +204,14 @@ Basic plot items:
 
 #### Plugins
 
-- `plugins.py`: Discover and manage plugins.
+- `plugins.py`: Discover and manage plugins. Panel plugins appear as checkable
+  entries in the Plugins menu and can be disabled either there or by closing
+  their side-panel tab.
 - `analyzer.py`: Base class for analyzer plugins.
 - `statisticsanalyzer.py`: Compute basic descriptive statistics.
+- `examples/audian_detector.py`: Few-shot normalized cross-correlation event
+  detector for trace and spectrogram templates. Copy it into the recording's
+  directory, start audian there, and enable **Plugins > Detector**.
 
 
 ## Run audian from Spyder IPython console:
@@ -268,4 +277,3 @@ version 2.0 by Jan Benda (2015-2024)
   bundles together various signal processing and pattern recognition
   methods geared towards the analysis of biosignals.
   
-

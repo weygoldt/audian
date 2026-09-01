@@ -133,6 +133,27 @@ def panel_label(factory) -> str:
     return name.replace("_", " ").strip().capitalize() or "Plugin"
 
 
+def panel_menu_path(factory) -> tuple:
+    """Where in the Plugins menu this panel's entry belongs.
+
+    The last element is the entry itself; anything before it names a
+    submenu.  A plugin sets ``menu_path`` on its factory to file itself
+    under a heading -- ``("Event detection", "Normalised cross-correlation")``
+    -- so that a menu with several detectors in it groups them by what they
+    do rather than growing one flat list of product names.
+
+    Without one the entry sits at the top level under `panel_label`, which
+    is what a plugin that has not thought about it should get.
+    """
+    path = getattr(factory, "menu_path", None)
+    if not path:
+        return (panel_label(factory),)
+    if isinstance(path, str):
+        return (path,)
+    parts = tuple(str(p).strip() for p in path if str(p).strip())
+    return parts or (panel_label(factory),)
+
+
 def build_panel(factory, browser):
     """Call one plugin's factory, or return `None` if it misbehaved.
 

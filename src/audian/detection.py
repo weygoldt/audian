@@ -185,6 +185,7 @@ __all__ = [
     "detect",
     "k_from_sensitivity",
     "learn",
+    "learn_from_reader",
     "margin_s",
     "pick",
     "pcen",
@@ -192,6 +193,7 @@ __all__ = [
     "score_curve",
     "sensitivity_from_k",
     "threshold_of",
+    "tidy",
 ]
 
 
@@ -245,9 +247,15 @@ CALIBRATION_MARGIN = 0.9
 #: `SENSITIVITY_SPAN` away from it.
 SENSITIVITY_SPAN = 4.0
 
-#: Detections closer together than this fraction of the template duration
-#: are the same event seen twice.
-NMS_FRACTION = 0.5
+#: How far either side of a labelled onset calibration looks for its peak.
+#: This is deliberately independent of non-maximum suppression: changing how
+#: detections compete must not change which score teaches the threshold.
+CALIBRATION_REACH_FRACTION = 0.5
+
+#: Standard intersection-over-union threshold for non-maximum suppression.
+#: Every raw candidate is one template long, so this maps exactly onto the
+#: minimum peak distance accepted by ``scipy.signal.find_peaks``.
+DEFAULT_NMS_OVERLAP = 0.5
 
 #: An event shorter or longer than the marked examples by more than this
 #: factor is not one of them.
@@ -458,6 +466,14 @@ class Settings:
     #: does not merge at all, which is the default: see `_tidy` for why a
     #: gap derived from the template duration eats pulse trains.
     merge_gap_s: Optional[float] = None
+    #: Keep only the strongest of substantially overlapping candidates.
+    #: ``find_peaks`` provides the optimized one-dimensional suppression;
+    #: the overlap threshold below is converted to its distance parameter.
+    nms_enabled: bool = True
+    #: Maximum intersection-over-union of two surviving, equal-duration raw
+    #: candidates.  Zero permits no overlap; one suppresses nothing beyond
+    #: the fact that a candidate must be a local maximum.
+    nms_overlap: float = DEFAULT_NMS_OVERLAP
     #: Reject matches sitting in near-silence.  Nearly inert on a clean
     #: recording -- the correlation is already level-independent, so there is
     #: nothing for it to reject -- and load-bearing on a noisy one.
@@ -469,17 +485,79 @@ class Settings:
     hop: Optional[int] = None
 
     def normalized(self) -> "Settings":
-        """This, resolved: a `k` for the domain and a combiner it allows.
+        """This, resolved and bounded to values the engine can honour.
 
         Idempotent, and every entry point runs it, so no code below here
-        has to wonder whether `k` is a number yet.
+        has to wonder whether `k` is a number yet or whether a caller outside
+        the panel supplied a negative merge gap or transform size.
         """
-        allowed = combiners_for(self.domain)
+        domain = self.domain if self.domain in DOMAINS else SPECTROGRAM
+        representation = (
+            self.representation if self.representation in REPRESENTATIONS else "pcen"
+        )
+        allowed = combiners_for(domain)
         combiner = self.combiner if self.combiner in allowed else allowed[0]
-        k = default_k(self.domain) if self.k is None else float(self.k)
-        if combiner == self.combiner and k == self.k:
+        k = default_k(domain) if self.k is None else float(self.k)
+        k = float(np.clip(k if np.isfinite(k) else default_k(domain), MIN_K, MAX_K))
+        tolerance = float(self.duration_tolerance or DURATION_TOLERANCE)
+        if not np.isfinite(tolerance):
+            tolerance = DURATION_TOLERANCE
+        tolerance = max(tolerance, 1.0)
+        gap = None if self.merge_gap_s is None else float(self.merge_gap_s)
+        if gap is not None and (not np.isfinite(gap) or gap <= 0.0):
+            gap = None
+        nms_enabled = bool(self.nms_enabled)
+        overlap = float(self.nms_overlap)
+        overlap = float(np.clip(overlap, 0.0, 1.0)) if np.isfinite(overlap) else (
+            DEFAULT_NMS_OVERLAP
+        )
+        floor = None if self.power_floor_db is None else float(self.power_floor_db)
+        if floor is not None:
+            floor = min(floor, 0.0) if np.isfinite(floor) else None
+        nfft = None if self.nfft is None else max(int(self.nfft), 1)
+        hop = None if self.hop is None else max(int(self.hop), 1)
+        values = (
+            domain,
+            representation,
+            combiner,
+            k,
+            tolerance,
+            gap,
+            nms_enabled,
+            overlap,
+            floor,
+            nfft,
+            hop,
+        )
+        current = (
+            self.domain,
+            self.representation,
+            self.combiner,
+            self.k,
+            self.duration_tolerance,
+            self.merge_gap_s,
+            self.nms_enabled,
+            self.nms_overlap,
+            self.power_floor_db,
+            self.nfft,
+            self.hop,
+        )
+        if values == current:
             return self
-        return replace(self, combiner=combiner, k=k)
+        return replace(
+            self,
+            domain=domain,
+            representation=representation,
+            combiner=combiner,
+            k=k,
+            duration_tolerance=tolerance,
+            merge_gap_s=gap,
+            nms_enabled=nms_enabled,
+            nms_overlap=overlap,
+            power_floor_db=floor,
+            nfft=nfft,
+            hop=hop,
+        )
 
 
 @dataclass
@@ -583,11 +661,24 @@ def _spectrogram_of(samples: np.ndarray, rate: float, nfft: int, hop: int):
     """
     from thunderlab.powerspectrum import spectrogram
 
-    freqs, times, power = spectrogram(
-        np.asarray(samples, dtype=float), rate,
-        freq_resolution=None, overlap_frac=None,
-        n_fft=int(nfft), n_overlap=int(max(nfft - hop, 0)))
-    return np.asarray(power), np.asarray(freqs), np.asarray(times)
+    samples = np.asarray(samples, dtype=float)
+
+    def one(signal):
+        freqs, times, power = spectrogram(
+            signal, rate, freq_resolution=None, overlap_frac=None,
+            n_fft=int(nfft), n_overlap=int(max(nfft - hop, 0)))
+        return np.asarray(power), np.asarray(freqs), np.asarray(times)
+
+    if samples.ndim <= 1:
+        return one(samples)
+    # A label without a channel was drawn on the mean spectrogram.  Audian's
+    # display averages channel power, not waveforms: opposite phases cancel
+    # in a waveform mean even though both channels visibly carry the event.
+    powers = [one(samples[:, channel]) for channel in range(samples.shape[1])]
+    if not powers:
+        return np.zeros((0, 0)), np.zeros(0), np.zeros(0)
+    power = np.mean([item[0] for item in powers], axis=0)
+    return power, powers[0][1], powers[0][2]
 
 
 def _band_slice(freqs: np.ndarray, f0, f1) -> np.ndarray:
@@ -616,6 +707,8 @@ def learn(samples: np.ndarray, rate: float, examples: Iterable[Example],
     samples = np.asarray(samples, dtype=float)
 
     if settings.domain == TRACE:
+        if samples.ndim > 1:
+            samples = samples.mean(axis=1)
         n = max(int(round(duration * rate)), 2)
         patches = []
         for e in examples:
@@ -648,7 +741,7 @@ def learn(samples: np.ndarray, rate: float, examples: Iterable[Example],
     for e in examples:
         i = int(round((e.t0 - t_offset) * rate))
         lo = max(i - pad, 0)
-        hi = min(i + int(duration * rate) + pad, samples.size)
+        hi = min(i + int(duration * rate) + pad, samples.shape[0])
         if hi - lo < nfft * 2:
             continue
         power, freqs, times = _spectrogram_of(samples[lo:hi], rate, nfft, hop)
@@ -665,6 +758,60 @@ def learn(samples: np.ndarray, rate: float, examples: Iterable[Example],
                      representation=settings.representation,
                      duration_s=duration, f_low_hz=f0, f_high_hz=f1,
                      nfft=nfft, hop=hop)
+
+
+def learn_from_reader(reader, rate: float, examples: Iterable[Example],
+                      settings: Settings) -> Templates:
+    """Learn examples through bounded reads rather than their whole span.
+
+    The examples a reader chooses may be minutes apart.  Reading from the
+    first onset through the last merely to keep their absolute timestamps
+    would turn five short templates into a whole-recording allocation.  This
+    entry point gives every example the category's median duration and band,
+    fixes one shared spectrogram resolution, and reads only the context that
+    individual patch needs.
+
+    `reader(t0, t1)` returns ``(samples, actual_t0)`` for that interval.  It
+    may clamp at the recording's ends; `actual_t0` keeps the absolute label
+    time aligned with the returned samples.
+    """
+    settings = settings.normalized()
+    examples = [e for e in examples if e.t1 > e.t0]
+    if not examples:
+        return Templates(domain=settings.domain, rate=rate,
+                         representation=settings.representation)
+
+    duration = float(np.median([e.t1 - e.t0 for e in examples]))
+    f0, f1 = _band_of(examples)
+    shared = settings
+    if settings.domain == SPECTROGRAM:
+        nfft, hop = _resolution_for(duration, rate)
+        nfft = settings.nfft or nfft
+        hop = settings.hop or hop
+        shared = replace(settings, nfft=nfft, hop=hop)
+        context = (nfft + hop * PCEN_SETTLE_FRAMES) / rate
+    else:
+        context = duration
+
+    patches = []
+    learned = None
+    for source in examples:
+        example = Example(source.t0, source.t0 + duration, f0, f1)
+        samples, actual_t0 = reader(example.t0 - context,
+                                    example.t1 + context)
+        if np.asarray(samples).size == 0:
+            continue
+        one = learn(samples, rate, [example], shared, actual_t0)
+        if learned is None:
+            learned = one
+        patches.extend(one.patches)
+
+    if learned is None:
+        return Templates(domain=settings.domain, rate=rate,
+                         representation=settings.representation,
+                         duration_s=duration, f_low_hz=f0, f_high_hz=f1)
+    return replace(learned, patches=patches, duration_s=duration,
+                   f_low_hz=f0, f_high_hz=f1)
 
 
 def score_curve(samples: np.ndarray, rate: float, templates: Templates,
@@ -685,6 +832,8 @@ def score_curve(samples: np.ndarray, rate: float, templates: Templates,
     settings = settings.normalized()
 
     if templates.domain == TRACE:
+        if samples.ndim > 1:
+            samples = samples.mean(axis=1)
         signal = np.abs(hilbert(samples))
         n = templates.patches[0].size
         if signal.size < n:
@@ -835,7 +984,7 @@ def calibrate_k(score: np.ndarray, times: np.ndarray,
     """
     if score.size == 0 or times.size == 0:
         return None
-    reach = max(templates.duration_s * NMS_FRACTION, EPS)
+    reach = max(templates.duration_s * CALIBRATION_REACH_FRACTION, EPS)
     peaks = []
     for e in examples:
         lo = int(np.searchsorted(times, e.t0 - reach))
@@ -874,17 +1023,32 @@ def _extent(times: np.ndarray, peak: int, duration_s: float) -> tuple:
 
 def pick(score: np.ndarray, times: np.ndarray, level, templates: Templates,
           settings: Settings) -> list:
-    """Peaks of a score curve as candidate events."""
+    """Peaks of a score curve as candidate events.
+
+    SciPy's peak picker performs the non-maximum suppression.  Its
+    ``distance`` is expressed between equal-duration candidate onsets;
+    solving ``IoU = (duration - distance) / (duration + distance)`` maps the
+    reader's standard IoU threshold onto that distance exactly.
+    """
     if score.size == 0:
         return []
     settings = settings.normalized()
     cut = threshold_of(score, settings.k)
     rate = 1.0 / max(np.median(np.diff(times)), EPS) if times.size > 1 else 1.0
-    distance = max(int(templates.duration_s * NMS_FRACTION * rate), 1)
-    peaks, _ = find_peaks(score, height=cut, distance=distance)
+    eligible = np.asarray(score, dtype=float)
     if settings.power_floor_db is not None and level is not None:
-        peaks = peaks[level[np.minimum(peaks, level.size - 1)]
-                      > settings.power_floor_db]
+        eligible = eligible.copy()
+        upto = min(eligible.size, level.size)
+        eligible[:upto][level[:upto] < settings.power_floor_db] = -np.inf
+        if upto < eligible.size:
+            eligible[upto:] = -np.inf
+
+    kwargs = {"height": cut}
+    if settings.nms_enabled:
+        overlap = settings.nms_overlap
+        separation_s = templates.duration_s * (1.0 - overlap) / (1.0 + overlap)
+        kwargs["distance"] = max(int(np.ceil(separation_s * rate)), 1)
+    peaks, _ = find_peaks(eligible, **kwargs)
 
     out = []
     for p in peaks:
@@ -919,6 +1083,16 @@ def _tidy(found: list, templates: Templates, settings: Settings) -> list:
         else:
             merged.append(c)
     return _within_duration(merged, templates, settings)
+
+
+def tidy(found: Iterable[Candidate], templates: Templates,
+         settings: Settings) -> list:
+    """Apply merge and duration rules to an already-scored candidate stream.
+
+    Public for streaming callers: each block is peak-picked independently,
+    but a join gap is still one rule across the boundary between two blocks.
+    """
+    return _tidy(list(found), templates, settings.normalized())
 
 
 def _within_duration(found: list, templates: Templates,

@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QLineEdit, QToolButton
 from PySide6.QtWidgets import QSizePolicy, QSpacerItem, QAbstractSpinBox
 from PySide6.QtWidgets import QButtonGroup, QStackedLayout
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QComboBox, QMenu, QTabWidget
+from PySide6.QtWidgets import QComboBox, QMenu, QTabBar, QTabWidget
 from PySide6.QtWidgets import QLabel
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog
 from PySide6.QtWidgets import QGraphicsRectItem
@@ -991,7 +991,14 @@ class SidePanel(QWidget):
             # A plugin's tab closes like a document's, because closing it is
             # how a reader turns the plugin off -- there is no second place
             # to go looking for the switch, and the menu tick follows.
-            self.plugins.setTabsClosable(True)
+            #
+            # `setTabsClosable` is deliberately NOT used.  It installs Qt's
+            # own close button, which is a heavy platform X sitting in a
+            # tab bar whose every other mark audian draws itself; the file
+            # tabs down the left already carry a flat close mark of their
+            # own.  `_close_button` is that mark's manners in a widget, and
+            # theme.py styles it with the rest of the chrome rather than
+            # from an inline stylesheet here.
             owner = self.parent()
             if hasattr(owner, "plugin_tab_closed"):
                 self.plugins.tabCloseRequested.connect(owner.plugin_tab_closed)
@@ -1002,6 +1009,27 @@ class SidePanel(QWidget):
             self.split.setStretchFactor(0, 0)
             self.split.setStretchFactor(1, 1)
         return self.plugins
+
+    def close_button(self, on_click) -> QToolButton:
+        """The flat close mark a plugin tab carries.
+
+        A `QToolButton` rather than `setTabsClosable`, because Qt's own
+        close button is the platform's heavy X and every other mark in this
+        window is drawn by audian: the file tabs down the left spine
+        already carry a flat one.  The glyph is the multiplication sign and
+        not the letter x -- it is the symmetric one, and at fourteen pixels
+        that is the whole difference between a cross and a typo.
+        """
+        button = QToolButton(self)
+        button.setObjectName("audianPluginClose")
+        button.setText("×")
+        button.setAutoRaise(True)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setCursor(Qt.CursorShape.ArrowCursor)
+        button.setToolTip("Turn this plugin off")
+        button.setFixedSize(theme.S16, theme.S16)
+        button.clicked.connect(on_click)
+        return button
 
     def drop_plugin_region(self) -> None:
         """Take the plugin tab set away once its last tab has gone.
@@ -3953,7 +3981,13 @@ class DataBrowser(QWidget):
             self.sigPluginPanelsChanged.emit()
             return False
         region = self.parambar.plugin_region()
-        region.addTab(widget, str(title))
+        index = region.addTab(widget, str(title))
+        region.tabBar().setTabButton(
+            index, QTabBar.ButtonPosition.RightSide,
+            self.parambar.close_button(
+                lambda _checked=False, name=label: self.close_plugin_panel(name)
+            ),
+        )
         region.setCurrentWidget(widget)
         self.plugin_panels[label] = widget
         self.sigPluginPanelsChanged.emit()

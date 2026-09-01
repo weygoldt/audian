@@ -2425,6 +2425,31 @@ QTabWidget::pane {
     border-left: ${hairline}px solid $border;
 }
 
+/* The close mark on a plugin's tab.  A QToolButton and not Qt's own
+   `QTabBar::close-button`, whose glyph cannot be replaced without shipping
+   an image asset -- what that leaves is the platform's heavy X in a tab bar
+   where every other mark is drawn by audian, and the file tabs down the
+   left spine already carry a flat one.  See `SidePanel.close_button`.
+   Invisible until the pointer is on it, like the rest of the chrome: a
+   close mark that advertises itself is a close mark a reader reads on every
+   glance at a tab they were not closing. */
+QToolButton#audianPluginClose {
+    border: 0px;
+    border-radius: ${radius_control}px;
+    padding: 0px;
+    margin-left: ${s4}px;
+    color: $fg_faint;
+    background-color: transparent;
+}
+QToolButton#audianPluginClose:hover {
+    color: $fg;
+    background-color: $bg_base;
+}
+QToolButton#audianPluginClose:pressed {
+    color: $fg;
+    background-color: $border;
+}
+
 /* --- status bar ----------------------------------------------------- */
 
 QStatusBar {

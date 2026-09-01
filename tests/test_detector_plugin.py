@@ -24,9 +24,11 @@ rather than opinion is what tells a regression from a disagreement.
 
 from __future__ import annotations
 
+import csv
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -42,7 +44,7 @@ from test_panelsplitter import app, build_window, pump  # noqa: E402,F401
 
 import audian_detector  # noqa: E402
 from audian import detection  # noqa: E402
-from audian.labels import KIND_SPAN, Label  # noqa: E402
+from audian.labels import KIND_POINT, KIND_SPAN, Label  # noqa: E402
 
 RATE = 8000
 DURATION_S = 8.0
@@ -53,6 +55,14 @@ PULSE_S = 0.020
 CARRIER_HZ = 1200.0
 #: How many examples the reader is pretending to have drawn.
 SHOTS = 3
+
+EXP3 = Path("/home/weygoldt/wrk/analyses/fakefish/experiments/exp3")
+EXP3_FILES = sorted(EXP3.glob("DR0000_00*.wav"))
+EXP3_LABELS = EXP3 / "DR0000_0088-editable-labels.csv"
+needs_exp3_labels = pytest.mark.skipif(
+    len(EXP3_FILES) != 4 or not EXP3_LABELS.is_file(),
+    reason="the labelled four-file exp3 session is not on this machine",
+)
 
 
 def pulse_train():
@@ -165,11 +175,91 @@ def test_a_plugin_file_in_the_working_directory_is_discovered(tmp_path, monkeypa
     assert [f.__name__ for f in plugins.panel_factories] == ["audian_probe_panel"]
 
 
+def test_the_detector_reopens_every_file_in_a_split_recording(panel):
+    """The sidecar's timebase spans the whole ordered WAV sequence."""
+    first = "/recording/part-1.wav"
+    second = "/recording/part-2.wav"
+    original = panel.browser.data
+    panel.browser.data = SimpleNamespace(
+        # This is deliberately only the first file after Data.open().
+        file_path=first,
+        # The live loader is the authoritative complete sequence.
+        data=SimpleNamespace(file_paths=[first, second]),
+    )
+    try:
+        assert panel._paths() == [first, second]
+    finally:
+        panel.browser.data = original
+
+
+@needs_exp3_labels
+def test_every_span_in_later_exp3_wavs_is_learned():
+    """The user's exact failure: file one ends at 932 s, labels start at 1785 s."""
+    with EXP3_LABELS.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    examples = [
+        detection.Example(float(row["t_start_s"]), float(row["t_end_s"]))
+        for row in rows if row["category"] == "pulse"
+    ]
+    assert len(examples) >= 5
+    assert any(example.t0 > 931.968 for example in examples)
+
+    recording = audian_detector.Recording(EXP3_FILES)
+    try:
+        templates = detection.learn_from_reader(
+            lambda t0, t1: recording.samples(t0, t1, 0),
+            recording.rate,
+            examples,
+            detection.Settings(domain=detection.TRACE),
+        )
+        assert recording.duration == pytest.approx(3621.024)
+        assert templates.ok and len(templates) == len(examples)
+    finally:
+        recording.close()
+
+
 def test_the_panel_offers_the_categories_that_have_examples_in_them(panel):
     """A category with nothing drawn in it cannot teach anything."""
     offered = [panel.sourcew.itemData(i) for i in range(panel.sourcew.count())]
     assert "pulse" in offered
     assert panel._category_name() not in offered
+
+
+def test_five_point_labels_are_templates_not_silently_discarded(panel):
+    """The built-in pulse category is a point category by default.
+
+    A point has no duration of its own, so the panel gives it the explicit
+    Point width and treats the mark as the centre.  This is the ordinary GUI
+    path: five digit-key clicks must not end in "no examples to learn from".
+    """
+    labels = panel.browser.labels
+    category = "five clicks"
+    labels.add_category(category, KIND_POINT, labels.next_color())
+    centres = [onset + 0.5 * PULSE_S for onset in ONSETS[:5]]
+    for centre in centres:
+        labels.add(Label(category, KIND_POINT, None, centre, None,
+                         CARRIER_HZ, CARRIER_HZ))
+    labels.forget_undo()
+
+    try:
+        panel.refresh_categories()
+        _select(panel, category)
+        panel.pointwidthw.setValue(20.0)
+        examples = panel.examples()
+        assert len(examples) == 5
+        assert all(e.t1 - e.t0 == pytest.approx(0.020) for e in examples)
+        assert all(0.5 * (e.t0 + e.t1) == pytest.approx(c)
+                   for e, c in zip(examples, centres))
+        assert all(widget.isVisible() for widget in panel._point_width_row)
+
+        templates = panel._learn()
+        assert templates is not None and templates.ok
+        assert len(templates) == 5
+    finally:
+        labels.remove_category(category)
+        labels.forget_undo()
+        panel.refresh_categories()
+        _select(panel)
 
 
 # ------------------------------------------------------------ the controls
@@ -194,6 +284,10 @@ def test_the_representation_row_goes_away_on_the_trace(panel):
 def test_the_slider_and_the_box_never_disagree(panel):
     """One control with two faces; neither may drift from the other."""
     _select(panel, domain=detection.SPECTROGRAM)
+    for _ in range(400):
+        pump(0.05)
+        if panel._thread is None:
+            break
     for value in (10, 35, 50, 72, 95):
         panel.sensitivityw.setValue(value)
         pump(0.05)
@@ -206,7 +300,108 @@ def test_the_slider_and_the_box_never_disagree(panel):
             round(detection.sensitivity_from_k(k, detection.SPECTROGRAM)), abs=1)
 
 
+def test_the_level_slider_and_box_share_an_off_position(panel):
+    """The floor is a real off state, and both faces always say the same."""
+    panel.levelw.setValue(-35)
+    pump(0.05)
+    assert panel.leveldbw.value() == pytest.approx(-35.0)
+    assert panel.settings().power_floor_db == pytest.approx(-35.0)
+
+    panel.leveldbw.setValue(-42.0)
+    pump(0.05)
+    assert panel.levelw.value() == -42
+    assert panel.settings().power_floor_db == pytest.approx(-42.0)
+
+    panel.levelw.setValue(audian_detector.LEVEL_FLOOR_DB)
+    pump(0.05)
+    assert panel.settings().power_floor_db is None
+
+
+def test_nms_has_a_toggle_and_synchronised_overlap_controls(panel):
+    panel._fit_recall = "training recall 3/3 (100.0%)"
+    panel.nmsw.setChecked(False)
+    assert panel.settings().nms_enabled is False
+    assert not any(widget.isEnabled() for widget in panel._nms_overlap_row)
+    assert panel._fit_recall == "", "recall from the old NMS settings was retained"
+
+    panel.nmsw.setChecked(True)
+    panel.nmsoverlapw.setValue(37)
+    assert panel.nmsoverlapbox.value() == pytest.approx(37.0)
+    assert panel.settings().nms_overlap == pytest.approx(0.37)
+
+    panel.nmsoverlapbox.setValue(62.0)
+    assert panel.nmsoverlapw.value() == 62
+    assert panel.settings().nms_overlap == pytest.approx(0.62)
+
+    panel._write_nms_overlap(100.0 * detection.DEFAULT_NMS_OVERLAP)
+
+
+def test_the_postprocessing_controls_reach_the_engine(panel):
+    """The rows are not decoration: milliseconds become seconds at the seam."""
+    panel.tolerancew.setValue(3.0)
+    panel.gapw.setValue(125.0)
+    settings = panel.settings()
+    assert settings.duration_tolerance == pytest.approx(3.0)
+    assert settings.merge_gap_s == pytest.approx(0.125)
+
+    panel.tolerancew.setValue(detection.DURATION_TOLERANCE)
+    panel.gapw.setValue(0.0)
+
+
 # ------------------------------------------------------------- the preview
+
+
+def test_threshold_fitting_uses_all_labels_not_only_the_visible_window(
+        panel, monkeypatch):
+    """The viewport is a tuning surface, never the training-set boundary."""
+    _select(panel, domain=detection.TRACE)
+    panel.browser.set_times(0.0, 0.1)
+    pump(0.4)
+    panel.templates = panel._learn()
+    expected = {example.t0 for example in panel.examples()}
+    assert expected and all(t0 > 0.1 for t0 in expected)
+
+    seen = set()
+    original = detection.calibrate_k
+
+    def recording_calibration(score, times, examples, templates, margin=None):
+        examples = list(examples)
+        seen.update(example.t0 for example in examples)
+        if margin is None:
+            return original(score, times, examples, templates)
+        return original(score, times, examples, templates, margin)
+
+    monkeypatch.setattr(detection, "calibrate_k", recording_calibration)
+    from audian.tasks.tokens import CancelToken
+
+    progress = []
+    result = audian_detector._fit(
+        panel._paths(), panel.templates, panel.examples(), panel.settings(),
+        panel._channel(), CancelToken(), progress.append,
+    )
+    assert result.k is not None
+    assert seen == expected
+    assert progress and progress[-1] == pytest.approx(1.0)
+
+
+def test_fitting_reports_progress_and_training_recall(panel):
+    _select(panel, domain=detection.TRACE)
+    for _ in range(400):
+        pump(0.05)
+        if panel._thread is None:
+            break
+    panel._calibrate()
+    assert panel._thread is not None
+    assert panel.calibratew.text() == "Stop fitting"
+    assert not panel.progressw.isHidden()
+    for _ in range(400):
+        pump(0.05)
+        if panel._thread is None:
+            break
+    assert panel._thread is None, "fitting never finished"
+    assert panel.progressw.isHidden()
+    assert "training recall" in panel.statusw.text()
+    assert panel._fit_recall in panel.statusw.text()
 
 
 def test_the_preview_finds_the_pulses_that_are_on_screen(panel):
@@ -242,6 +437,45 @@ def test_moving_the_sensitivity_does_not_rescore(panel):
     assert panel._scored_for == stamp, "the score curve was thrown away"
 
 
+def test_turning_on_the_level_gate_scores_levels_once(panel):
+    """An off curve has no level array; a live gate must not silently do nothing."""
+    _select(panel)
+    panel.levelw.setValue(audian_detector.LEVEL_FLOOR_DB)
+    panel._scored_for = None
+    panel._level = None
+    panel.browser.set_times(0.0, 4.0)
+    pump(0.4)
+    panel.preview()
+    assert panel._level is None
+
+    panel.levelw.setValue(-40)
+    panel.preview()
+    assert panel._level is not None
+    level = panel._level
+
+    panel.levelw.setValue(-30)
+    panel.preview()
+    assert panel._level is level, "moving a live gate rescored the recording"
+    panel.levelw.setValue(audian_detector.LEVEL_FLOOR_DB)
+
+
+def test_moving_an_example_invalidates_the_template_cache(panel):
+    """A category name can stay put while the boxes that teach it change."""
+    _select(panel)
+    panel.browser.set_times(0.0, 4.0)
+    panel.preview()
+    before = panel._scored_for
+    example = Label("pulse", KIND_SPAN, None, 1.5, 1.5 + PULSE_S,
+                    600.0, 2000.0)
+    panel.browser.labels.add(example)
+    panel.preview()
+    assert panel._scored_for != before
+    index = panel.browser.labels.index_of(example)
+    assert index >= 0
+    panel.browser.labels.remove(index)
+    panel.browser.labels.forget_undo()
+
+
 def test_changing_what_is_matched_does_rescore(panel):
     """And the other half: a new combiner is a new curve."""
     _select(panel)
@@ -269,7 +503,11 @@ def test_the_threshold_is_fitted_to_a_fresh_source_without_being_asked(panel):
     panel.browser.set_times(0.0, 4.0)
     pump(0.4)
     panel.preview()
-    pump(0.1)
+    for _ in range(400):
+        pump(0.05)
+        if panel._thread is None:
+            break
+    assert panel._thread is None, "automatic fitting never finished"
     cut = detection.threshold_of(panel._score, panel.kw.value())
     assert cut < 1.0, f"the cut is above any reachable score: {panel.statusw.text()}"
     assert panel.browser.labels.count_in(panel._category_name()) > 0
@@ -278,41 +516,48 @@ def test_the_threshold_is_fitted_to_a_fresh_source_without_being_asked(panel):
 # ---------------------------------------------------- what is left behind
 
 
-def test_a_preview_nobody_committed_is_taken_back_off_the_recording(panel):
-    """Previews are real label rows, and audian saves the label set.
+def test_detections_survive_the_panel_being_hidden(panel):
+    """They used not to, and that was the bug behind two complaints.
 
-    So a reader who glanced at this tab and moved on would otherwise find a
-    category they never asked for written into their sidecar.
+    Detections are written into the label set so the existing overlay draws
+    them, and the panel used to sweep them away again whenever it was
+    hidden -- so shutting the side panel took a drawn preview from fifty
+    marks to nought and reopening it put them back.  From outside that reads
+    as a detector that works only sometimes, and only on what is on screen.
+
+    They are editable labels in a category of their own, which is what they
+    were asked to be: output to keep, correct and save.
     """
     browser = panel.browser
     _select(panel)
     browser.set_times(0.0, 4.0)
     pump(0.4)
-    panel._committed = False
     panel.preview()
-    assert browser.labels.count_in(panel._category_name()) > 0
+    drawn = browser.labels.count_in(panel._category_name())
+    assert drawn > 0
+
     panel.hide()
     pump(0.2)
-    assert browser.labels.count_in(panel._category_name()) == 0
-    assert panel._category_name() not in [c.name for c in browser.labels.categories]
+    assert browser.labels.count_in(panel._category_name()) == drawn, (
+        "hiding the panel emptied the category")
     panel.show()
-    pump(0.2)
+    pump(0.4)
+    assert browser.labels.count_in(panel._category_name()) >= drawn
 
 
-def test_a_run_that_finished_is_kept(panel):
-    """The other half of the same rule: a committed result survives."""
+def test_clearing_is_the_only_thing_that_removes_them(panel):
+    """One deliberate way out, since nothing sweeps them away any more."""
     browser = panel.browser
     _select(panel)
-    panel._committed = True
+    browser.set_times(0.0, 4.0)
+    pump(0.4)
     panel.preview()
-    pump(0.2)
-    before = browser.labels.count_in(panel._category_name())
-    panel.hide()
-    pump(0.2)
-    assert browser.labels.count_in(panel._category_name()) == before
-    panel.show()
-    pump(0.2)
-    panel._committed = False
+    assert browser.labels.count_in(panel._category_name()) > 0
+
+    panel._clear_clicked()
+    pump(0.4)
+    assert browser.labels.count_in(panel._category_name()) == 0
+    assert panel._category_name() not in [c.name for c in browser.labels.categories]
 
 
 # --------------------------------------------------------- the whole file
@@ -329,8 +574,16 @@ def test_running_over_the_recording_finds_every_pulse_and_writes_a_csv(panel):
     _select(panel)
     browser.set_times(0.0, 4.0)
     pump(0.4)
+    for _ in range(400):
+        pump(0.05)
+        if panel._thread is None:
+            break
     panel._calibrate()
-    pump(0.2)
+    for _ in range(400):
+        pump(0.05)
+        if panel._thread is None:
+            break
+    assert panel._thread is None, "fitting never finished before the run"
 
     panel._run_clicked()
     assert panel.runw.text() == "Stop"
@@ -376,6 +629,18 @@ def test_the_sweep_can_be_stopped(panel):
     assert panel._thread is None
     assert panel.runw.text() == "Run"
     assert panel.progressw.isHidden()
+
+
+def test_closing_the_panel_stops_its_sweep(panel):
+    """The tab is the plugin's off switch, including work already in flight."""
+    _select(panel)
+    panel._run_clicked()
+    assert panel._thread is not None
+    panel.close()
+    assert panel._thread is None
+    assert panel.runw.text() == "Run"
+    panel.show()
+    pump(0.2)
 
 
 # ------------------------------------------------------ the Plugins menu
@@ -493,3 +758,62 @@ def test_closing_a_panel_nobody_opened_is_not_an_error(window):
     browser.close_plugin_panel("Detector")
     browser.close_plugin_panel("no such plugin")
     assert not browser.open_plugin_panel("no such plugin")
+
+
+def test_the_entry_is_filed_under_a_heading_and_named_for_the_method(window):
+    """`Plugins > Event detection > Normalised cross-correlation`.
+
+    "Detector" says nothing about which of several a reader is turning on,
+    and the next plugin to be written will be a detector too -- the heading
+    is what makes the second one cheap to add rather than a second flat
+    line competing with the first.
+    """
+    from audian.plugins import panel_menu_path
+
+    path = panel_menu_path(audian_detector.audian_detector_panel)
+    assert path == ("Event detection", "Normalised cross-correlation")
+
+    plugin_menu = [m for m in window.menus if m.title() == "&Plugins"][0]
+    submenus = [a.menu() for a in plugin_menu.actions() if a.menu() is not None]
+    assert [m.title() for m in submenus] == ["Event detection"]
+    entries = [a.text() for a in submenus[0].actions()]
+    assert entries == ["Normalised cross-correlation"]
+    # and it is still the same action the tick drives
+    assert _detector_action(window).text() == "Normalised cross-correlation"
+
+
+def test_a_plugin_that_says_nothing_stays_at_the_top_level(app):
+    """A heading is an option, not a tax on writing a plugin."""
+    from audian.plugins import panel_label, panel_menu_path
+
+    def audian_probe_panel(browser):
+        return "Probe", None
+
+    assert panel_menu_path(audian_probe_panel) == ("Probe",)
+    assert panel_label(audian_probe_panel) == "Probe"
+
+
+def test_the_tab_carries_audians_own_close_mark(window):
+    """Qt's close button is the platform's heavy X in a bar audian draws.
+
+    `setTabsClosable` would install it; the panel installs a flat tool
+    button instead, styled with the rest of the chrome in `theme.py`.
+    """
+    from PySide6.QtWidgets import QTabBar, QToolButton
+
+    browser = window.browser()
+    act = _detector_action(window)
+    act.setChecked(True)
+    pump(0.5)
+    region = browser.parambar.plugins
+    assert not region.tabsClosable(), "Qt's own close button is back"
+    button = region.tabBar().tabButton(0, QTabBar.ButtonPosition.RightSide)
+    assert isinstance(button, QToolButton)
+    assert button.objectName() == "audianPluginClose"
+
+    # and pressing it turns the plugin off, menu tick and all
+    button.click()
+    pump(0.5)
+    assert not browser.plugin_panel_open("Detector")
+    assert not act.isChecked()
+    assert browser.parambar.plugins is None
