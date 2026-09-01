@@ -94,6 +94,8 @@ from audian.pluginapi import (
 from . import bands as B
 from . import tracking as T
 from .overlay import BandOverlay
+from .reference import bands_from_labels as reference_from_labels
+from .reference import summarise as summarise_reference
 from .wavetracker import import_directory
 
 #: Seconds of recording per spectrogram chunk in a whole-file sweep.
@@ -337,6 +339,8 @@ class BandPanel(QWidget):
         super().__init__(parent)
         self.browser = browser
         self.bands = B.BandSet()
+        #: the read-only band set drawn dashed beneath, or None
+        self.reference = None
         #: ``category -> palette index``, so a label is the same colour on
         #: every lane and in the table
         self.colors: dict = {}
@@ -354,6 +358,7 @@ class BandPanel(QWidget):
         box.setSpacing(theme.S6)
 
         self._build_bands_group(box)
+        self._build_reference_group(box)
         self._build_find_group(box)
         # the rows the chosen finder does not read are hidden from the start,
         # not on the first change of it
@@ -474,6 +479,63 @@ class BandPanel(QWidget):
         self.savew.clicked.connect(self.save_now)
         row.addWidget(self.savew)
         group.add_span_row(saves)
+
+        box.addWidget(group)
+
+    def _build_reference_group(self, box) -> None:
+        group = ParameterGroup("Reference", self, caption=False, narrow=True)
+
+        self.referencew = QLabel("", self)
+        self.referencew.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+        theme.tint(self.referencew, "fg.muted")
+        self.referencew.setWordWrap(True)
+        group.add_span_row(self.referencew)
+
+        self.showrefw = QCheckBox("Show reference", self)
+        self.showrefw.setChecked(True)
+        self.showrefw.setToolTip(
+            "Draw the reference dashed under your own bands. Same colour "
+            "for the same label, so a band you drew and the one it is being "
+            "compared against line up by eye."
+        )
+        self.showrefw.toggled.connect(self._reference_visibility_changed)
+        group.add_span_row(self.showrefw)
+
+        row = QWidget(self)
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(theme.S4)
+        self.fromlabelsw = QPushButton("From labels", row)
+        self.fromlabelsw.setToolTip(
+            "Build a reference from this recording's editable labels. A "
+            "chain of boxes along one frequency becomes one band: they are "
+            "grouped by category and note, so a species and an individual "
+            "name make one animal."
+        )
+        self.fromlabelsw.clicked.connect(self._reference_from_labels)
+        line.addWidget(self.fromlabelsw, 1)
+        self.loadrefw = QPushButton("Load…", row)
+        self.loadrefw.setToolTip("Read a reference from a band file")
+        self.loadrefw.clicked.connect(self._load_reference)
+        line.addWidget(self.loadrefw, 1)
+        group.add_span_row(row)
+
+        row = QWidget(self)
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(theme.S4)
+        self.saverefw = QPushButton("Save", row)
+        self.saverefw.setToolTip(
+            "Write the reference beside the recording, so the conversion "
+            "from boxes happens once rather than every time it is opened"
+        )
+        self.saverefw.clicked.connect(self._save_reference)
+        line.addWidget(self.saverefw, 1)
+        self.clearrefw = QPushButton("Clear", row)
+        self.clearrefw.setToolTip("Forget the reference; the file stays")
+        self.clearrefw.clicked.connect(self._clear_reference)
+        line.addWidget(self.clearrefw, 1)
+        group.add_span_row(row)
 
         box.addWidget(group)
 
@@ -763,7 +825,10 @@ class BandPanel(QWidget):
         if hasattr(self.browser, "spectrogram_axes"):
             axes = self.browser.spectrogram_axes()
         for ax in axes:
-            self.overlays.append(BandOverlay(ax, self.bands, self.colors))
+            overlay = BandOverlay(ax, self.bands, self.colors)
+            overlay.set_reference(self.reference)
+            overlay.set_reference_visible(self.showrefw.isChecked())
+            self.overlays.append(overlay)
             scene = ax.scene()
             if scene is not None and scene not in self._scenes:
                 # One connection per scene, not per lane: the scene is shared
@@ -832,6 +897,113 @@ class BandPanel(QWidget):
         else:
             self._refresh()
 
+        # A reference saved beside the recording comes back with it.  Only a
+        # saved one: converting the labels every time a file is opened would
+        # put a reference in front of readers who never asked for one, and
+        # the conversion is a decision -- it says those boxes were meant to
+        # be tracks.
+        found, complaints = B.read(path, reference=True)
+        for complaint in complaints:
+            self.browser.notify("warning", f"frequency bands: {complaint}")
+        if len(found):
+            self.set_reference(found, f"reference: {len(found)} bands")
+
+    # --- the reference ----------------------------------------------------
+
+    def set_reference(self, reference, what: str = "") -> None:
+        """Hang a read-only band set under the working one."""
+        self.reference = reference
+        for overlay in self.overlays:
+            overlay.set_reference(reference)
+        self._refresh()
+        if what:
+            self.browser.notify("info", f"frequency bands: {what}")
+
+    def _reference_visibility_changed(self, on: bool) -> None:
+        for overlay in self.overlays:
+            overlay.set_reference_visible(bool(on))
+
+    def _reference_from_labels(self) -> None:
+        """Convert this recording's editable labels into reference bands.
+
+        The labels are already loaded -- `browser.labels` is one of the few
+        things a plugin is promised -- so this reads nothing from disk and
+        cannot disagree with what the label overlay is drawing.
+        """
+        labels = getattr(self.browser, "labels", None)
+        if labels is None or not len(labels):
+            self.browser.notify(
+                "warning",
+                "frequency bands: this recording has no editable labels to "
+                "build a reference from",
+            )
+            return
+        made, complaints = reference_from_labels(labels)
+        for complaint in complaints:
+            self.browser.notify("warning", f"frequency bands: {complaint}")
+        if not len(made):
+            self.browser.notify(
+                "warning",
+                "frequency bands: no labels carried a frequency, so there "
+                "was nothing to make a band out of",
+            )
+            return
+        self.set_reference(
+            made,
+            f"reference: {len(made)} bands from {len(labels)} labels",
+        )
+
+    def _load_reference(self) -> None:
+        path = self.recording_path()
+        start = os.fspath(path.parent) if path is not None else ""
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Reference bands", start, "Band files (*.csv);;All files (*)"
+        )
+        if not chosen:
+            return
+        # `read` derives both halves from the recording's stem, so a chosen
+        # CSV is turned back into the recording it belongs to rather than
+        # read directly -- which is also what makes picking the .npz work.
+        chosen = Path(chosen)
+        stem = chosen.name
+        for suffix in (B.CSV_SUFFIX, B.NPZ_SUFFIX):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        else:
+            stem = chosen.stem
+        is_reference = stem.endswith(B.REFERENCE_TAG)
+        if is_reference:
+            stem = stem[: -len(B.REFERENCE_TAG)]
+        made, complaints = B.read(chosen.with_name(stem + chosen.suffix),
+                                  is_reference)
+        for complaint in complaints:
+            self.browser.notify("warning", f"frequency bands: {complaint}")
+        if not len(made):
+            return
+        self.set_reference(made, f"reference: {len(made)} bands from {chosen.name}")
+
+    def _save_reference(self) -> None:
+        path = self.recording_path()
+        if path is None or self.reference is None or not len(self.reference):
+            self.browser.notify(
+                "warning", "frequency bands: there is no reference to save"
+            )
+            return
+        try:
+            csv_file, _npz = B.write(self.reference, path, reference=True)
+        except OSError as exc:
+            self.browser.notify(
+                "error", f"frequency bands: could not save the reference ({exc})"
+            )
+            return
+        self.browser.notify("info", f"frequency bands: saved {csv_file.name}")
+
+    def _clear_reference(self) -> None:
+        if self.reference is None:
+            return
+        self.set_reference(None, "reference cleared")
+
     # --- the band set -----------------------------------------------------
 
     def _replace_bands(self, bandset, what: str) -> None:
@@ -890,6 +1062,15 @@ class BandPanel(QWidget):
         self.mergew.setEnabled(len(self.selection) >= 2)
         self.deletew.setEnabled(bool(self.selection))
         self.applyw.setEnabled(bool(self.selection))
+        self.referencew.setText(
+            summarise_reference(self.reference)
+            if self.reference is not None
+            else "no reference loaded"
+        )
+        self.saverefw.setEnabled(
+            self.reference is not None and len(self.reference) > 0
+        )
+        self.clearrefw.setEnabled(self.reference is not None)
         self._fill_label_choices()
         self._fill_table()
 

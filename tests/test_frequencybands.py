@@ -598,6 +598,172 @@ def test_the_importer_writes_nothing(tmp_path):
     assert before == after
 
 
+# ------------------------------------------------------------- the reference
+
+
+def boxes(category, note, t0, t1, hz, step=1.0, height=3.0):
+    """A chain of one-second labels along one frequency, as the truth is kept."""
+    from audian.labels import KIND_SPAN, Label
+
+    made = []
+    t = t0
+    while t < t1 - 1e-9:
+        made.append(
+            Label(category=category, kind=KIND_SPAN, channel=None,
+                  t0=t, t1=min(t + step, t1),
+                  f0=hz - 0.5 * height, f1=hz + 0.5 * height, note=note)
+        )
+        t += step
+    return made
+
+
+def test_a_chain_of_boxes_becomes_one_band():
+    """The whole point: 120 boxes along one frequency are one animal.
+
+    The synthetic recording's ground truth is 323 of them, and the track --
+    the thing the file is about -- existed only as the reader's eye joining
+    them up.
+    """
+    from audian_plugins.frequencybands import reference as R
+
+    made, complaints = R.bands_from_labels(boxes("Sternopygus", "resident",
+                                                 0.0, 120.0, 62.0))
+    assert complaints == []
+    assert len(made) == 1
+    band = next(iter(made))
+    assert band.category == "Sternopygus" and band.note == "resident"
+    assert len(band) == 120
+    assert abs(np.median(band.freqs) - 62.0) < 1e-6
+    assert band.t0 == pytest.approx(0.5) and band.t1 == pytest.approx(119.5)
+
+
+def test_two_individuals_are_two_bands():
+    from audian_plugins.frequencybands import reference as R
+
+    rows = boxes("Eigenmannia", "one", 0.0, 20.0, 287.0)
+    rows += boxes("Eigenmannia", "two", 0.0, 20.0, 293.0)
+    made, _complaints = R.bands_from_labels(rows)
+    assert len(made) == 2
+    centres = sorted(float(np.median(b.freqs)) for b in made)
+    assert centres == pytest.approx([287.0, 293.0])
+
+
+def test_an_animal_that_leaves_and_returns_is_two_bands():
+    """A hole longer than the labelling's own resolution is being asserted."""
+    from audian_plugins.frequencybands import reference as R
+
+    rows = boxes("Alepto", "a", 0.0, 10.0, 800.0)
+    rows += boxes("Alepto", "a", 60.0, 70.0, 800.0)
+    made, _complaints = R.bands_from_labels(rows)
+    assert len(made) == 2
+
+
+def test_one_missing_box_does_not_cut_the_band():
+    """A dropout in the labelling is not the animal leaving."""
+    from audian_plugins.frequencybands import reference as R
+
+    rows = boxes("Alepto", "a", 0.0, 20.0, 800.0)
+    del rows[7]
+    made, _complaints = R.bands_from_labels(rows)
+    assert len(made) == 1
+
+
+def test_a_single_long_box_becomes_a_line_not_a_dot():
+    """The mains harmonics are labelled one box across the whole recording.
+
+    Its centre alone would be a dot at 60 s where a line across the file was
+    meant, and a one-vertex band draws as a single point.
+    """
+    from audian.labels import KIND_SPAN, Label
+    from audian_plugins.frequencybands import reference as R
+
+    made, _complaints = R.bands_from_labels([
+        Label(category="mains_hum", kind=KIND_SPAN, t0=0.0, t1=120.0,
+              f0=49.0, f1=51.0, note="harmonic 1")
+    ])
+    assert len(made) == 1
+    band = next(iter(made))
+    assert len(band) == 2
+    assert band.t0 == pytest.approx(0.0) and band.t1 == pytest.approx(120.0)
+    assert np.allclose(band.freqs, 50.0)
+
+
+def test_boxes_with_silence_between_them_are_separate_events():
+    """Contiguity, not regularity.
+
+    Three pulses evenly spread across a minute are evenly *spaced*, so a
+    rule that compares each gap against the median gap never fires and calls
+    them one band a minute long with three vertices in it.
+    """
+    from audian.labels import KIND_SPAN, Label
+    from audian_plugins.frequencybands import reference as R
+
+    rows = [
+        Label(category="pulse", kind=KIND_SPAN, t0=t, t1=t + 2.0,
+              f0=180.0, f1=190.0)
+        for t in (10.0, 35.0, 60.0)
+    ]
+    made, _complaints = R.bands_from_labels(rows)
+    assert len(made) == 3, "evenly spaced is not the same as contiguous"
+    assert all(len(b) == 2 for b in made)
+
+
+def test_labels_without_a_frequency_are_skipped_and_counted():
+    from audian.labels import KIND_SPAN, Label
+    from audian_plugins.frequencybands import reference as R
+
+    rows = boxes("Sternopygus", "resident", 0.0, 10.0, 62.0)
+    rows.append(Label(category="noise", kind=KIND_SPAN, t0=1.0, t1=2.0))
+    made, complaints = R.bands_from_labels(rows)
+    assert len(made) == 1
+    assert any("no frequency" in c for c in complaints)
+
+
+def test_nothing_at_all_is_not_an_error():
+    from audian_plugins.frequencybands import reference as R
+
+    made, complaints = R.bands_from_labels([])
+    assert len(made) == 0 and complaints == []
+
+
+def test_a_reference_has_its_own_file(tmp_path):
+    """Read-only, so it must not be able to overwrite the reader's bands."""
+    from audian_plugins.frequencybands import reference as R
+
+    recording = tmp_path / "rec.wav"
+    mine = B.BandSet()
+    mine.add(*steady(0.0, 10.0), category="mine")
+    B.write(mine, recording)
+
+    truth, _c = R.bands_from_labels(boxes("Sternopygus", "resident",
+                                          0.0, 20.0, 62.0))
+    B.write(truth, recording, reference=True)
+
+    assert B.csv_path(recording) != B.csv_path(recording, reference=True)
+    back_mine, _c = B.read(recording)
+    back_truth, _c = B.read(recording, reference=True)
+    assert [b.category for b in back_mine] == ["mine"]
+    assert [b.category for b in back_truth] == ["Sternopygus"]
+
+
+def test_the_real_ground_truth_converts(tmp_path):
+    """The file this feature exists for, if it is on this machine."""
+    from audian.labels import LabelSet
+    from audian_plugins.frequencybands import reference as R
+
+    source = Path(
+        "/home/weygoldt/wrk/data/fakefish/wavefish_4ch_clean-editable-labels.csv"
+    )
+    if not source.exists():
+        pytest.skip("the synthetic recording is not on this machine")
+    store = LabelSet()
+    store.read(source)
+    made, _complaints = R.bands_from_labels(store)
+    names = sorted(b.category for b in made)
+    assert names == ["Alepto", "Eigenmannia", "Sternarchella", "Sternopygus"]
+    assert len(store) > 300, "the point is that it was hundreds of boxes"
+
+
 # ------------------------------------------------- tracking what is displayed
 
 

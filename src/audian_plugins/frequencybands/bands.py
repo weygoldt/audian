@@ -110,16 +110,28 @@ COLUMNS = (
 FORMAT_VERSION = 1
 
 
-def csv_path(recording: Path | str) -> Path:
+#: Inserted before the suffixes for a *reference* band set.
+#:
+#: Ground truth in the same format and a different file.  The same format
+#: because a reference is a band set and there is nothing else it could
+#: usefully be; a different file because it is read-only -- what a recording
+#: is known to contain is not the reader's to edit, and one file holding both
+#: would make "which of these did I draw" a matter of reading a flag.
+REFERENCE_TAG = "-truth"
+
+
+def csv_path(recording: Path | str, reference: bool = False) -> Path:
     """Where the readable half of `recording`'s bands is kept."""
     recording = Path(recording)
-    return recording.with_name(recording.stem + CSV_SUFFIX)
+    tag = REFERENCE_TAG if reference else ""
+    return recording.with_name(recording.stem + tag + CSV_SUFFIX)
 
 
-def npz_path(recording: Path | str) -> Path:
+def npz_path(recording: Path | str, reference: bool = False) -> Path:
     """Where the geometry of `recording`'s bands is kept."""
     recording = Path(recording)
-    return recording.with_name(recording.stem + NPZ_SUFFIX)
+    tag = REFERENCE_TAG if reference else ""
+    return recording.with_name(recording.stem + tag + NPZ_SUFFIX)
 
 
 def _number(text: str) -> Optional[float]:
@@ -646,7 +658,8 @@ def _replace_atomically(path: Path, write: Callable) -> None:
         raise
 
 
-def write(bandset: BandSet, recording: Path | str) -> tuple:
+def write(bandset: BandSet, recording: Path | str,
+          reference: bool = False) -> tuple:
     """Write both files beside `recording`; return the paths written.
 
     An empty set still writes both files.  The alternative -- deleting them,
@@ -655,8 +668,8 @@ def write(bandset: BandSet, recording: Path | str) -> tuple:
     indistinguishable from the save having failed.
     """
     bands = list(bandset)
-    csv_file = csv_path(recording)
-    npz_file = npz_path(recording)
+    csv_file = csv_path(recording, reference)
+    npz_file = npz_path(recording, reference)
 
     def _write_csv(path: Path) -> None:
         with open(path, "w", newline="", encoding="utf-8") as stream:
@@ -744,7 +757,7 @@ def _read_geometry(path: Path, complaints: list) -> list:
     return bands
 
 
-def read(recording: Path | str) -> tuple:
+def read(recording: Path | str, reference: bool = False) -> tuple:
     """The bands beside `recording`, and everything wrong with them.
 
     Returns ``(BandSet, complaints)``.  It never raises for a damaged file:
@@ -761,8 +774,8 @@ def read(recording: Path | str) -> tuple:
     ``all_fund_v.npy`` produced a confidently wrong picture and no warning.
     """
     complaints: list = []
-    npz_file = npz_path(recording)
-    csv_file = csv_path(recording)
+    npz_file = npz_path(recording, reference)
+    csv_file = csv_path(recording, reference)
     if not npz_file.exists():
         if csv_file.exists():
             complaints.append(

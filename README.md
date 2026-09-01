@@ -125,6 +125,27 @@ Or import a **wavetracker** output directory, which is the case this was
 written for. That directory is opened **read-only**: your edits go to a
 sidecar beside the recording, never back over the tracker's `.npy` files.
 
+### Comparing against ground truth
+
+![reference](docs/shots/bands-reference.png)
+
+Load a **reference** — what the recording is known to contain — and it is drawn
+dashed underneath your own bands, in the same colour for the same label. Above,
+the red dashed line is the true 806 Hz fish running the whole window; the solid
+segments on top are what the tracker actually found, and the stretches where
+the dashed line runs on alone are where it lost the animal. That is the whole
+question a tracker raises, answered by looking.
+
+A reference is an ordinary band file, so anything that can produce bands can
+produce one. If your ground truth is stored as audian labels — the synthetic
+recordings ship it as 323 chained one-second boxes, 120 of which are a single
+Sternopygus — **From labels** reads them into tracks: boxes are grouped by
+category and note, so a species plus an individual name is one animal, and a
+hole longer than the labelling's own spacing ends a band rather than bridging
+it. **Save** writes it beside the recording as `<stem>-truth-frequency-bands.csv`
+so the conversion happens once. It is never edited and never written over your
+own bands.
+
 It replaces `wavetracker`'s `EODsorter`, and the differences are all about not
 losing work. Merging keeps every vertex, where `EODsorter.connect` silently
 discarded the detections two traces shared. Saving is atomic and beside the

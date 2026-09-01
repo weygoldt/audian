@@ -94,9 +94,23 @@ from audian.pluginapi import theme
 #: labels.  A band is context for a label, so a label drawn on top of one
 #: stays readable; `labeloverlay.LABEL_Z` is 25 and `eventoverlay.MARK_Z`
 #: is 15.
+#: The reference sits *under* the working bands, because it is what they
+#: are being compared against: where the two agree the reader should see
+#: their own band, and where they disagree they should see both.
+REFERENCE_Z = 18
 BAND_Z = 20
 SELECTED_Z = 22
 TEXT_Z = 23
+
+#: Width and dash of a reference band.
+#:
+#: Colour says *what* a band is and the dash says *who claims it*: a
+#: reference Sternopygus and a Sternopygus the reader labelled share a hue,
+#: one dashed and one solid, so the comparison is one glance rather than two
+#: legends.  Distinguishing them by colour instead would have cost the
+#: species colour, which is the more useful of the two things to see.
+REFERENCE_WIDTH_PX = 1.6
+REFERENCE_DASH = (5.0, 4.0)
 
 #: Width of an ordinary band and of the selected one, in pixels.
 #:
@@ -250,6 +264,10 @@ class BandOverlay:
         self.unlabelled_color = brightened(self.peak)
 
         self.curves: dict = {}
+        #: the read-only band set drawn dashed underneath, or None
+        self.reference = None
+        self.reference_visible = True
+        self.ref_curves: dict = {}
         # Antialiased, unlike audian's own `TraceItem`, and the difference is
         # in what is being drawn.  A trace is a million points wide and its
         # pen is off by default because smoothing that many segments costs
@@ -306,6 +324,36 @@ class BandOverlay:
             self.texts.append(item)
         return self.texts[index]
 
+    def _ref_curve(self, key: str):
+        """The dashed curve item for one reference colour."""
+        item = self.ref_curves.get(key)
+        if item is None:
+            item = pg.PlotCurveItem(antialias=True)
+            item.setZValue(REFERENCE_Z)
+            _passive(item)
+            self.ax.addItem(item, ignoreBounds=True)
+            self.ref_curves[key] = item
+        return item
+
+    def _ref_pen(self, key: str):
+        pen = theme.pen(self._color(key), width=REFERENCE_WIDTH_PX)
+        pen.setStyle(Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern(list(REFERENCE_DASH))
+        return pen
+
+    def set_reference(self, reference) -> None:
+        """The band set to draw dashed underneath, or None for none."""
+        self.reference = reference
+        self.invalidate()
+        self.update_plot()
+
+    def set_reference_visible(self, on: bool) -> None:
+        if bool(on) == self.reference_visible:
+            return
+        self.reference_visible = bool(on)
+        self.invalidate()
+        self.update_plot()
+
     def set_bands(self, bands) -> None:
         self.bands = bands
         self.invalidate()
@@ -343,12 +391,14 @@ class BandOverlay:
                 view.sigResized.disconnect(self._view_changed)
             except (RuntimeError, TypeError):
                 pass
-        for item in [self.selected, self.dots, *self.curves.values(), *self.texts]:
+        for item in [self.selected, self.dots, *self.curves.values(),
+                     *self.ref_curves.values(), *self.texts]:
             try:
                 self.ax.removeItem(item)
             except (RuntimeError, ValueError):
                 pass
         self.curves.clear()
+        self.ref_curves.clear()
         self.texts.clear()
 
     # --- drawing ----------------------------------------------------------
@@ -413,13 +463,20 @@ class BandOverlay:
         self.floor, self.peak = map_ends(self.ax)
         self.selection_color = opposed(self.peak)
         self.unlabelled_color = brightened(self.peak)
-        state = (*state, self.unlabelled_color, self.selection_color)
+        state = (
+            *state,
+            self.unlabelled_color,
+            self.selection_color,
+            id(self.reference),
+            getattr(self.reference, "revision", -1),
+            self.reference_visible,
+        )
         if state == self._drawn:
             return
         self._drawn = state
 
         if not self.visible:
-            for item in self.curves.values():
+            for item in (*self.curves.values(), *self.ref_curves.values()):
                 item.setData(x=[], y=[])
             self.selected.setData(x=[], y=[])
             self.dots.setData(x=[], y=[])
@@ -445,6 +502,8 @@ class BandOverlay:
             piece = (band.times[::step], band.freqs[::step])
             by_color.setdefault(self._color_key(band), []).append(piece)
 
+        self._draw_reference(x0, x1, width)
+
         for key, item in self.curves.items():
             if key not in by_color:
                 item.setData(x=[], y=[])
@@ -465,6 +524,33 @@ class BandOverlay:
         self.dots.setData(x=dots_x, y=dots_y)
 
         self._draw_ids(visible, x0, x1)
+
+    def _draw_reference(self, x0: float, x1: float, width: float) -> None:
+        """The dashed ground truth under the working bands.
+
+        Grouped by colour and NaN-joined the same way, so a reference of two
+        hundred bands is still at most nine more curve items on the lane.
+        Always decimated, including anything selected: nothing here can be
+        selected, because a reference is not the reader's to edit.
+        """
+        show = self.reference is not None and self.reference_visible
+        by_color: dict = {}
+        if show:
+            for band in self.reference.in_window(x0, x1):
+                if len(band) < 2:
+                    continue
+                step = stride_for(len(band), width)
+                by_color.setdefault(self._color_key(band), []).append(
+                    (band.times[::step], band.freqs[::step])
+                )
+        for key, item in self.ref_curves.items():
+            if key not in by_color:
+                item.setData(x=[], y=[])
+        for key, pieces in by_color.items():
+            x, y = joined(pieces)
+            item = self._ref_curve(key)
+            item.setPen(self._ref_pen(key))
+            item.setData(x=x, y=y, connect="finite")
 
     def _draw_ids(self, visible: list, x0: float, x1: float) -> None:
         """Write each band's id beside it, while there are few enough to read."""
