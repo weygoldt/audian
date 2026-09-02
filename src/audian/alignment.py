@@ -827,11 +827,18 @@ class SessionMeta:
         )
 
 
-#: Digest results, keyed by ``(path, size, mtime_ns)``.  Hashing 175 MB takes
-#: about a second, and a menu item the user may hit twice should answer the
-#: second time at once -- while any edit to the file changes size or mtime and
-#: throws the answer away.
-_SHA_CACHE: dict[tuple[str, int, int], bool] = {}
+#: Digests, keyed by ``(path, size, mtime_ns)``.  Hashing 175 MB takes about a
+#: second, and a menu item the user may hit twice should answer the second time
+#: at once -- while any edit to the file changes size or mtime and throws the
+#: answer away.
+#:
+#: What is cached is the file's digest, not the verdict.  Caching the verdict
+#: keys the answer on the file alone while the question also involves the
+#: bundle: ask about one recording under two bundles that disagree about it and
+#: the second answer is the first one, so a bundle that does not belong to the
+#: recording is reported as belonging to it.  That is the provenance check
+#: failing open, which is the one way it must not fail.
+_SHA_CACHE: dict[tuple[str, int, int], str] = {}
 
 
 def verify_sha256(
@@ -863,9 +870,11 @@ def verify_sha256(
         stat = path.stat()
     except OSError:
         return None
+    wanted = expected.strip().lower()
     key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
-    if key in _SHA_CACHE:
-        return _SHA_CACHE[key]
+    cached = _SHA_CACHE.get(key)
+    if cached is not None:
+        return cached == wanted
 
     digest = hashlib.sha256()
     done = 0
@@ -879,9 +888,9 @@ def verify_sha256(
             if progress is not None and stat.st_size:
                 if progress(done / stat.st_size) is False:
                     return None
-    result = digest.hexdigest().lower() == expected.strip().lower()
-    _SHA_CACHE[key] = result
-    return result
+    computed = digest.hexdigest().lower()
+    _SHA_CACHE[key] = computed
+    return computed == wanted
 
 
 # --- discovery --------------------------------------------------------------

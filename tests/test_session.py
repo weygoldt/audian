@@ -1059,7 +1059,9 @@ def test_verify_sha256_compares_the_real_content(tmp_path):
     digest = hashlib.sha256(wav.read_bytes()).hexdigest()
     good = simple(tmp_path, alignment={"recording_sha256": f'"{digest}"'})
     assert session.verify_sha256(good.meta, wav) is True
-    session._SHA_CACHE.clear()
+    # No cache clear between the two.  It used to need one, which is the shape
+    # of the bug: the cache answered for the file while the question was about
+    # the bundle, so the second bundle inherited the first one's verdict.
     bad = simple(tmp_path, alignment={"recording_sha256": '"' + "0" * 64 + '"'})
     assert session.verify_sha256(bad.meta, wav) is False
 
