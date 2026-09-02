@@ -2402,3 +2402,59 @@ def test_the_overview_follows_a_geometry_edit(labelling):
     browser.delete_selected_label()
     settle()
     assert live_rects(nav) == []
+
+
+def test_a_removal_cannot_be_undone_into_a_category_that_is_gone(tmp_path):
+    """The resurrection `remove_category`'s `forget_undo` was preventing.
+
+    `undo`'s "add" and "geometry" branches both check that the label they
+    are about to touch is still in the list.  "remove" does not touch an
+    existing label, it *creates* one, so it needs a different check -- and
+    without it the sequence below put a machine-made span back under a
+    category the vocabulary no longer held, which the next save wrote to
+    the reader's sidecar and the next read made permanent.
+
+    It was reachable as soon as anything held that `forget_undo` back: the
+    detector's preview clears its own found-category on close, and wrapping
+    that in `undo_undisturbed` restored an undo the removal had deliberately
+    dropped.
+    """
+    store = LabelSet(DEFAULT_CATEGORIES)
+    store.add_category("found", KIND_SPAN, 3)
+    store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0))
+    ghost = Label("found", KIND_SPAN, 0, 11.0, 11.5)
+    store.add(ghost)
+
+    # the reader deletes the machine-made span, which is an undoable removal
+    store.remove(store.index_of(ghost))
+    assert store.can_undo()
+
+    # then the category goes -- and the undo goes with it, whether or not
+    # `remove_category` remembered to say so
+    with store.undo_undisturbed():
+        store.remove_category("found")
+
+    assert not store.can_undo(), "an undo into a category that is gone is not an undo"
+    assert store.undo() is None
+    assert [la.category for la in store.labels] == ["event"]
+    assert store.category("found") is None
+
+
+def test_an_undo_whose_label_is_gone_reports_that_it_cannot_run(tmp_path):
+    """`can_undo` answers about applicability, not about holding a tuple.
+
+    Otherwise the key stays lit, does nothing when pressed, and spends the
+    slot in silence.
+    """
+    store = LabelSet(DEFAULT_CATEGORIES)
+    first = Label("event", KIND_SPAN, 0, 1.0, 2.0)
+    store.add(first)
+    assert store.can_undo()  # "add", and the label is in the list
+
+    # something takes the label out without recording an undo of its own
+    with store.undo_undisturbed():
+        store.remove(store.index_of(first))
+
+    assert not store.can_undo(), "undoing an add whose label is gone is not an undo"
+    assert store.undo() is None
+    assert store.labels == []

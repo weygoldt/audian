@@ -8,13 +8,19 @@ the right shape and was implemented three times with three different levels
 of care.
 
 Two of them named the temporary ``<name>.tmp``, with no pid and no
-randomness.  That is safe against a crash and not against a second writer:
-two audian processes on one recording, or two browsers each with their own
-zero-delay save timer, interleave so that one truncates the temporary while
-the other is mid-write, and the second `os.replace` then publishes the
-first's partial content under the real name -- with both writers reporting
-success.  `frequencybands.bands` already got this right; this is that
-implementation, with the durability the other two had and it did not.
+randomness.  That is safe against a crash and not against a second
+*process*: two audian instances open on one recording, or one instance and
+a script, interleave so that A truncates the temporary while B is mid-write,
+and B's `os.replace` then publishes A's partial content under the real name
+-- with both reporting success.  `frequencybands.bands` already got this
+right; this is that implementation, with the durability the other two had
+and it did not.
+
+The pid is what makes that case safe, and only that case.  Two `DataBrowser`
+tabs in one window share a pid and therefore still share a temporary name --
+they cannot collide anyway, because each save runs to completion inside one
+event-loop callback on one thread, but nothing here would save them if that
+stopped being true.
 
 Not imported by `frequencybands.bands` yet, which is where it came from.
 That module is one of only four in the tree that import without dragging in

@@ -429,6 +429,13 @@ class DetectorPanel(QWidget):
         #: whether a Run finished; an uncommitted preview is taken back off
         #: the recording when the reader looks away
         self._committed = False
+        #: Whether what is in the found-category came from a Run rather than
+        #: from a preview.  Distinct from `_committed`, which any control
+        #: touch clears so that the panel starts previewing again: clearing
+        #: on *that* would delete a whole recording's saved results because
+        #: the reader nudged a slider and then closed the tab.  This is
+        #: cleared only when a preview actually redraws over them.
+        self._persisted = False
         #: Whether previews may draw.  Cleared by the Clear button and set
         #: again by any control the reader touches: clearing and then
         #: instantly redrawing on the next debounce tick is not clearing.
@@ -810,19 +817,34 @@ class DetectorPanel(QWidget):
             notify("error", f"{message}: "
                             f"{', '.join(Path(p).name for p in recording.paths)}")
 
+    def about_to_flush_labels(self) -> None:
+        """Take an uncommitted preview back before the sidecar is written.
+
+        A preview is this panel's working state, not the reader's work.  It
+        goes into their label set so that tuning is drawn by the code that
+        draws a committed run, and up to PREVIEW_LIMIT machine-made spans can
+        be standing there when audian closes -- after which `flush_labels`
+        writes them into the hand-authored sidecar beside the recording,
+        where nothing says which marks were guesses.
+
+        Called by `DataBrowser.flush_labels` and not from `closeEvent`, which
+        is where this was and where it did nothing: Qt delivers no close
+        event to a child when its parent closes, and neither exit path closes
+        plugin panels -- `Audian.close_tab` and `Audian.teardown` both flush
+        the labels and then tear the browser down.  Only the tab's own X
+        reached `closeEvent`, which is the one path that did not need it.
+
+        A Run's results stay.  `_persisted` and not `_committed`: the latter
+        is cleared by any control the reader touches, so clearing on it would
+        delete a whole recording's saved results because they nudged a
+        slider before closing.
+        """
+        if not self._persisted:
+            self._clear_found()
+
     def closeEvent(self, event):  # noqa: N802 - Qt's spelling
         self._debounce.stop()
-        # A preview is this panel's working state, not the reader's work.  It
-        # is written into their label set so that tuning is drawn by the code
-        # that draws a committed run, and up to PREVIEW_LIMIT machine-made
-        # spans could be sitting there when the tab closes -- after which
-        # `flush_labels` writes them into the hand-authored sidecar beside
-        # the recording, indistinguishable from marks the reader made.
-        #
-        # A finished Run is different: `_committed` says the reader asked for
-        # those and a CSV was written beside them, so they stay.
-        if not self._committed:
-            self._clear_found()
+        self.about_to_flush_labels()
         if self.recording is not None:
             self.recording.close()
             self.recording = None
@@ -1241,6 +1263,10 @@ class DetectorPanel(QWidget):
             self._say(f"over {PREVIEW_LIMIT} matches -- not drawn. Lower the "
                       f"sensitivity.")
         channel = self._channel()
+        if self._drawing:
+            # a preview is about to replace whatever is in the category, so
+            # a Run's saved results are no longer what is standing there
+            self._persisted = False
         with labels.undo_undisturbed():
             labels.remove_category(name)
             labels.add_category(name, KIND_SPAN, labels.next_color())
@@ -1466,6 +1492,8 @@ class DetectorPanel(QWidget):
         self._drawing = False
         self._debounce.stop()
         self._draw(found)
+        # after `_draw`, which clears it for a preview
+        self._persisted = True
         path = self._write_csv(found)
         self.refresh_categories()
         where = f" · {path.name}" if path is not None else ""

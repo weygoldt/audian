@@ -546,7 +546,11 @@ def test_the_write_is_atomic_and_leaves_no_temporary_behind(store, app, tmp_path
     `os.replace` is a copy across filesystems and stops being atomic.
     """
     store.save_setting("theme", theme.THEME_DARK)
-    assert not list(tmp_path.glob("*.tmp")), list(tmp_path.glob("*.tmp"))
+    # Not `glob("*.tmp")`: the temporary is `.settings.json.tmp<pid>`, which
+    # that pattern matches neither by suffix nor past the leading dot, so it
+    # went on passing after the name changed and could no longer fail.
+    leftovers = [p.name for p in tmp_path.iterdir() if ".tmp" in p.name]
+    assert not leftovers, leftovers
     assert stored(store)["theme"] == theme.THEME_DARK
 
 

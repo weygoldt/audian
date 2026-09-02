@@ -612,7 +612,7 @@ class LabelSet:
             self._undo = keep
 
     def can_undo(self) -> bool:
-        return self._undo is not None
+        return self._applicable(self._undo)
 
     def undo(self) -> Optional[str]:
         """Take back the last change, or return None when there is none.
@@ -621,27 +621,49 @@ class LabelSet:
         """
         change = self._undo
         self._undo = None
-        if change is None:
+        if not self._applicable(change):
             return None
         kind = change[0]
         if kind == "add":
-            index = self.index_of(change[1])
-            if index < 0:
-                return None
-            self.labels.pop(index)
+            self.labels.pop(self.index_of(change[1]))
         elif kind == "remove":
             _kind, at, label = change
             self.labels.insert(min(at, len(self.labels)), label)
         elif kind == "geometry":
             _kind, label, (t0, t1, f0, f1) = change
-            if self.index_of(label) < 0:
-                return None
             label.t0, label.t1, label.f0, label.f1 = t0, t1, f0, f1
-        else:  # pragma: no cover - the tuple is written in this file only
-            return None
         self.revision += 1
         self.dirty = True
         return kind
+
+    def _applicable(self, change: Optional[tuple]) -> bool:
+        """Whether `change` can still be taken back.
+
+        The store moves under a held undo: a label can be deleted, and a
+        whole category can go with its rows.  `add` and `geometry` act on a
+        label that must still be in the list.  `remove` is the different one
+        -- it does not touch an existing label, it *creates* one -- so what
+        it needs is that the vocabulary still holds the category.  Without
+        that check, undoing a removal after the category went away
+        resurrects an orphan under a name nothing explains, which the next
+        save writes to the sidecar and the next read makes permanent.
+
+        `remove_category` calls `forget_undo` for exactly this reason.
+        Stating it here as well makes it an invariant of the store rather
+        than something every caller has to remember -- and lets `can_undo`
+        answer honestly, so a key that cannot do anything says so instead of
+        consuming the slot in silence.
+        """
+        if change is None:
+            return False
+        kind = change[0]
+        if kind == "add":
+            return self.index_of(change[1]) >= 0
+        if kind == "remove":
+            return self.category(change[2].category) is not None
+        if kind == "geometry":
+            return self.index_of(change[1]) >= 0
+        return False  # pragma: no cover - the tuple is written in this file
 
     def window(self, t0: float, t1: float, channels=None) -> list:
         """``(index, label)`` for everything reaching into ``[t0, t1]``.
@@ -681,10 +703,14 @@ class LabelSet:
         does not know is added with the next free palette colour and reported,
         so a file written on another machine arrives complete.
 
-        A file that did *not* come back whole sets `blocked`, and the store
+        A file that could not be *understood* sets `blocked`, and the store
         then refuses to write over it.  See that attribute for why: the whole
         failure mode is a sidecar that reads as empty for a reason nobody
         sees, and one label added over the top of it.
+
+        A file that decoded and lost rows sets `damaged` instead.  That one
+        is written normally, with the file as it arrived kept beside it --
+        refusing there cost the reader every edit they made afterwards.
 
         The name changed once, from ``<stem>-labels.csv``, and nothing
         reads the old one: the feature was two commits old at the time and
@@ -728,7 +754,8 @@ class LabelSet:
             self.labels.append(label)
         if dropped:
             self.damaged = (
-                f"{dropped} row(s) of {path.name} name no category or no start time"
+                f"{dropped} row(s) of {path.name} name no category, or no "
+                "start time this viewer can place"
             )
         self.revision += 1
         return ReadReport(read=len(self.labels), dropped=dropped, added=tuple(added))
@@ -769,14 +796,31 @@ class LabelSet:
         # Once, and never overwriting an existing keepsake: the interesting
         # copy is the first one, and a second save should not replace it with
         # a file this audian already rewrote.
-        if self.damaged and path.exists():
+        if self.damaged:
             keep = path.with_name(path.stem + ".damaged" + path.suffix)
-            try:
-                if not keep.exists():
-                    keep.write_bytes(path.read_bytes())
-            except OSError as e:
-                return f"could not keep a copy of the damaged file: {e}"
-            self.damaged = ""
+            if not path.exists():
+                # The sidecar was moved away between the read and this save,
+                # so there is nothing to keep.  Clearing `damaged` anyway
+                # matters: leaving it set would make the *next* save copy
+                # audian's own freshly written file as "the file as it
+                # arrived", which is the one thing this must never do.
+                self.damaged = ""
+            else:
+                # An earlier session's keepsake is not overwritten -- it is
+                # the interesting one -- but the reader was promised a copy
+                # of *this* file, so a second damaged read gets a free name
+                # rather than nothing.  Returning an error instead would
+                # abort the save, which is the work this exists to protect.
+                for n in range(1, 100):
+                    if not keep.exists():
+                        break
+                    keep = path.with_name(f"{path.stem}.damaged.{n}{path.suffix}")
+                try:
+                    if not keep.exists():
+                        keep.write_bytes(path.read_bytes())
+                except OSError as e:
+                    return f"could not keep a copy of the damaged file: {e}"
+                self.damaged = ""
 
         def write_rows(tmp: Path) -> None:
             with open(tmp, "w", newline="", encoding="utf-8") as fp:

@@ -5206,7 +5206,7 @@ class DataBrowser(QWidget):
             self.notify(
                 "warning",
                 f"{report.dropped} label row(s) of "
-                f'"{path.name}" name no category or no start time and were '
+                f'"{path.name}" name no category, or no start time this viewer can place, and were '
                 "not loaded; the file will be kept as "
                 f'"{Path(path).stem}.damaged.csv" when these labels are saved',
             )
@@ -5259,7 +5259,24 @@ class DataBrowser(QWidget):
         not written down anywhere else.  `Audian.closeEvent` calls this for
         every browser when the window goes; `Audian.close_tab` calls it for
         the one tab that goes without the window.
+
+        Plugin panels are asked to tidy up *first*, through an optional
+        `about_to_flush_labels`.  A panel that writes into the label set
+        needs somewhere to take its own marks out again, and `closeEvent` is
+        not that place: Qt does not deliver a close event to a child when
+        its parent closes, and neither exit path closes plugin panels --
+        both call this method and then tear the browser down.  So a panel
+        relying on its own `closeEvent` would have its working state written
+        into the reader's sidecar on every quit.
         """
+        for label, widget in list(self.plugin_panels.items()):
+            tidy = getattr(widget, "about_to_flush_labels", None)
+            if tidy is None:
+                continue
+            try:
+                tidy()
+            except Exception:
+                log.exception("plugin panel %s failed to tidy up", label)
         if self.labels.dirty or self.label_save_pending:
             self.save_labels()
 

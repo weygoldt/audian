@@ -808,7 +808,7 @@ def read(recording: Path | str, reference: bool = False) -> tuple:
         # parse that raises would otherwise leave `read` and take the
         # recording's bands with it.  A CSV that cannot be read costs the
         # labels, never the geometry -- the geometry is already loaded above.
-        except (OSError, csv.Error, ValueError, TypeError) as exc:
+        except (OSError, csv.Error, ValueError, TypeError, ArithmeticError) as exc:
             complaints.append(
                 f"{csv_file.name} could not be read ({exc}); the bands were "
                 "loaded without their labels"

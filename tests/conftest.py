@@ -108,9 +108,24 @@ def _settings_stamp(path: Path):
         return None
 
 
+class _ScratchDirs:
+    """Stand-in for the `platformdirs` object the application asks for paths.
+
+    `PlatformDirs.user_cache_path` is a property, so it cannot be pointed
+    somewhere else on the instance; the instance is replaced instead, in
+    every module that imported it by name.
+    """
+
+    def __init__(self, base: Path) -> None:
+        self.user_config_path = base / "config"
+        self.user_cache_path = base / "cache"
+        self.user_config_path.mkdir(parents=True, exist_ok=True)
+        self.user_cache_path.mkdir(parents=True, exist_ok=True)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_settings(tmp_path_factory):
-    """Point both persistent stores at a scratch directory for the whole run.
+    """Point every persistent store at a scratch directory for the whole run.
 
     Ten test modules used to do this themselves, five of them covering only
     the JSON half, one never restoring what it replaced, and three
@@ -127,20 +142,39 @@ def _isolate_settings(tmp_path_factory):
     whatever is installed when they run, which is now this instead of the real
     path.
 
-    The assertion at the end is the part that cannot rot.  A redirect that
-    silently stops covering a newly added store looks exactly like one that
-    works; comparing the real files before and after is the only check that
-    keeps telling the truth as the code moves.
+    Four stores, not two.  The first version of this covered the JSON
+    preferences and the QSettings INI and called them "both" -- while
+    `RecentFiles` went on writing `~/.cache/audian/recent.json` for every
+    window the suite builds, and `CompressedData` went on writing the
+    navigator's `-fulltrace.wav` cache beside it.  The developer's own
+    recent-files list was ten rows of deleted pytest temporaries.  Both go
+    through `version.audian_dirs`, which is therefore what has to move.
+
+    The assertion at the end is the part that cannot rot, but only over the
+    files it names: a store nobody redirected is invisible to it by
+    construction, which is exactly how the two cache files stayed hidden.
+    So it stamps every store this fixture claims to cover, and a new one has
+    to be added here as well as redirected.
     """
     from PySide6.QtCore import QSettings
 
     import audian.audian as audian_app
+    import audian.compresseddata as compressed
+    import audian.version as version
 
-    real_json = audian_app.settings_path()
-    real_ini = Path(QSettings("audian", "audian").fileName())
-    before = {p: _settings_stamp(p) for p in (real_json, real_ini)}
+    real_dirs = version.audian_dirs
+    real = [
+        audian_app.settings_path(),
+        Path(QSettings("audian", "audian").fileName()),
+        real_dirs.user_cache_path / audian_app.RecentFiles.file_name,
+        real_dirs.user_cache_path / compressed.CompressedData.fulltraces_file,
+    ]
+    before = {p: _settings_stamp(p) for p in real}
 
     directory = tmp_path_factory.mktemp("settings")
+    scratch = _ScratchDirs(directory)
+    for module in (version, audian_app, compressed):
+        module.audian_dirs = scratch
     audian_app.settings_path = lambda: directory / "settings.json"
     for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
         for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):

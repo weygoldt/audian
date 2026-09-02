@@ -1218,3 +1218,76 @@ def test_closing_the_tab_takes_an_uncommitted_preview_with_it(panel):
     # this is a claim about the found category and the source category, not
     # about the whole store.
     assert browser.labels.count_in("pulse") == mine
+
+
+def test_flushing_the_labels_takes_an_uncommitted_preview_with_it(panel):
+    """The path a reader actually leaves by.
+
+    The first version of this hooked `closeEvent`, and a test that called
+    `panel.close()` passed while the fix did nothing in the application: Qt
+    delivers no close event to a child when its parent closes, and neither
+    `Audian.close_tab` nor `Audian.teardown` closes plugin panels -- both
+    call `flush_labels` and then tear the browser down.  So the preview was
+    still written into the sidecar on every quit.
+
+    This drives `flush_labels` directly, which is what both of those do.
+    """
+    browser = panel.browser
+    _select(panel)
+    browser.set_times(0.0, 4.0)
+    pump(0.4)
+    panel.preview()
+    pump(0.2)
+    name = panel._category_name()
+    assert browser.labels.count_in(name) > 0
+    mine = browser.labels.count_in("pulse")
+
+    # The fixture builds the panel directly; the application puts it in this
+    # registry through `open_plugin_panel`, and that is what `flush_labels`
+    # walks to find panels with something to tidy.
+    browser.plugin_panels.setdefault("Detector", panel)
+    try:
+        browser.flush_labels()
+    finally:
+        browser.plugin_panels.pop("Detector", None)
+
+    assert browser.labels.count_in(name) == 0, (
+        "an uncommitted preview reached the reader's sidecar"
+    )
+    assert browser.labels.count_in("pulse") == mine
+
+
+def test_a_saved_run_survives_a_nudged_control_and_a_flush(panel):
+    """`_committed` is not "was written"; clearing on it deletes real work.
+
+    Run writes the whole recording's results and saves them.  Touching any
+    control then sets `_committed = False`, because the panel starts
+    previewing again -- so a reader who ran the detector, nudged the
+    sensitivity and quit would have had those results deleted from their
+    sidecar by the tidy-up.
+    """
+    browser = panel.browser
+    _select(panel)
+    name = panel._category_name()
+
+    # stand in for a finished Run: results drawn with previewing off, then
+    # marked as written, which is what `_run_finished` does
+    panel._drawing = False
+    panel._draw([detection.Candidate(1.0, 1.2, 0.9), detection.Candidate(2.0, 2.2, 0.9)])
+    panel._persisted = True
+    panel._committed = True
+    assert browser.labels.count_in(name) == 2
+
+    # the reader nudges a control: previewing resumes, `_committed` drops
+    panel._resume()
+    assert not panel._committed
+    panel._debounce.stop()  # before the preview redraws over them
+
+    browser.plugin_panels.setdefault("Detector", panel)
+    try:
+        browser.flush_labels()
+    finally:
+        browser.plugin_panels.pop("Detector", None)
+    assert browser.labels.count_in(name) == 2, (
+        "a saved run was deleted because a control had been touched"
+    )
