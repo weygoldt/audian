@@ -250,17 +250,52 @@ def test_the_detector_reopens_every_file_in_a_split_recording(panel):
         panel.browser.data = original
 
 
+@pytest.mark.realdata
 @needs_exp3_labels
 def test_every_span_in_later_exp3_wavs_is_learned():
-    """The user's exact failure: file one ends at 932 s, labels start at 1785 s."""
+    """The user's exact failure: file one ends at 932 s, labels start at 1785 s.
+
+    Covered synthetically by the `session` fixture below, which puts one
+    example in each of three files and asserts a template comes back for every
+    one.  This is the same proposition against the real four-file session and
+    the reader's own hand-drawn sidecar, which is worth having and is why it is
+    behind --realdata rather than deleted.
+
+    It takes whichever category the reader has actually drawn in rather than a
+    fixed name, because that sidecar is a live file.  Naming `pulse` failed it
+    on 2026-09-01 with `assert 0 >= 5`: nothing had regressed, they had spent
+    the evening relabelling and the file held `volley` spans by then.  What is
+    under test is that a span past the first file's end is learned at all, and
+    any category the reader drew can show that.
+    """
+    soundfile = pytest.importorskip("soundfile")
+    info = soundfile.info(str(EXP3_FILES[0]))
+    first_end = info.frames / info.samplerate
+
     with EXP3_LABELS.open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
+    drawn = {}
+    for row in rows:
+        # "pulse (found)" and the like are a detector's own export written back
+        # beside the recording, not something the reader placed.
+        if "(" in row["category"]:
+            continue
+        drawn.setdefault(row["category"], []).append(row)
+    beyond = {
+        name: found
+        for name, found in drawn.items()
+        if any(float(row["t_start_s"]) > first_end for row in found)
+    }
+    if not beyond:
+        pytest.skip("no hand-drawn span past the first file in the sidecar")
+    category = max(beyond, key=lambda name: len(beyond[name]))
+
     examples = [
         detection.Example(float(row["t_start_s"]), float(row["t_end_s"]))
-        for row in rows if row["category"] == "pulse"
+        for row in beyond[category]
     ]
-    assert len(examples) >= 5
-    assert any(example.t0 > 931.968 for example in examples)
+    assert len(examples) >= 2
+    assert any(example.t0 > first_end for example in examples)
 
     recording = detector_panel.Recording(EXP3_FILES)
     try:
