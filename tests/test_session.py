@@ -40,9 +40,26 @@ EXP2 = Path("/home/weygoldt/wrk/analyses/fakefish/experiments/exp2")
 METADATA = EXP2 / "PULS0002_metadata.toml"
 RECORDING = EXP2 / "DR0000_0087.wav"
 
-needs_data = pytest.mark.skipif(
-    not (METADATA.is_file() and RECORDING.is_file()),
-    reason="the paired exp2 session is not on this machine",
+def needs_session(present: bool, reason: str):
+    """Mark a test as wanting one of the reader's own recorded sessions.
+
+    Two conditions, not one.  `realdata` is the deliberate half: these are
+    deselected unless the run asks for them with --realdata, so that a machine
+    without the sessions reports them as deselected rather than passing a suite
+    that quietly dropped the whole of multi-file loading and cross-file
+    alignment.  The skipif is the practical half, for a run that asks for them
+    on a machine that does not have them.
+    """
+
+    def decorate(func):
+        return pytest.mark.realdata(pytest.mark.skipif(not present, reason=reason)(func))
+
+    return decorate
+
+
+needs_data = needs_session(
+    METADATA.is_file() and RECORDING.is_file(),
+    "the paired exp2 session is not on this machine",
 )
 
 
@@ -1962,9 +1979,8 @@ def test_every_explained_detection_is_bit_identical_to_its_parent_pulse(exp2):
 EXP3 = Path("/home/weygoldt/wrk/analyses/fakefish/experiments/exp3")
 METADATA3 = EXP3 / "PULS0005_metadata.toml"
 
-needs_exp3 = pytest.mark.skipif(
-    not METADATA3.is_file(),
-    reason="the paired exp3 session is not on this machine",
+needs_exp3 = needs_session(
+    METADATA3.is_file(), "the paired exp3 session is not on this machine"
 )
 
 
