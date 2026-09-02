@@ -94,6 +94,11 @@ version = {attr = "audian.version.__version__"}
 
 [tool.pytest.ini_options]
 pythonpath = "src"
+# Declared so that `--strict-markers` remains available and so that a typo in a
+# marker name is a collection error rather than a test that quietly never runs.
+markers = [
+  "realdata: needs recordings that are not in this repository.  Deselected by default; run with --realdata.",
+]
 
 [tool.ruff.format]
 # The overhaul left the tree split between single quotes (the older

@@ -148,6 +148,45 @@ def pytest_runtest_logstart(nodeid, location):
     _current_test = nodeid
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--realdata",
+        action="store_true",
+        default=False,
+        help="also run the tests that need the reader's own recordings",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Deselect the real-data tests unless they are asked for.
+
+    They used to gate themselves on `Path("/home/weygoldt/...").is_file()`,
+    which reads as caution and behaves as the opposite: on the one machine
+    where the files exist they run, and everywhere else -- a fresh clone, CI,
+    a second machine -- they report `skipped` and take the whole coverage of
+    multi-file loading, bundle provenance and cross-file alignment with them,
+    while the summary line still says the suite passed.
+
+    Worse, on the machine where they do run they are not reproducible.  On
+    2026-09-01 `test_every_span_in_later_exp3_wavs_is_learned` failed
+    `assert 0 >= 5` because the reader had spent the evening relabelling the
+    sidecar it reads and no longer had a `pulse` category in it.  A test whose
+    fixture is a file its owner edits by hand is a test that fails for reasons
+    that are not regressions.
+
+    So a marker, deselected by default and asked for by name, and synthetic
+    fixtures carrying the coverage the gates used to drop.
+    """
+    if config.getoption("--realdata"):
+        return
+    skip = pytest.mark.skip(
+        reason="needs the reader's own recordings; run with --realdata"
+    )
+    for item in items:
+        if "realdata" in item.keywords:
+            item.add_marker(skip)
+
+
 def _record_store_write(event, args):
     """Note any write this process makes inside the reader's own audian dirs.
 
