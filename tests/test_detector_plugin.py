@@ -941,12 +941,6 @@ def session(app, tmp_path_factory):
         paths.append(str(path))
 
     original_load = Plugins.load_plugins
-    original_path = audian_app.settings_path
-    home = Path(QSettings("audian", "audian").fileName()).parent.parent
-    audian_app.settings_path = lambda: directory / "settings.json"
-    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
-        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
-            QSettings.setPath(fmt, scope, os.fspath(directory))
     theme.apply(app)
     plugins = Plugins()
     plugins.add_panel_factory(eventdetection.audian_event_detection_panel)
@@ -977,10 +971,6 @@ def session(app, tmp_path_factory):
     win.setParent(None)
     win.deleteLater()
     pump(0.3)
-    audian_app.settings_path = original_path
-    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
-        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
-            QSettings.setPath(fmt, scope, os.fspath(home))
 
 
 def test_the_detector_sees_the_same_timeline_the_browser_does(session):

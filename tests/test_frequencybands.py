@@ -955,7 +955,6 @@ def browser(app, tmp_path_factory):
     own plugin tab and closes it again, so there is no state to share.
     """
     soundfile = pytest.importorskip("soundfile")
-    from PySide6.QtCore import QSettings
 
     import audian.audian as audian_app
     from audian import theme
@@ -970,13 +969,6 @@ def browser(app, tmp_path_factory):
         signal[:, c] = 0.2 * np.sin(2 * np.pi * (600.0 + 200.0 * c) * step)
     recording = tmp_path / "rec.wav"
     soundfile.write(recording, signal, rate)
-
-    original = audian_app.settings_path
-    home = Path(QSettings("audian", "audian").fileName()).parent.parent
-    audian_app.settings_path = lambda: tmp_path / "settings.json"
-    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
-        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
-            QSettings.setPath(fmt, scope, os.fspath(tmp_path))
 
     theme.apply(app)
     plugins = Plugins()
@@ -995,10 +987,6 @@ def browser(app, tmp_path_factory):
     window.setParent(None)
     window.deleteLater()
     pump(0.3)
-    audian_app.settings_path = original
-    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
-        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
-            QSettings.setPath(fmt, scope, os.fspath(home))
 
 
 @pytest.fixture(autouse=True)

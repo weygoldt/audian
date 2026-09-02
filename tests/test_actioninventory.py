@@ -45,7 +45,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from PySide6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
@@ -94,13 +94,6 @@ def window(tmp_path_factory):
 
     app = QApplication.instance() or QApplication([])
 
-    original = audian_app.settings_path
-    home = Path(QSettings("audian", "audian").fileName()).parent.parent
-    audian_app.settings_path = lambda: directory / "settings.json"
-    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
-        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
-            QSettings.setPath(fmt, scope, os.fspath(directory))
-
     theme.apply(app)
     plugins = Plugins()
     plugins.load_plugins()
@@ -115,10 +108,6 @@ def window(tmp_path_factory):
     win.setParent(None)
     win.deleteLater()
     pump(0.3)
-    audian_app.settings_path = original
-    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
-        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
-            QSettings.setPath(fmt, scope, os.fspath(home))
 
 
 def inventory(win) -> dict:

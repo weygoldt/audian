@@ -41,7 +41,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from PySide6.QtCore import QEvent, QSettings  # noqa: E402
+from PySide6.QtCore import QEvent  # noqa: E402
 from PySide6.QtGui import QCloseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -72,13 +72,6 @@ def window(tmp_path):
     soundfile.write(recording, signal, RATE)
 
     app = QApplication.instance() or QApplication([])
-    original = audian_app.settings_path
-    home = Path(QSettings("audian", "audian").fileName()).parent.parent
-    audian_app.settings_path = lambda: tmp_path / "settings.json"
-    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
-        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
-            QSettings.setPath(fmt, scope, os.fspath(tmp_path))
-
     theme.apply(app)
     plugins = Plugins()
     plugins.load_plugins()
@@ -95,10 +88,6 @@ def window(tmp_path):
     except RuntimeError:
         pass
     pump(0.3)
-    audian_app.settings_path = original
-    for fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
-        for scope in (QSettings.Scope.UserScope, QSettings.Scope.SystemScope):
-            QSettings.setPath(fmt, scope, os.fspath(home))
 
 
 def test_the_window_has_a_close_event():

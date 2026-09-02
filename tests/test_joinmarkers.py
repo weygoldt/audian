@@ -53,22 +53,20 @@ def app():
 
 
 @pytest.fixture
-def scratch_settings(tmp_path, monkeypatch):
-    """Point the settings file at the sandbox, never at the real one.
+def drained_saves():
+    """Let a queued annotation save fire inside the test that queued it.
 
-    `audian.settings_path` resolves through platformdirs at import, so no
-    environment variable isolates it: a test that toggles a layer and does
-    not redirect this writes the user's own preferences.
-
-    The queued write is drained here rather than left to the next test.
-    `schedule_annotation_save` posts a zero timer, and a timer that only
-    fires once the patch has been undone lands in the real file after all --
-    which is exactly how ~/.config/audian/settings.json got clobbered once
-    already.
+    `schedule_annotation_save` posts a zero timer, so a test that toggles a
+    layer ends with the write still pending and it lands somewhere in the
+    middle of the next one.  That used to matter for correctness as well as
+    tidiness: this fixture also redirected the store, and a timer firing
+    after the redirect was undone wrote the reader's own preferences, which
+    is how `~/.config/audian/settings.json` was clobbered once already.  The
+    session fixture in conftest redirects for the whole run now, so the late
+    write can no longer escape -- draining is what is left, and it is worth
+    keeping on its own account.
     """
-    path = tmp_path / "settings.json"
-    monkeypatch.setattr(audian_app, "settings_path", lambda: path)
-    yield path
+    yield
     running = QApplication.instance()
     if running is not None:
         running.processEvents()
@@ -209,7 +207,7 @@ def test_a_rule_sits_below_every_annotation_and_never_takes_the_mouse(split):
 # --- what a bundle may and may not say about them ---------------------------
 
 
-def test_a_bundle_never_moves_a_rule(app, split, tmp_path, scratch_settings):
+def test_a_bundle_never_moves_a_rule(app, split, tmp_path, drained_saves):
     """The bundle's own join arithmetic disagrees here on purpose.
 
     Its `recording_file_frames` put the joins at 2 s and 4 s; the loader
@@ -232,7 +230,7 @@ def test_a_bundle_never_moves_a_rule(app, split, tmp_path, scratch_settings):
 
 
 def test_a_declared_gap_labels_the_rule_on_the_lane_being_read(
-    app, split, tmp_path, scratch_settings
+    app, split, tmp_path, drained_saves
 ):
     """One label per join, not one per join per lane.
 
@@ -270,7 +268,7 @@ def test_a_declared_gap_labels_the_rule_on_the_lane_being_read(
 
 
 def test_clearing_the_bundle_takes_its_gaps_and_leaves_the_rules(
-    app, split, tmp_path, scratch_settings
+    app, split, tmp_path, drained_saves
 ):
     """The joins are the loader's; only the declared gap was the bundle's."""
     metadata = split_bundle(
@@ -296,7 +294,7 @@ def test_nothing_is_labelled_while_no_bundle_declares_a_gap(split):
 
 
 def test_gaps_that_do_not_match_the_joins_are_reported_and_never_guessed(
-    app, split, tmp_path, scratch_settings
+    app, split, tmp_path, drained_saves
 ):
     """Two sources that disagree about how many joins there are cannot be
     matched up join by join, and a gap printed against the wrong join is
