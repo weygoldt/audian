@@ -717,6 +717,121 @@ def split_alignment(**overrides) -> dict:
     return fit
 
 
+#: How long each part of a written split recording is, in seconds.
+#:
+#: Three of one length and a short one last, which is exp3's shape and not an
+#: arbitrary choice.  A TASCAM writes bext ``OriginationTime`` as the moment it
+#: *closed* the file, so the loader's continuity check compares
+#: ``close(i-1) + duration(i)`` against ``close(i)`` and the error it measures
+#: is ``duration(i-1) - duration(i)``.  That cancels for as long as the files
+#: are the same length, and bites once, at the last join -- which is why stock
+#: thunderlab silently returns exp3 without its final 825 s and why
+#: `audian.data.open_files` widens ``_max_time_diff`` to a year (data.py:53-100).
+#: Parts of equal length cannot exercise any of that, so the last one here is
+#: short by 1.5 s, comfortably past the one-second default.
+SPLIT_SECONDS = (2.0, 2.0, 2.0, 0.5)
+
+#: The gaps exp3 declares, in the order its joins occur.
+SPLIT_GAPS = (0.032, 0.032, -0.12)
+
+#: An arbitrary wall clock for the first frame of the first part.  Only the
+#: differences between the parts' stamps mean anything to the loader.
+SPLIT_START = "2025-12-14T14:36:49"
+
+
+class SplitRecording:
+    """Several WAVs on disk that audian opens as one recording.
+
+    `split_alignment` above describes such a recording to the *reader*; this
+    writes one to the *disk*, so a test can ask the questions that need a real
+    header -- does the provenance check pass against the file it names, does
+    the digest match what was written, does the loader hand back every frame.
+    Those were reachable only through the reader's own declarations before, or
+    through `_Header`, which is a stand-in for the very thing under test.
+
+    The timestamps are the whole difficulty, and they are why this is not four
+    calls to `_wav`.  `soundfile` writes no metadata at all, and without a
+    start time `DataLoader.open_multiple` stops after the first file -- so the
+    stamps go in through `audioio` at creation, the way a recorder writes them,
+    and they follow the recorder's convention rather than a tidy one: the
+    stamp on part *i* is when it was closed, which is the session start plus
+    every duration up to and including it plus every gap before it.  Written
+    that way the replica reproduces the real stamps of exp3 to the second.
+    """
+
+    def __init__(self, paths, frames, digests, gaps, rate, channels, start):
+        self.paths = tuple(paths)
+        self.names = tuple(p.name for p in paths)
+        self.frames = tuple(frames)
+        self.total_frames = sum(frames)
+        self.digests = tuple(digests)
+        self.gaps = tuple(gaps)
+        self.rate = rate
+        self.channels = channels
+        self.start = start
+
+    def alignment(self, **overrides) -> dict:
+        """``[alignment]`` describing exactly what was written."""
+        fit = {
+            "recording_file": None,
+            "recording_files": "[" + ", ".join(f'"{n}"' for n in self.names) + "]",
+            "recording_sha256": "[" + ", ".join(f'"{d}"' for d in self.digests) + "]",
+            "recording_file_frames": "[" + ", ".join(str(f) for f in self.frames) + "]",
+            "recording_join_gaps_s": "[" + ", ".join(str(g) for g in self.gaps) + "]",
+            "recording_frames": str(self.total_frames),
+            "recording_rate_hz": str(self.rate),
+        }
+        fit.update(overrides)
+        return fit
+
+
+def write_split_recording(
+    directory: Path,
+    *,
+    seconds=SPLIT_SECONDS,
+    gaps=SPLIT_GAPS,
+    rate: int = 48000,
+    channels: int = 2,
+    start: str = SPLIT_START,
+    names=None,
+) -> SplitRecording:
+    """Write a multi-file recording with the stamps a recorder would leave."""
+    import datetime
+    import hashlib
+
+    pytest.importorskip("soundfile")
+    from audioio import write_audio
+
+    if len(gaps) != len(seconds) - 1:
+        raise ValueError(
+            f"{len(seconds)} parts have {len(seconds) - 1} joins, "
+            f"not {len(gaps)}"
+        )
+    directory.mkdir(parents=True, exist_ok=True)
+    names = list(names or SPLIT_NAMES[: len(seconds)])
+    opened = datetime.datetime.fromisoformat(start)
+
+    paths, frames, digests = [], [], []
+    for index, duration in enumerate(seconds):
+        count = int(round(duration * rate))
+        # Silence: every question these parts answer is about headers,
+        # frame counts and digests, and a signal would only make them slow.
+        signal = np.zeros((count, channels), dtype="float32")
+        path = directory / names[index]
+        closed = opened + datetime.timedelta(
+            seconds=sum(seconds[: index + 1]) + sum(gaps[:index])
+        )
+        write_audio(str(path), signal, rate, metadata=dict(BEXT=dict(
+            OriginationDate=closed.strftime("%Y-%m-%d"),
+            OriginationTime=closed.strftime("%H:%M:%S"),
+        )))
+        paths.append(path)
+        frames.append(count)
+        digests.append(hashlib.sha256(path.read_bytes()).hexdigest())
+
+    return SplitRecording(paths, frames, digests, gaps, rate, channels, start)
+
+
 class _Header:
     """A soundfile header, without a file: what `check_recording` reads."""
 
@@ -791,6 +906,98 @@ def test_the_digest_of_a_split_recording_is_looked_up_by_file(tmp_path):
     assert fit.sha256_for("part0.wav") == SPLIT_DIGESTS[0]
     assert fit.sha256_for("part3.wav") == SPLIT_DIGESTS[3]
     assert fit.sha256_for("elsewhere.wav") is None
+
+
+def test_a_written_split_recording_passes_the_check_against_its_own_headers(tmp_path):
+    """The provenance check, asked without being handed the answer.
+
+    Every split test above passes `info=_Header(...)`, which is the reader's
+    own idea of the file standing in for the file.  That proves the comparison
+    and nothing about what is compared: a bundle whose declared frame count
+    disagreed with the WAV on disk would pass all of them.  This one writes
+    the parts, declares exactly what was written, and lets `check_recording`
+    open them itself.
+    """
+    recording = write_split_recording(tmp_path)
+    meta = simple(tmp_path, alignment=recording.alignment()).meta
+
+    for path in recording.paths:
+        check = meta.check_recording(path)
+        assert check.name is True, path.name
+        assert check.frames is True, path.name
+        assert check.rate is True, path.name
+        assert check.ok is True, path.name
+
+
+def test_a_part_whose_header_disagrees_with_the_bundle_is_caught(tmp_path):
+    """The same check, against a bundle that is one frame wrong about part 2.
+
+    A count taken from the writer rather than from the file is the failure
+    this guards: it is how a bundle fitted to an earlier take of the same
+    session keeps passing.
+    """
+    recording = write_split_recording(tmp_path)
+    wrong = list(recording.frames)
+    wrong[2] += 1
+    meta = simple(
+        tmp_path,
+        alignment=recording.alignment(
+            recording_file_frames="[" + ", ".join(str(f) for f in wrong) + "]",
+            recording_frames=str(sum(wrong)),
+        ),
+    ).meta
+
+    check = meta.check_recording(recording.paths[2])
+    assert check.frames is False
+    assert any(str(recording.frames[2]) in problem for problem in check.problems)
+
+
+def test_the_declared_digest_of_each_part_is_the_digest_on_disk(tmp_path):
+    """`verify_sha256` against real bytes rather than four made-up strings.
+
+    `SPLIT_DIGESTS` is `"0"*64 .. "3"*64`, which pins the lookup but can never
+    fail the comparison, because no file hashes to it.
+    """
+    recording = write_split_recording(tmp_path)
+    meta = simple(tmp_path, alignment=recording.alignment()).meta
+
+    for path, digest in zip(recording.paths, recording.digests):
+        assert meta.alignment.sha256_for(path.name) == digest
+        assert session.verify_sha256(meta, path) is True
+
+    # The same four files, each declared under its neighbour's digest: every
+    # one of them must now fail, which is what says the comparison reaches the
+    # bytes rather than agreeing with itself.
+    rotated = recording.digests[1:] + recording.digests[:1]
+    swapped = simple(
+        tmp_path / "swapped",
+        alignment=recording.alignment(
+            recording_sha256="[" + ", ".join(f'"{d}"' for d in rotated) + "]"
+        ),
+    ).meta
+    for path in recording.paths:
+        assert session.verify_sha256(swapped, path) is False, path.name
+
+
+def test_a_parts_place_in_the_timeline_comes_from_frames_not_from_its_stamp(tmp_path):
+    """The joins land on cumulative frame counts, and the stamps disagree.
+
+    The parts are written with the gaps a recorder leaves -- +32 ms, +32 ms,
+    -120 ms -- so their wall-clock stamps are not 2 s apart.  The timeline is
+    laid out by frames anyway, which is what makes a declared gap an
+    annotation rather than a correction.
+    """
+    recording = write_split_recording(tmp_path)
+    fit = simple(tmp_path, alignment=recording.alignment()).meta.alignment
+
+    expected = []
+    running = 0
+    for count in recording.frames[:-1]:
+        running += count
+        expected.append(running / recording.rate)
+    assert [t for t, _ in fit.joins()] == expected
+    assert [gap for _, gap in fit.joins()] == list(recording.gaps)
+    assert sum(recording.gaps) != 0.0, "a gapless replica proves nothing here"
 
 
 def test_the_join_gaps_are_carried_through_as_a_declared_fact(tmp_path):
