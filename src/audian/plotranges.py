@@ -12,6 +12,28 @@ from functools import partial
 from .panels import Panel
 
 
+#: The widest stretch of a recording the trace and spectrogram lanes will show
+#: at once, in seconds.
+#:
+#: Zooming out is one keystroke to ask for and a great deal of work to answer:
+#: every lane reads its whole span out of the buffer and every spectrogram is
+#: recomputed over it, so pulling the window out to an hour on a sixteen
+#: channel recording asks for sixteen hours of spectrogram in one gesture.  It
+#: is easy to do by accident -- a key held a moment too long -- and until it
+#: finishes the application is simply unresponsive, with nothing on screen to
+#: say why.
+#:
+#: Five minutes is the reader's own number, and their own measure of it is
+#: that sixteen channels with a spectrogram each is already demanding at that
+#: width on a small laptop.
+#:
+#: This caps the WINDOW and not the recording.  `rmax` stays the end of the
+#: file, so every part of it is still reachable by panning, `end` and `home`;
+#: and the navigator is not one of these ranges, so the overview still draws
+#: the whole recording at once.
+MAX_TIME_WINDOW_S = 300.0
+
+
 class PlotRange(object):
     def __init__(self, axspec, nchannels):
         self.axspec = axspec
@@ -156,6 +178,22 @@ class PlotRange(object):
             return self.rmin
         return floor
 
+    def max_dr(self):
+        """The widest span this range may show at once, or None if unknown.
+
+        The whole range for everything but time, which is what `set_limits`
+        handed `setLimits` before this existed.  Time is capped at
+        `MAX_TIME_WINDOW_S`, or at the recording's own length when that is
+        shorter -- a two minute recording is still shown whole, and nothing
+        changes for one.
+        """
+        if self.rmin is None or self.rmax is None:
+            return None
+        if not (np.isfinite(self.rmin) and np.isfinite(self.rmax)):
+            return None
+        span = self.rmax - self.rmin
+        return min(span, MAX_TIME_WINDOW_S) if self.is_time() else span
+
     def set_default_max(self, rdefault):
         """Set the upper end this range opens at.  None restores the limit."""
         self.rdefault = rdefault
@@ -194,7 +232,7 @@ class PlotRange(object):
                 if np.isfinite(self.rmax):
                     ax.setLimits(xMax=self.rmax)
                 if np.isfinite(self.rmin) and np.isfinite(self.rmax):
-                    ax.setLimits(minXRange=self.min_dr, maxXRange=self.rmax - self.rmin)
+                    ax.setLimits(minXRange=self.min_dr, maxXRange=self.max_dr())
         for axy in self.axys:
             for ax in axy:
                 if np.isfinite(self.rmin):
@@ -202,7 +240,7 @@ class PlotRange(object):
                 if np.isfinite(self.rmax):
                     ax.setLimits(yMax=self.rmax)
                 if np.isfinite(self.rmin) and np.isfinite(self.rmax):
-                    ax.setLimits(minYRange=self.min_dr, maxYRange=self.rmax - self.rmin)
+                    ax.setLimits(minYRange=self.min_dr, maxYRange=self.max_dr())
         # ranges:
         #
         # What the range OPENS at, which the loop above has just established
@@ -246,6 +284,16 @@ class PlotRange(object):
                     else:
                         self.r0[c] = self.r1[c] - dr
                 dr = self.r1[c] - self.r0[c]
+                # Every widening gesture arrives here -- the zoom keys, the
+                # navigator, `reset`, `set_times` from a plugin -- so the cap
+                # goes here rather than in each of them.  The left edge is
+                # kept, which is what makes it stable: an anchor that moved
+                # would pan the view a little further on every press of a key
+                # that is already doing nothing.
+                cap = self.max_dr() if self.is_time() else None
+                if cap is not None and dr > cap:
+                    self.r1[c] = self.r0[c] + cap
+                    dr = cap
                 if self.r0[c] < self.rmin:
                     self.r0[c] = self.rmin
                     self.r1[c] = self.rmin + dr
@@ -322,6 +370,13 @@ class PlotRange(object):
         for c in channels:
             h = self.r1[c] - self.r0[c]
             m = 0.5 * (self.r1[c] + self.r0[c])
+            # Clamped about the centre here, rather than left to the backstop
+            # in `set_ranges`, which keeps the left edge: keeping the left edge
+            # of a range that was asked for by its centre walks the window off
+            # to the left a little further on every press.
+            cap = self.max_dr() if self.is_time() else None
+            if cap is not None:
+                h = min(h, 0.5 * cap)
             self.set_ranges(m - h, m + h, None, [c], do_set)
 
     def goto(self, pos, channels=None, do_set=True):
