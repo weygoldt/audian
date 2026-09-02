@@ -148,14 +148,53 @@ def test_a_bundle_that_declares_no_file_frames_says_nothing_about_the_shift(
     assert "only by accident" not in coverage.message()
 
 
+#: What exp3's own `*_metadata.toml` declares.  Copied here rather than read
+#: from the session, because `coverage()` reads the TOML and nothing else: the
+#: reproduction from the field needs the writer's numbers, not its 1.3 GB of
+#: recordings.
+EXP3_NAMES = ("DR0000_0088.wav", "DR0000_0089.wav", "DR0000_0090.wav",
+              "DR0000_0091.wav")
+EXP3_FILE_FRAMES = (44_734_464, 44_734_464, 44_734_464, 39_605_760)
+
+
+def test_the_exp3_bundle_refuses_its_third_file_on_its_own(tmp_path):
+    """The reproduction from the field, on the numbers the writer wrote.
+
+    Opening file 3 of 4 alone puts every mark 1,863.936 s -- thirty-one
+    minutes -- out of place while every other check passes, because the open
+    file really is one of the four the bundle names.
+    """
+    fit = simple(
+        tmp_path,
+        alignment=split_alignment(
+            recording_files="[" + ", ".join(f'"{n}"' for n in EXP3_NAMES) + "]",
+            recording_file_frames="["
+            + ", ".join(str(f) for f in EXP3_FILE_FRAMES)
+            + "]",
+            recording_frames=str(sum(EXP3_FILE_FRAMES)),
+        ),
+    ).meta.alignment
+    coverage = fit.coverage(["/x/DR0000_0090.wav"])
+    assert coverage.partial is True
+    assert coverage.opened == ("DR0000_0090.wav",)
+    assert coverage.shift_s == pytest.approx(1863.936)
+
+
+@pytest.mark.realdata
 def test_the_real_exp3_bundle_refuses_its_third_file_on_its_own(tmp_path):
-    """The reproduction from the field, against the bundle as written."""
+    """The same reproduction, read off the session itself.
+
+    Kept because it is the only thing here that checks the numbers above are
+    still what the writer writes.
+    """
     path = Path(
         "/home/weygoldt/wrk/analyses/fakefish/experiments/exp3/PULS0005_metadata.toml"
     )
     if not path.exists():
         pytest.skip("exp3 is not on this machine")
     fit = SessionMeta.from_toml(path).alignment
+    assert fit.recording_files == EXP3_NAMES
+    assert fit.recording_file_frames == EXP3_FILE_FRAMES
     coverage = fit.coverage([path.parent / "DR0000_0090.wav"])
     assert coverage.partial is True
     assert coverage.opened == ("DR0000_0090.wav",)
