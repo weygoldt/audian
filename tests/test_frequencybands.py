@@ -764,6 +764,48 @@ def test_a_reference_has_its_own_file(tmp_path):
     assert [b.category for b in back_truth] == ["Sternopygus"]
 
 
+def test_a_ground_truth_of_four_animals_converts_through_the_sidecar(tmp_path):
+    """Four chains, hundreds of boxes, read back off disk the way the file is.
+
+    `test_a_chain_of_boxes_becomes_one_band` above hands `bands_from_labels` a
+    list it just built, for one animal.  This writes the same shape as a
+    sidecar and reads it with `LabelSet`, so the conversion is asked the
+    question the reader actually asks it: four species drawn box by box in one
+    file, which is what the real ground truth is and was the only thing that
+    exercised the reader on the way in.
+    """
+    from audian.labels import LabelSet
+    from audian_plugins.frequencybands import reference as R
+
+    species = {
+        "Alepto": 62.0,
+        "Eigenmannia": 340.0,
+        "Sternarchella": 720.0,
+        "Sternopygus": 105.0,
+    }
+    made = []
+    for name, hz in species.items():
+        made.extend(boxes(name, "resident", 0.0, 90.0, hz))
+    assert len(made) > 300, "the point is that it was hundreds of boxes"
+
+    sidecar = tmp_path / "truth-editable-labels.csv"
+    lines = ["category,kind,channel,t_start_s,t_end_s,f_low_hz,f_high_hz,note"]
+    for label in made:
+        lines.append(
+            f"{label.category},span,,{label.t0:.6f},{label.t1:.6f},"
+            f"{label.f0:.3f},{label.f1:.3f},{label.note}"
+        )
+    sidecar.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    store = LabelSet()
+    store.read(sidecar)
+    bands, complaints = R.bands_from_labels(store)
+    assert complaints == []
+    assert sorted(b.category for b in bands) == sorted(species)
+    assert len(bands) == len(species), "one band per animal, not one per box"
+
+
+@pytest.mark.realdata
 def test_the_real_ground_truth_converts(tmp_path):
     """The file this feature exists for, if it is on this machine."""
     from audian.labels import LabelSet
