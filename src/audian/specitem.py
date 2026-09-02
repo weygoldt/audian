@@ -163,11 +163,50 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
         if image is None or self._image_range is None or image.ndim != 2:
             return None
         i0, _i1, stride = self._image_range
-        col = (int(floor(t * self.data.rate)) - self.data.offset - i0) // stride
-        row = int(floor(f / self.data.fresolution))
+        ti, row = self.cell_at(t, f)
+        col = (ti - self.data.offset - i0) // stride
         if not (0 <= row < image.shape[0] and 0 <= col < image.shape[1]):
             return None
         return float(image[row, col])
+
+    def time_shift(self) -> float:
+        """Seconds from a column's left edge to the centre of its window.
+
+        `BufferedSpectrogram.process` transforms frame *j* from samples
+        ``[j*hop, j*hop + nfft)``, so the window is centred at
+        ``(j*hop + nfft/2)/fs``.  Drawn from ``j*hop/fs`` and one hop wide,
+        the *cell* is centred at ``(j*hop + hop/2)/fs`` -- ``(nfft-hop)/2``
+        samples early.  At the band plugin's default nfft of 16384 with
+        overlap 0.75 on a 20 kHz recording that is 0.31 s, and the smear
+        reaches 0.61 s.
+
+        Every label a reader drew took that bias and stored it as plain
+        seconds, with nothing on disk saying which nfft produced it.
+        thunderlab's own axis is window centres -- scipy's `_spectral_helper`
+        leaves `boundary` None, so it never applies its half-window
+        correction -- so the picture was the odd one out, not the tracker.
+
+        One method rather than the arithmetic at each site: the bias existed
+        because two files each invented their own convention.
+        """
+        return (self.data.nfft - self.data.hop) / (2.0 * self.data.source.rate)
+
+    def cell_at(self, t, f):
+        """``(frame, bin)`` of the drawn cell containing ``(t, f)``.
+
+        Answers about the *picture*, which is what both readouts want: the
+        number under the pointer must be the number in the pixel under the
+        pointer.  Either index can be negative -- a centred frequency axis
+        starts half a bin below zero, and the time axis starts a window
+        earlier than it used to -- so callers must check both ends.
+        """
+        rate = self.data.rate
+        ti = int(floor((t - self.time_shift()) * rate))
+        # bin k is centred on k*df and drawn over [k*df - df/2, k*df + df/2),
+        # so the cell containing f is the nearest bin rather than the one
+        # below it
+        fi = int(floor(f / self.data.fresolution + 0.5))
+        return ti, fi
 
     def get_power(self, t, f):
         """Get power next to cursor position.
@@ -188,9 +227,12 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
             drawn = self.drawn_power(t, f)
             if drawn is not None:
                 return drawn
-        ti = int(floor(t * self.data.rate))
-        fi = int(floor(f / self.data.fresolution))
-        if ti >= self.data.shape[0] or fi >= self.data.shape[2]:
+        ti, fi = self.cell_at(t, f)
+        # Both ends, not just the upper one.  A centred axis reaches half a
+        # bin below zero and a window before the first frame, so -1 is an
+        # ordinary result here -- and it used to index the far end of the
+        # buffer instead of saying "not on the picture".
+        if not (0 <= ti < self.data.shape[0] and 0 <= fi < self.data.shape[2]):
             return None
         if self.mean_channels is None:
             return decibel(self.data[ti, self.channel, fi])
@@ -253,8 +295,8 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
         # rect covers the CROPPED extent, not data.spec_rect:
         rate = self.data.rate
         self.setRect(
-            (self.data.offset + i0) / rate,
-            0,
+            (self.data.offset + i0) / rate + self.time_shift(),
+            -0.5 * self.data.fresolution,
             (i1 - i0) / rate,
             self.data.source.rate / 2 + self.data.fresolution,
         )

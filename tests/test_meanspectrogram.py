@@ -225,8 +225,14 @@ def test_the_pointer_readout_agrees_with_the_picture(stack, mean_off):
     span = i1 - i0
     for frac, freq in ((0.1, 900.0), (0.5, 300.0), (0.9, 1800.0)):
         ti = min(i1 - 1, i0 + int(frac * span))
-        t = (data.offset + ti) / data.rate
-        fi = int(np.floor(freq / data.fresolution))
+        # A column is drawn at its window's centre, not its leading edge, so
+        # the time that lands on frame `ti` is its left edge plus the shift.
+        # Frequency bins are centred too, so the bin under `freq` is the
+        # nearest one rather than the one below it.  Both were the other way
+        # round, which is what put an nfft-dependent bias into every label
+        # drawn on a spectrogram.
+        t = (data.offset + ti) / data.rate + item.time_shift()
+        fi = int(np.floor(freq / data.fresolution + 0.5))
         with np.errstate(all="ignore"):
             want = decibel(float(np.mean(data.buffer[ti, :, fi])))
             one = decibel(float(data.buffer[ti, 0, fi]))
@@ -307,8 +313,11 @@ def test_a_filtering_smoothing_moves_the_readout_on_to_the_pixel(
     lane = enter_mean(stack)
     item = spec_item(stack, lane)
     data = item.data
+    # a column is drawn at its window's centre; see the test above
     raw = {
-        (ti, freq): item.get_power((data.offset + ti) / data.rate, freq)
+        (ti, freq): item.get_power(
+            (data.offset + ti) / data.rate + item.time_shift(), freq
+        )
         for ti, freq in probe_points(item)
     }
     stack.set_spec_smoothing("gaussian")
@@ -318,9 +327,11 @@ def test_a_filtering_smoothing_moves_the_readout_on_to_the_pixel(
     i0, _i1, stride = item._image_range
     moved = 0
     for (ti, freq), before in raw.items():
-        t = (data.offset + ti) / data.rate
+        t = (data.offset + ti) / data.rate + item.time_shift()
         got = item.get_power(t, freq)
-        cell = item.image[int(np.floor(freq / data.fresolution)), (ti - i0) // stride]
+        cell = item.image[
+            int(np.floor(freq / data.fresolution + 0.5)), (ti - i0) // stride
+        ]
         assert got == pytest.approx(float(cell), abs=1e-9), (
             f"readout at f={freq} says {got:.3f} dB and the pixel {cell:.3f} dB"
         )
@@ -744,3 +755,64 @@ def test_the_toolbar_says_which_mode_the_stack_is_in(stack, mean_off):
     pump(0.5)
     assert not stack.mean_spec
     assert not act.isChecked()
+
+
+def test_a_column_is_drawn_at_the_centre_of_its_window(stack, mean_off):
+    """The bias every spectrogram label carried, pinned so it cannot return.
+
+    `BufferedSpectrogram.process` transforms frame *j* from samples
+    ``[j*hop, j*hop + nfft)``, so its window is centred at
+    ``(j*hop + nfft/2)/fs``.  The image was drawn from ``j*hop/fs`` and one
+    hop wide, putting the cell's own centre ``(nfft-hop)/2`` samples early
+    -- 0.31 s at the band plugin's default nfft of 16384 on a 20 kHz
+    recording -- and `label_from_region` stored that straight into the CSV
+    as plain seconds, with nothing on disk saying which nfft produced it.
+
+    thunderlab's axis is window centres (scipy leaves `boundary` None, so
+    the half-window correction it would otherwise apply never happens), so
+    the picture was the odd one out and it is the picture that moved.
+    """
+    lane = enter_mean(stack)
+    item = spec_item(stack, lane)
+    data = item.data
+    i0, i1, _stride = item._image_range
+    # in data coordinates: `boundingRect` is the image's own, in pixels, and
+    # `setRect` places it through the item's transform
+    rect = item.mapRectToParent(item.boundingRect())
+
+    fs = data.source.rate
+    expected_shift = (data.nfft - data.hop) / (2.0 * fs)
+    assert item.time_shift() == pytest.approx(expected_shift)
+    assert expected_shift > 0, "the fixture has to have nfft > hop to mean anything"
+
+    # the first column's cell is centred on its own window's centre
+    first = data.offset + i0
+    cell_centre = rect.left() + 0.5 / data.rate
+    window_centre = (first * data.hop + data.nfft / 2.0) / fs
+    assert cell_centre == pytest.approx(window_centre, abs=1e-9)
+
+    # and the frequency axis is centred too: bin 0 straddles zero rather
+    # than sitting entirely above it
+    assert rect.top() == pytest.approx(-0.5 * data.fresolution, abs=1e-9)
+    assert rect.height() == pytest.approx(
+        fs / 2 + data.fresolution, abs=1e-9
+    )
+
+
+def test_the_readout_says_nothing_rather_than_wrapping_off_the_left_edge(
+    stack, mean_off
+):
+    """A centred axis reaches before the first frame and below the first bin.
+
+    `get_power` bounded only the upper end, so a negative index read the
+    far end of the buffer and returned a confident number for a place the
+    picture does not cover.
+    """
+    lane = enter_mean(stack)
+    item = spec_item(stack, lane)
+    data = item.data
+
+    ti, fi = item.cell_at(-1.0, -data.fresolution)
+    assert ti < 0 and fi < 0, "the fixture no longer exercises the guard"
+    assert item.get_power(-1.0, -data.fresolution) is None
+    assert item.drawn_power(-1.0, -data.fresolution) is None

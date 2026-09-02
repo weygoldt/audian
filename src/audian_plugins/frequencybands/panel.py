@@ -1555,7 +1555,17 @@ class BandPanel(QWidget):
         # returned is not necessarily at t0.  Rebuild the axis from the
         # index it started at rather than from the view range.
         start = max(0, int(t0 * rate))
-        times = (np.arange(power.shape[0]) + start) / rate
+        # Frame j is transformed from samples [j*hop, j*hop + nfft), so its
+        # window is centred half a window after its left edge.  Every other
+        # path in this plugin already produces centre times -- the sweep and
+        # the fallback read both take thunderlab's axis, which is centres --
+        # and this one did not, so bands found "as displayed" sat
+        # nfft/(2*fs) earlier than bands found by the sweep over the same
+        # audio: 0.41 s at the panel's own defaults.  One convention.
+        source_rate = float(getattr(getattr(spec, "source", None), "rate", 0.0))
+        nfft = float(getattr(spec, "nfft", 0) or 0)
+        half_window = nfft / (2.0 * source_rate) if source_rate > 0 else 0.0
+        times = (np.arange(power.shape[0]) + start) / rate + half_window
         frames = frames_of_power(times, freqs, power, settings)
         return T.link(
             frames,
