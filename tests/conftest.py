@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from platformdirs import PlatformDirs
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -95,17 +96,86 @@ if _enum_mode_chosen is None:
 pg.setConfigOption("mouseRateLimit", 0)
 
 
-def _settings_stamp(path: Path):
-    """What the file is now, or None if it is not there.
+# --- proof that the redirect below actually holds --------------------------
+#
+# The first version of this guard stamped `(mtime_ns, content)` of the four
+# real stores when the session began and compared them when it ended.  That
+# compares a file against its past, which cannot distinguish *this* process
+# from any other -- and on 2026-09-01 it did not.  The reader had audian open
+# on their own recordings while the suite ran; the GUI saved a preference at
+# 21:11:08 during a run that spanned 21:02 to 21:16; and the suite reported
+# "the suite wrote to the real settings store" about a write it had not made.
+# A guard that fails when the owner uses their own application is a guard
+# everybody learns to re-run, which is the same lesson the teardown note above
+# is written to avoid.
+#
+# So ask the causal question instead: did *this interpreter* write there?  An
+# audit hook sees every `open` and every rename the process makes, and a
+# directory prefix answers it in one string comparison.  Three things improve
+# at once.  It cannot see another process, so the false failure is gone by
+# construction.  It knows which test was running, so it names the culprit
+# rather than only the file.  And it watches the two directories rather than
+# four enumerated paths, so a store nobody thought to list is covered anyway
+# -- which is exactly how `recent.json` and the fulltrace cache stayed hidden
+# from the first version until someone went looking.
+#
+# The cost is 0.82 us per `open`, measured over 12,000 of them: about 0.08 s
+# across a hundred thousand opens, against a suite that runs for 554 s.
+#
+# Both the JSON preferences and the QSettings INI live in `user_config_path`,
+# and `recent.json` and the fulltrace cache in `user_cache_path`, so those two
+# directories cover all four.  The fixture re-derives the four exact paths and
+# refuses to run if any of them has escaped the watch, so this stays true by
+# assertion rather than by memory.
+_audian_dirs = PlatformDirs("audian", "janscience")
+_REAL_STORE_DIRS = tuple(
+    sorted(
+        {
+            os.fspath(directory) + os.sep
+            for path in (_audian_dirs.user_config_path, _audian_dirs.user_cache_path)
+            for directory in (path, Path(os.path.realpath(path)))
+        }
+    )
+)
 
-    Content as well as mtime: a test that writes and then restores the
-    timestamp would pass an mtime check, and the failure this guards against
-    is the file's *content* being replaced by a test's idea of it.
+_store_writes: list[tuple[str, str]] = []
+_current_test = "collection"
+
+
+def pytest_runtest_logstart(nodeid, location):
+    """Remember which test is running, so a store write can name it."""
+    global _current_test
+    _current_test = nodeid
+
+
+def _record_store_write(event, args):
+    """Note any write this process makes inside the reader's own audian dirs.
+
+    Three events, because a store can be lost three ways.  `open` is the
+    obvious one.  `os.rename` is the one that matters most: `replace_atomically`
+    writes a temporary file beside the target and renames it over, so a hook
+    watching only `open` would see the temporary name and miss every settings
+    write there is.  And `os.remove`, because a test that deletes the reader's
+    label vocabulary has destroyed it just as thoroughly as one that rewrites
+    it, while opening nothing at all.
     """
-    try:
-        return (path.stat().st_mtime_ns, path.read_bytes())
-    except OSError:
-        return None
+    if event == "open":
+        path = args[0]
+        if not isinstance(path, str) or not path.startswith(_REAL_STORE_DIRS):
+            return
+        mode, flags = args[1], args[2]
+        if (isinstance(mode, str) and any(c in mode for c in "wxa+")) or (
+            isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)
+        ):
+            _store_writes.append((path, _current_test))
+    elif event in ("os.rename", "os.remove"):
+        # rename names its destination second; remove names its target first.
+        target = args[1] if event == "os.rename" else args[0]
+        if isinstance(target, str) and target.startswith(_REAL_STORE_DIRS):
+            _store_writes.append((target, _current_test))
+
+
+sys.addaudithook(_record_store_write)
 
 
 class _ScratchDirs:
@@ -150,11 +220,11 @@ def _isolate_settings(tmp_path_factory):
     recent-files list was ten rows of deleted pytest temporaries.  Both go
     through `version.audian_dirs`, which is therefore what has to move.
 
-    The assertion at the end is the part that cannot rot, but only over the
-    files it names: a store nobody redirected is invisible to it by
-    construction, which is exactly how the two cache files stayed hidden.
-    So it stamps every store this fixture claims to cover, and a new one has
-    to be added here as well as redirected.
+    The redirect is the fix; the audit hook above is what proves it held.
+    The two are checked against each other on the way in -- every store this
+    fixture redirects must fall inside a directory the hook watches, or the
+    run stops -- so a fifth store cannot be redirected here and left with
+    nothing watching whether the redirect worked.
     """
     from PySide6.QtCore import QSettings
 
@@ -169,7 +239,16 @@ def _isolate_settings(tmp_path_factory):
         real_dirs.user_cache_path / audian_app.RecentFiles.file_name,
         real_dirs.user_cache_path / compressed.CompressedData.fulltraces_file,
     ]
-    before = {p: _settings_stamp(p) for p in real}
+    unwatched = [p for p in real if not os.fspath(p).startswith(_REAL_STORE_DIRS)]
+    if unwatched:
+        pytest.fail(
+            "the write guard is not watching a store this fixture redirects: "
+            + ", ".join(str(p) for p in unwatched)
+            + ".  It watches "
+            + ", ".join(sorted(_REAL_STORE_DIRS))
+            + ", so a store that resolves outside them would be redirected "
+            "with nothing left to prove the redirect held."
+        )
 
     directory = tmp_path_factory.mktemp("settings")
     scratch = _ScratchDirs(directory)
@@ -182,13 +261,13 @@ def _isolate_settings(tmp_path_factory):
 
     yield directory
 
-    moved = [p for p, was in before.items() if _settings_stamp(p) != was]
-    if moved:
+    if _store_writes:
+        seen = dict.fromkeys(_store_writes)
         pytest.fail(
-            "the suite wrote to the real settings store: "
-            + ", ".join(str(p) for p in moved)
-            + ".  Some code path reaches a store this fixture does not "
-            "redirect -- find it rather than widening the comparison."
+            "the suite wrote to the reader's own audian directories:\n"
+            + "\n".join(f"  {path}\n      written during {test}" for path, test in seen)
+            + "\nSome code path reaches a store this fixture does not redirect "
+            "-- find it rather than narrowing the watch."
         )
 
 
