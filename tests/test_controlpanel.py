@@ -517,7 +517,6 @@ def browser(app, tmp_path_factory):
     import audian.audian as audian_app
     from audian.plugins import Plugins
 
-    audian_app.settings_path = lambda: directory / "settings.json"
     theme.apply(app)
     plugins = Plugins()
     plugins.load_plugins()

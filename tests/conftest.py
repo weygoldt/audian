@@ -261,6 +261,35 @@ def _isolate_settings(tmp_path_factory):
 
     yield directory
 
+    # A module that installs its own redirect and never puts this one back
+    # leaves every module after it writing somewhere neither it nor this
+    # fixture chose.  The write guard cannot see that: the hijacked path is
+    # still a pytest temporary, so nothing of the reader's is touched and
+    # every check above stays green while the store quietly moves.
+    #
+    # It was not hypothetical.  `test_controlpanel.py` assigned `settings_path`
+    # inside a module-scoped fixture and restored nothing, so from that module
+    # onward -- eighth of thirty-six in the default order -- the store was its
+    # scratch directory rather than this one, and every later fixture that
+    # captured "the original" and put it back faithfully reinstalled the
+    # hijack.  What made it worth catching rather than tolerating is that any
+    # test reworked to read the directory this fixture yields would have been
+    # reading a file the application was not writing.
+    hijacked = [
+        f"audian.audian.settings_path() -> {audian_app.settings_path()}",
+    ] if audian_app.settings_path() != directory / "settings.json" else []
+    qsettings_file = Path(QSettings("audian", "audian").fileName())
+    if directory not in qsettings_file.parents:
+        hijacked.append(f"QSettings -> {qsettings_file}")
+    if hijacked:
+        pytest.fail(
+            "a test module redirected a store and left it redirected: "
+            + "; ".join(hijacked)
+            + f".  This fixture put both under {directory}.  Whichever module "
+            "replaced them has to restore what it found, or -- better -- stop "
+            "redirecting at all, since this fixture already has."
+        )
+
     if _store_writes:
         seen = dict.fromkeys(_store_writes)
         pytest.fail(
