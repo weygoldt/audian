@@ -53,20 +53,28 @@ def app():
 
 
 @pytest.fixture
-def drained_saves():
-    """Let a queued annotation save fire inside the test that queued it.
+def scratch_settings(tmp_path, monkeypatch):
+    """An EMPTY settings file, one per test, and the queued write drained.
 
-    `schedule_annotation_save` posts a zero timer, so a test that toggles a
-    layer ends with the write still pending and it lands somewhere in the
-    middle of the next one.  That used to matter for correctness as well as
-    tidiness: this fixture also redirected the store, and a timer firing
-    after the redirect was undone wrote the reader's own preferences, which
-    is how `~/.config/audian/settings.json` was clobbered once already.  The
-    session fixture in conftest redirects for the whole run now, so the late
-    write can no longer escape -- draining is what is left, and it is worth
-    keeping on its own account.
+    Not a duplicate of the session-scoped redirect in conftest, though it
+    looks like one and was briefly deleted as one.  What these tests need is
+    not isolation from the reader's preferences -- conftest gives them that --
+    but a store with no saved annotation layers in it.  `JoinBrowser` is a
+    `DataBrowser` with only its join-marker half built, and
+    `restore_annotation_layers` returns at once when the store has nothing to
+    put back; give it something and it runs on to `redraw_annotations`, which
+    on a browser with no control panel raises `AttributeError`.  Sharing one
+    store across the run means whichever module ran earlier decides that, so
+    the failure appears in the full suite and not when this module is run with
+    a few others.
+
+    The queued write is drained here rather than left to the next test.
+    `schedule_annotation_save` posts a zero timer, and a timer that fires once
+    the patch has been undone lands in whatever store is live then.
     """
-    yield
+    path = tmp_path / "settings.json"
+    monkeypatch.setattr(audian_app, "settings_path", lambda: path)
+    yield path
     running = QApplication.instance()
     if running is not None:
         running.processEvents()
@@ -207,7 +215,7 @@ def test_a_rule_sits_below_every_annotation_and_never_takes_the_mouse(split):
 # --- what a bundle may and may not say about them ---------------------------
 
 
-def test_a_bundle_never_moves_a_rule(app, split, tmp_path, drained_saves):
+def test_a_bundle_never_moves_a_rule(app, split, tmp_path, scratch_settings):
     """The bundle's own join arithmetic disagrees here on purpose.
 
     Its `recording_file_frames` put the joins at 2 s and 4 s; the loader
@@ -230,7 +238,7 @@ def test_a_bundle_never_moves_a_rule(app, split, tmp_path, drained_saves):
 
 
 def test_a_declared_gap_labels_the_rule_on_the_lane_being_read(
-    app, split, tmp_path, drained_saves
+    app, split, tmp_path, scratch_settings
 ):
     """One label per join, not one per join per lane.
 
@@ -268,7 +276,7 @@ def test_a_declared_gap_labels_the_rule_on_the_lane_being_read(
 
 
 def test_clearing_the_bundle_takes_its_gaps_and_leaves_the_rules(
-    app, split, tmp_path, drained_saves
+    app, split, tmp_path, scratch_settings
 ):
     """The joins are the loader's; only the declared gap was the bundle's."""
     metadata = split_bundle(
@@ -294,7 +302,7 @@ def test_nothing_is_labelled_while_no_bundle_declares_a_gap(split):
 
 
 def test_gaps_that_do_not_match_the_joins_are_reported_and_never_guessed(
-    app, split, tmp_path, drained_saves
+    app, split, tmp_path, scratch_settings
 ):
     """Two sources that disagree about how many joins there are cannot be
     matched up join by join, and a gap printed against the wrong join is

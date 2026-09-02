@@ -153,11 +153,16 @@ class PanelBrowser(DataBrowser):
 
 @pytest.fixture
 def scratch_settings(tmp_path, monkeypatch):
-    """Point the settings file at the sandbox, never at the real one.
+    """A settings file of this test's own, empty on the way in.
 
-    `audian.settings_path` resolves through platformdirs at import, so no
-    environment variable isolates it: a test that toggles a layer and does
-    not redirect this writes the user's own preferences.
+    Isolation from the reader's own preferences is the session fixture's job
+    in `conftest` and has been since 1b56e0c, so this is not the duplicate of
+    it that it resembles.  What these tests need is a store that is *fresh for
+    each of them*, which a session-scoped directory cannot be: the path is
+    yielded and read back by nine tests here, one of which asserts the file
+    holds the annotation key and nothing else, and another that it does not
+    exist yet.  Both are false the moment an earlier test in this module -- let
+    alone an earlier module -- has written to it.
 
     The queued write is drained here rather than left to the next test.
     `schedule_annotation_save` posts a zero timer, and a timer that only

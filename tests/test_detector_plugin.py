@@ -97,6 +97,10 @@ def panel(app, tmp_path_factory):
     import audian.audian as audian_app
     from PySide6.QtCore import QSettings
 
+    # `build_window` redirects both stores into its directory and does not
+    # restore them, because it is a function and cannot; this is its other
+    # half.  Not a duplicate of the session fixture in conftest -- see that
+    # function's docstring for why each window wants its own store.
     original = audian_app.settings_path
     home = Path(QSettings("audian", "audian").fileName()).parent.parent
     directory = tmp_path_factory.mktemp("detector")
@@ -957,7 +961,6 @@ def session(app, tmp_path_factory):
 
     import audian.audian as audian_app
     from audioio import write_audio
-    from PySide6.QtCore import QSettings
     from audian import theme
     from audian.plugins import Plugins
 

@@ -100,10 +100,23 @@ def build_window(app, directory, channels, signal=None):
 
     `signal` is a (frames, channels) float array; `tones` is the default.
 
-    Both persistence stores are redirected into `directory` first.  This file
-    writes a preference -- the split is saved at the end of every gesture --
-    and a test that writes the reader's own ``~/.config/audian`` is a test
-    that has to be run in a container to be safe.
+    Both persistence stores are redirected into `directory` first, and the
+    reason is no longer the reader's own ``~/.config/audian`` -- the session
+    fixture in `conftest` has covered that for the whole run since 1b56e0c.
+    It is that each window needs its own store.  `restore_panel_split` and
+    `restore_side_panel` are read at *construction* and know nothing about the
+    recording, so three windows sharing one file inherit each other's dragged
+    split: a drag in `roomy_browser` would decide the opening geometry of a
+    window built after it, and the assertions that geometry is measured
+    against are pinned to the pixel at 1200x900.  Today's order happens to
+    survive a shared store; ``-k``, a subset or a reordering plugin would not,
+    and this is already the module with a documented subset flake.
+
+    The restore is the caller's, because this is a function and not a fixture.
+    `open_stack` below does it, and so do `test_detector_plugin`'s two window
+    fixtures.  A caller that forgets no longer fails silently: the teardown of
+    `conftest._isolate_settings` fails the run if the store is left pointing
+    anywhere but its own scratch directory.
     """
     soundfile = pytest.importorskip("soundfile")
     import audian.audian as audian_app
