@@ -316,6 +316,38 @@ def redirect_persistence(scratch: Path) -> None:
             QSettings.setPath(fmt, scope, os.fspath(scratch))
 
 
+def snapshot_sidecars(files) -> dict:
+    """The label sidecar of each recording, as bytes, or None if it has none.
+
+    Persistence is redirected; the recordings are not, and a browser flushes
+    edited labels next to the recording it opened.  An earlier sweep dragged
+    labels on data/Gryllus_campestris.wav and left its tracked sidecar
+    modified, twice, noticed only when it turned up in an unrelated commit.
+    """
+    from audian.labels import sidecar_path
+
+    snapshot = {}
+    for name in files:
+        path = sidecar_path(name)
+        snapshot[path] = path.read_bytes() if path.exists() else None
+    return snapshot
+
+
+def restore_sidecars(snapshot: dict) -> list:
+    """Put every sidecar back as `snapshot` found it; a fault per change."""
+    changed = []
+    for path, before in snapshot.items():
+        after = path.read_bytes() if path.exists() else None
+        if after == before:
+            continue
+        if before is None:
+            path.unlink()
+        else:
+            path.write_bytes(before)
+        changed.append(f"the run changed {path}; it has been put back")
+    return changed
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -396,6 +428,8 @@ def main(argv=None):
     plugins.load_plugins()
 
     files = [] if (args.empty or not args.wav) else list(args.wav)
+
+    sidecars = snapshot_sidecars(files)
 
     t_build = time.monotonic()
     main_win = A.Audian(files, {}, plugins, [], 0, None, False, 0, args.events)
@@ -578,6 +612,7 @@ def main(argv=None):
     main_win.close()
     pump(app, 0.5)
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    faults.extend(restore_sidecars(sidecars))
 
     if faults:
         sys.stderr.write("\nFAULTS:\n")

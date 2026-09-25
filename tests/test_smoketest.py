@@ -84,3 +84,29 @@ def test_a_setting_written_after_the_redirect_lands_in_the_scratch_directory(
     written = {p.name for p in tmp_path.rglob("*") if p.is_file()}
     assert "settings.json" in written
     assert "audian.conf" in written
+
+
+def test_a_sidecar_the_run_edited_is_put_back_and_reported(smoke, tmp_path):
+    recording = tmp_path / "rec.wav"
+    sidecar = tmp_path / "rec-editable-labels.csv"
+    sidecar.write_text("category,kind\nevent,span\n")
+    snapshot = smoke.snapshot_sidecars([recording])
+    sidecar.write_text("category,kind\nevent,point\n")
+    (fault,) = smoke.restore_sidecars(snapshot)
+    assert str(sidecar) in fault
+    assert sidecar.read_text() == "category,kind\nevent,span\n"
+
+
+def test_a_sidecar_the_run_created_is_removed_and_reported(smoke, tmp_path):
+    recording = tmp_path / "rec.wav"
+    snapshot = smoke.snapshot_sidecars([recording])
+    (tmp_path / "rec-editable-labels.csv").write_text("category\n")
+    assert len(smoke.restore_sidecars(snapshot)) == 1
+    assert not (tmp_path / "rec-editable-labels.csv").exists()
+
+
+def test_an_untouched_sidecar_is_not_a_fault(smoke, tmp_path):
+    recording = tmp_path / "rec.wav"
+    (tmp_path / "rec-editable-labels.csv").write_text("category\n")
+    snapshot = smoke.snapshot_sidecars([recording])
+    assert smoke.restore_sidecars(snapshot) == []
