@@ -17,3 +17,7 @@ __pycache__/
 # Agent worktrees and scratch. Worktrees live at .claude/worktrees/<name> so the
 # primary checkout can stay on master -- one held elsewhere silently strands it.
 .claude/
+
+# Label sidecars are the reader's own work on a recording, written next to it
+# by the browser; one was committed by accident in 5020b8c.
+*-editable-labels.csv
