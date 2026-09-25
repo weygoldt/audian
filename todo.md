@@ -37,6 +37,24 @@ genuinely large: the plugin interface and a torch spectrogram backend.
 
 # Low hanging fruit
 
+- [ ] **Playback speed is upside down.**  The Speed combo in the parameter
+  bar (`databrowser.py`, `self.audiofacw`, tooltip "Audio time expansion
+  factor") sets `audio_rate_fac`, and playback *divides* by it:
+  `self.audio.play(playdata, rate / self.audio_rate_fac)`, with the same
+  division in `fade(...)` and in the cursor step in `mark_audio`
+  (`self.audio_time += 0.05 / self.audio_rate_fac`).  So 2 plays at half
+  speed and 0.5 at double -- a time expansion factor, which is not what a
+  control labelled "Speed" says.  Make it a multiplier: higher is faster,
+  `rate * speed` in all three places, the tooltip saying "Playback speed
+  (x real time)", and the combo offering the same values, whose meaning
+  now inverts.  Rename `audio_rate_fac` / `rate_fac` (through `set_audio`
+  and `Audian.dispatch_audio`) to `audio_speed` so the name stops meaning
+  the opposite.  Not persisted in settings and not in the manual, so
+  nothing to migrate.  The heterodyne path decimates before playing and
+  must still end up at the right pitch -- worth one test that asserts the
+  rate handed to `audio.play` for speeds 0.5, 1 and 2, with a stubbed
+  `self.audio`.
+
 - [x] For spectrograms, keep the powerspec and the colorbar off by default.
   `show_powers` was already off; only `show_cbars` had to flip.  Doing it
   surfaced a real bug and its fix: the *first* time a colour bar is shown,
@@ -408,7 +426,9 @@ action that leaves state behind has to join them.
   turns -- and an assertion at the end of the session that the real file
   was not touched.
 
-- [ ] **`scripts/smoke_test.py --interact` edits a tracked file.**  The
+- [x] **`scripts/smoke_test.py --interact` edits a tracked file.**  Done
+  2026-09-25: no longer reproduces, the harness restores any sidecar a run
+  changes and fails, and the sidecar is untracked.  Original note:  The
   sweep drags and edits labels on `data/Gryllus_campestris.wav` and the
   browser flushes them, so a run leaves
   `data/Gryllus_campestris-editable-labels.csv` modified in the working
@@ -531,10 +551,46 @@ action that leaves state behind has to join them.
   Good test case: `logger09-20250916T164744.wav`, where electrodes 08-11 are
   recorded as exactly zero.
 
-- [ ] Superimpose every channel's trace in one panel, under the array
-  spectrogram. Separate from the reduction above and probably its own commit: it
-  is a new panel *kind* rather than a change to an existing one, and `panels.py`,
-  `LabelOverlay` and `EventOverlay` all key off what a panel is.
+- [ ] **An overlay trace panel: every channel's trace in one panel.**  The
+  counterpart of the mean ("sum") spectrogram (Shift+F2,
+  `set_mean_spectrogram`) for traces: one full-height panel in which all
+  selected channels are drawn on top of each other, so the whole grid can
+  be read at once instead of scrolled lane by lane.  And the two should
+  combine the way the per-channel lanes already do: overlay traces and mean
+  spectrogram shown together, trace above spectrogram, sharing the time
+  axis and the trace/spectrogram split (`PanelSplitter`), just as a single
+  channel's lane shows its trace over its spectrogram.
+
+  It is a new panel *kind*, not a change to an existing one, and
+  `panels.py`, `LabelOverlay` and `EventOverlay` all key off what a panel
+  is, so plan for that rather than bolting it on.  Things to settle:
+
+  * **How the mean borrows a lane today.**  `mean_spec_lane()` puts the
+    mean on the first selected channel's lane and hides the others;
+    `set_mean_spectrogram` turns the traces *off* on entry ("this mode only
+    means anything with the lanes given over to spectrograms").  That rule
+    has to change once traces can be shown in the mean view, and the
+    round-trip behaviour of the key (`traces_before_mean`) must survive.
+  * **Which channels.**  The same set the mean uses (`mean_channels()`,
+    selection-ordered, solo/mute respected), so the two panels always
+    describe the same electrodes and the caption can say so the way the
+    mean's does (`MEAN 00-15`).
+  * **Telling channels apart.**  Sixteen overlapping traces need a
+    colorblind-safe categorical palette from `theme`, not the single trace
+    colour, and the colour should be the channel's everywhere it appears
+    (rail, caption).  Consider thinner lines and some alpha.
+  * **Y scaling.**  One shared y range across channels; the existing y modes
+    (shared / per-channel / fixed, `set_y_mode`) need a defined meaning
+    here -- per-channel scaling does not exist in a single panel.
+  * **Cost.**  Sixteen `TraceItem`s in one viewbox at the 5-minute window
+    cap (`plotranges`) is sixteen decimated reads per redraw; measure
+    against the same window as sixteen lanes before choosing how to
+    decimate, and keep it off the GUI thread like the lanes are.
+  * **Annotations.**  Labels and events are per channel; in a shared panel
+    they either draw for every channel (tinted by channel colour) or only
+    for the current one.  Decide, and make hover/hit-testing agree.
+  * **Keyboard.**  A key of its own next to Shift+F2, listed in the action
+    inventory (`tests/data/action-inventory.json` regenerates).
 
 # Future larger dev sessions
 
