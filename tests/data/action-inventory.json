@@ -1038,6 +1038,16 @@
     "path": "View \u203a Panels",
     "text": "Toggle mean spectrogram"
   },
+  "toggle_overlay_traces": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Ctrl+Shift+F2"
+    ],
+    "path": "View \u203a Panels",
+    "text": "Toggle overlay traces"
+  },
   "toggle_peaking": {
     "checkable": true,
     "checked": false,

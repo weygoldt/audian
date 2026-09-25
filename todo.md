@@ -544,46 +544,41 @@ action that leaves state behind has to join them.
   Good test case: `logger09-20250916T164744.wav`, where electrodes 08-11 are
   recorded as exactly zero.
 
-- [ ] **An overlay trace panel: every channel's trace in one panel.**  The
-  counterpart of the mean ("sum") spectrogram (Shift+F2,
-  `set_mean_spectrogram`) for traces: one full-height panel in which all
-  selected channels are drawn on top of each other, so the whole grid can
-  be read at once instead of scrolled lane by lane.  And the two should
-  combine the way the per-channel lanes already do: overlay traces and mean
-  spectrogram shown together, trace above spectrogram, sharing the time
-  axis and the trace/spectrogram split (`PanelSplitter`), just as a single
-  channel's lane shows its trace over its spectrogram.
+- [x] **An overlay trace panel: every channel's trace in one panel.**
+  `Ctrl+Shift+F2` (Ctrl+F2 and Alt+F2 are KDE's on the T470s).  How each
+  point to settle was settled:
 
-  It is a new panel *kind*, not a change to an existing one, and
-  `panels.py`, `LabelOverlay` and `EventOverlay` all key off what a panel
-  is, so plan for that rather than bolting it on.  Things to settle:
+  * **Panel kind.**  Not a new one, after all: it borrows the first
+    selected channel's lane exactly as the mean does, and that is what makes
+    the combination free -- overlay as the lane's trace plot, mean as its
+    spectrogram, `PanelSplitter` and the time axis as any lane has them.  A
+    separate panel kind would have had to rebuild all three.  The browser
+    calls the shared state `collapsed()`; `TimePlot.set_overlay_channels`
+    adds one `OverlayTraceItem` per other channel per trace in the panel.
+  * **Mode rules.**  `set_panels` now allows traces beside the mean only
+    when they are the overlay, and spectrograms under the overlay only when
+    they are the mean.  F2 on the pair keeps the mean, F3 keeps the overlay;
+    either key twice restores the other mode as it was, and the overlay key
+    twice restores the panels it changed.  `traces_before_mean` survives.
+  * **Channels.**  `overlay_channels()` is `mean_channels()`'s set, so the
+    two panels always describe the same electrodes.
+  * **Colours.**  `theme.CHANNEL_COLORS` / `LIGHT_CHANNEL_COLORS`: six hues
+    per theme, the most that clear `MIN_CATEGORY_SEPARATION` under every
+    vision kind (worst pair 15.29 dark, 15.05 light; best seven 14.57 and
+    13.26; `MARKER_COLORS` fails at 0.72 deutan).  They repeat on sixteen
+    channels, so the caption is a coloured legend (`OVERLAY 00 01 ...`) and
+    hovering emphasises the nearest channel's trace and names it in the
+    readout; the cross hair snaps to the nearest channel.  The rail is off
+    screen in this mode as in the mean, so it carries no colour.
+  * **Y.**  One range fitted over every overlaid channel; per-channel means
+    shared here.
+  * **Cost.**  Measured (`tests/measure_overlay.py`, 16 ch, 300 s window):
+    update 3.9 ms against 3.8-4.3 ms for sixteen lanes, paint 22.9 ms
+    against 15.7 ms from overdraw.  No special decimation needed.
+  * **Annotations.**  Every overlaid channel's labels, coloured by category;
+    a label drawn on the overlay names no channel.  Same rule as the mean.
 
-  * **How the mean borrows a lane today.**  `mean_spec_lane()` puts the
-    mean on the first selected channel's lane and hides the others;
-    `set_mean_spectrogram` turns the traces *off* on entry ("this mode only
-    means anything with the lanes given over to spectrograms").  That rule
-    has to change once traces can be shown in the mean view, and the
-    round-trip behaviour of the key (`traces_before_mean`) must survive.
-  * **Which channels.**  The same set the mean uses (`mean_channels()`,
-    selection-ordered, solo/mute respected), so the two panels always
-    describe the same electrodes and the caption can say so the way the
-    mean's does (`MEAN 00-15`).
-  * **Telling channels apart.**  Sixteen overlapping traces need a
-    colorblind-safe categorical palette from `theme`, not the single trace
-    colour, and the colour should be the channel's everywhere it appears
-    (rail, caption).  Consider thinner lines and some alpha.
-  * **Y scaling.**  One shared y range across channels; the existing y modes
-    (shared / per-channel / fixed, `set_y_mode`) need a defined meaning
-    here -- per-channel scaling does not exist in a single panel.
-  * **Cost.**  Sixteen `TraceItem`s in one viewbox at the 5-minute window
-    cap (`plotranges`) is sixteen decimated reads per redraw; measure
-    against the same window as sixteen lanes before choosing how to
-    decimate, and keep it off the GUI thread like the lanes are.
-  * **Annotations.**  Labels and events are per channel; in a shared panel
-    they either draw for every channel (tinted by channel colour) or only
-    for the current one.  Decide, and make hover/hit-testing agree.
-  * **Keyboard.**  A key of its own next to Shift+F2, listed in the action
-    inventory (`tests/data/action-inventory.json` regenerates).
+  Not done: no toolbar button (width budget; the menu carries the check).
 
 # Future larger dev sessions
 

@@ -496,10 +496,16 @@ class LabelOverlay:
         the mean spectrogram: that panel stands for the whole selected
         array, so showing one electrode's labels on it -- the lane the mean
         happens to have borrowed -- would say the array had been labelled
-        far less than it was.
+        far less than it was.  The overlay trace panel stands for the same
+        array and follows the same rule: every overlaid channel's labels,
+        coloured by category as everywhere else -- tinting them by channel
+        as well would put two meanings on one hue.
         """
         mean = getattr(self.plot, "mean_channels", None)
-        return list(mean) if mean else self.channel()
+        if mean:
+            return list(mean)
+        overlay = getattr(self.plot, "overlay_channels", None)
+        return list(overlay) if overlay else self.channel()
 
     def set_visible(self, on: bool) -> None:
         on = bool(on)
@@ -743,8 +749,8 @@ class LabelOverlay:
             view.height(),
             self.store.revision,
             self.visible,
-            # the mean spectrogram changes which channels' labels belong
-            # here without changing anything else in this tuple
+            # the mean spectrogram and the overlay change which channels'
+            # labels belong here without changing anything else in this tuple
             tuple(self.channels()) if isinstance(self.channels(), list) else None,
         )
         if state == self._drawn:

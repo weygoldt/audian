@@ -1884,6 +1884,15 @@ class DataBrowser(QWidget):
         # whether Shift+F2 was the thing that turned the traces off, so that
         # pressing it twice puts the reader back exactly where they were
         self.traces_before_mean = False
+        # Every selected channel's trace in one full-height panel, each in
+        # its own colour -- the traces' counterpart of the mean, and able to
+        # share the lane with it.  Lives inside the traces-on mode and
+        # `set_panels` holds it to that.
+        self.overlay_traces = False
+        # what Ctrl+Shift+F2 changed on the way in, so that leaving puts it
+        # back: the traces it turned on and the spectrograms it turned off
+        self.traces_before_overlay = True
+        self.specs_before_overlay = False
 
         # auto scroll:
         self.scroll_step = 0.0
@@ -2389,6 +2398,10 @@ class DataBrowser(QWidget):
             if item.isVisible() != show:
                 changed = True
             item.setVisible(show)
+        for panel in self.panels.values():
+            for ax in panel.axs:
+                if getattr(ax, "overlay_items", None):
+                    ax.sync_overlay_visibility()
         return changed
 
     # --- recomputing traces off the GUI thread ---------------------------
@@ -3955,7 +3968,7 @@ class DataBrowser(QWidget):
         row reading `00` with its own solo and mute buttons, pinned next to
         a panel captioned `MEAN 00-15`, names the wrong thing twice over.
         """
-        return self.rail_visible and not self.mean_spec
+        return self.rail_visible and not self.collapsed()
 
     def apply_rail_width(self) -> None:
         """Give the rail column, the Y readout and the control panel one width.
@@ -3992,12 +4005,16 @@ class DataBrowser(QWidget):
         for row in self.rail_rows:
             row.setVisible(self.rail_shown() and row.channel in self.visible_channels())
         self.apply_rail_width()
-        if self.mean_spec:
+        if self.collapsed():
             state = "shown" if self.rail_visible else "hidden"
+            mode = (
+                "mean spectrogram does (Shift+F2)"
+                if self.mean_spec
+                else "overlay traces do (Ctrl+Shift+F2)"
+            )
             self.notify(
                 "info",
-                f"channel rail {state} -- it stays off screen while the mean "
-                f"spectrogram does (Shift+F2)",
+                f"channel rail {state} -- it stays off screen while the {mode}",
             )
 
     def offer_plugin_panel(self, label: str, factory) -> None:
@@ -4349,18 +4366,42 @@ class DataBrowser(QWidget):
         and a mean that is not a channel has no business in any of them.
         """
         channels = self.selected_channels_in_order()
-        if self.mean_spec and channels:
+        if self.collapsed() and channels:
             return channels[:1]
         return channels
+
+    def collapsed(self) -> bool:
+        """Is the stack one lane standing for every selected channel?
+
+        True while either the mean spectrogram or the overlay traces are
+        showing.  They collapse the stack the same way and onto the same
+        lane, which is what lets the two share it -- the overlay as the
+        lane's trace panel, the mean as its spectrogram, split and time axis
+        exactly as a single channel's lane has them.
+        """
+        return self.mean_spec or self.overlay_traces
 
     def mean_channels(self) -> list:
         """Channels the mean spectrogram averages, or [] when it is off."""
         return self.selected_channels_in_order() if self.mean_spec else []
 
+    def overlay_channels(self) -> list:
+        """Channels the overlay panel draws, or [] when it is off.
+
+        The same set, in the same order, as the mean averages, so that the
+        two panels of a collapsed lane always describe the same electrodes.
+        """
+        return self.selected_channels_in_order() if self.overlay_traces else []
+
     def mean_spec_lane(self):
         """The lane the mean is drawn on, or None when the mean is off."""
         channels = self.visible_channels()
         return channels[0] if (self.mean_spec and channels) else None
+
+    def overlay_lane(self):
+        """The lane the overlay is drawn on, or None when it is off."""
+        channels = self.visible_channels()
+        return channels[0] if (self.overlay_traces and channels) else None
 
     def focus_channel(self, channel: int) -> None:
         """Point the focus at `channel`, and let the layout follow it.
@@ -4515,13 +4556,14 @@ class DataBrowser(QWidget):
         behind it.
         """
         self.apply_mean_spectrogram()
+        self.apply_overlay_traces()
         visible = self.apply_lane_visibility()
         if self.current_channel not in visible and visible:
             self.current_channel = visible[0]
         self.update_rail()
         self.update_borders()
         self.adjust_layout(self.width(), self.height())
-        if self.mean_spec:
+        if self.collapsed():
             self.panels.update_plots()
 
     def apply_lane_visibility(self) -> list:
@@ -4572,7 +4614,7 @@ class DataBrowser(QWidget):
         reason the reader cannot see.  The focus itself is left where it is,
         so leaving the mode gives it back.
         """
-        marked = -1 if self.mean_spec else self.current_channel
+        marked = -1 if self.collapsed() else self.current_channel
         for c, axs in enumerate(self.axs):
             current = c == marked
             for ax in axs:
@@ -5830,7 +5872,8 @@ class DataBrowser(QWidget):
         refusing the gesture would leave the mode doing nothing.
         """
         mean = getattr(ax, "mean_channels", None) if ax is not None else None
-        stored_channel = None if mean else int(channel)
+        overlay = getattr(ax, "overlay_channels", None) if ax is not None else None
+        stored_channel = None if (mean or overlay) else int(channel)
         if category.is_point():
             label = Label(
                 category=category.name,
@@ -9985,13 +10028,14 @@ class DataBrowser(QWidget):
             # `show_channels` narrows what the mean averages, the same way
             # solo and mute do - see `apply_channel_visibility`:
             self.apply_mean_spectrogram()
+            self.apply_overlay_traces()
             self.apply_lane_visibility()
             for c in range(self.data.channels):
                 self.acts.channels[c].setChecked(c in self.show_channels)
             self.update_rail()
             self.adjust_layout(self.width(), self.height())
             self.update_borders()
-            if self.mean_spec:
+            if self.collapsed():
                 self.panels.update_plots()
 
     def toggle_channel(self, channel):
@@ -10088,10 +10132,27 @@ class DataBrowser(QWidget):
         # in one lane, and with the spectrograms off there is nothing left
         # to average at all -- so F2 and F3 drop it rather than leaving a
         # toggle checked over a stack that stopped obeying it.
-        if self.mean_spec and (self.show_traces or self.show_specs <= 0):
+        #
+        # The overlay is held to the same rule from the other side: every
+        # channel's waveform over one channel's spectrogram is the same
+        # mismatch, so it survives the spectrograms only when they are the
+        # mean -- and with the traces off there is nothing to overlay.  The
+        # mean in turn tolerates traces when they are the overlay, which is
+        # the one combination in which both panels describe the same array.
+        # Checked in this order so that F2 on the pair drops the overlay
+        # and keeps the mean, and F3 turning the spectrograms off drops the
+        # mean and keeps the overlay.
+        if self.overlay_traces and (
+            not self.show_traces or (self.show_specs > 0 and not self.mean_spec)
+        ):
+            self.overlay_traces = False
+        if self.mean_spec and (
+            self.show_specs <= 0 or (self.show_traces and not self.overlay_traces)
+        ):
             self.mean_spec = False
             self.traces_before_mean = False
         self.apply_mean_spectrogram()
+        self.apply_overlay_traces()
         # `set_panels` is the one panel-level call that can change how many
         # *lanes* there are, because the mean collapses sixteen onto one.
         # Every other caller reaches the stack through
@@ -10194,18 +10255,88 @@ class DataBrowser(QWidget):
         if on:
             self.traces_before_mean = self.show_traces
             self.mean_spec = True
-            self.show_traces = False
+            # the overlay is the one trace panel the mean can sit under
+            if not self.overlay_traces:
+                self.show_traces = False
             if self.show_specs <= 0:
                 self.show_specs = 1
         else:
             self.mean_spec = False
-            if self.traces_before_mean:
+            if self.overlay_traces:
+                # the overlay stays, and cannot sit over one channel's
+                # spectrogram -- see `set_panels`
+                self.show_specs = 0
+            elif self.traces_before_mean:
                 self.show_traces = True
             self.traces_before_mean = False
         self.set_panels()
 
     def toggle_mean_spectrogram(self) -> None:
         self.set_mean_spectrogram(not self.mean_spec)
+
+    def apply_overlay_traces(self) -> bool:
+        """Push the overlay state onto the trace panels.
+
+        Every trace plot is told, as `apply_mean_spectrogram` tells every
+        spectrogram, so no lane keeps overlay items it is no longer allowed
+        to draw.  Returns True when a plot actually changed.
+        """
+        lane = self.overlay_lane()
+        channels = self.overlay_channels()
+        changed = False
+        for panel in self.panels.values():
+            if not panel.is_trace():
+                continue
+            for ax in panel.axs:
+                if ax.set_overlay_channels(channels if ax.channel == lane else None):
+                    changed = True
+        self.apply_rail_width()
+        if changed:
+            self.update_current_plot()
+        return changed
+
+    def set_overlay_traces(self, on: bool) -> None:
+        """Show every selected channel's trace in one panel, or the stack.
+
+        Turning it on turns the traces on, and turns the spectrograms off
+        unless they are the mean -- one channel's spectrogram under every
+        channel's waveform is two pictures of different things.  Turning it
+        off puts back what turning it on changed, so the key is a round trip
+        from wherever the reader started, and a mean that is still showing
+        takes the traces away again, as it did before the overlay arrived.
+        """
+        on = bool(on)
+        if on == self.overlay_traces:
+            return
+        if on:
+            self.traces_before_overlay = self.show_traces
+            self.specs_before_overlay = self.show_specs > 0 and not self.mean_spec
+            self.overlay_traces = True
+            self.show_traces = True
+            if self.specs_before_overlay:
+                self.show_specs = 0
+        else:
+            self.overlay_traces = False
+            self.show_traces = self.traces_before_overlay and not self.mean_spec
+            if self.specs_before_overlay:
+                self.show_specs = 1
+            if not self.show_traces and self.show_specs <= 0:
+                # never a stack of empty lanes; see `toggle_spectrograms`
+                self.show_traces = True
+            self.traces_before_overlay = True
+            self.specs_before_overlay = False
+        self.set_panels()
+
+    def toggle_overlay_traces(self) -> None:
+        self.set_overlay_traces(not self.overlay_traces)
+
+    def overlay_traces_message(self) -> str:
+        """What the status bar says about the mode that was just entered."""
+        if not self.overlay_traces:
+            return "overlay traces off"
+        channels = self.overlay_channels()
+        listed = ", ".join(f"{c:02d}" for c in channels)
+        return f"traces of {len(channels)} channels overlaid: {listed}"
 
     def mean_spectrogram_message(self) -> str:
         """What the status bar says about the mode that was just entered."""

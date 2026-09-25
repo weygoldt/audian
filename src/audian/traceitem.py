@@ -53,6 +53,11 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
         self.lw_thick = self.data.lw_thick
         self.selected = False
         self.dense = False
+        # set while the trace is one of several channels sharing a view box
+        # (the overlay panel): the channel's own colour replaces the role's
+        self.channel_color = None
+        # the overlaid channel the pointer is nearest, drawn over the rest
+        self.emphasized = False
         # last pen state applied, so update_plot() does not re-create and
         # re-assign an identical QPen on every pan of every channel:
         self._pen_key: tuple | None = None
@@ -91,6 +96,20 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
             self.dense = dense
             self.apply_pen()
 
+    def set_channel_color(self, color) -> None:
+        """Paint in `color` instead of the role colour, or `None` to go back."""
+        if color != self.channel_color:
+            self.channel_color = color
+            self.apply_pen()
+
+    def set_emphasized(self, emphasized: bool) -> None:
+        """Lift this trace over the others sharing its view box."""
+        emphasized = bool(emphasized)
+        if emphasized != self.emphasized:
+            self.emphasized = emphasized
+            self.setZValue(1 if emphasized else 0)
+            self.apply_pen()
+
     # --- appearance ----------------------------------------------------
 
     def effective_role(self) -> str | None:
@@ -107,6 +126,16 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
     def trace_pen(self, thick: bool = False) -> Any:
         """Pen for this trace, resolved by role, selection and stack density."""
         self.role = self.effective_role()
+        if self.channel_color is not None:
+            # A hairline at every zoom: sixteen of these share one view box
+            # and a 2 px sample-level stroke would bury its neighbours.  The
+            # emphasised one gets the selected width instead, which is the
+            # whole of how a hue repeated on channels 0, 6 and 12 is told
+            # apart from its twins under the pointer.
+            return theme.pen(
+                self.channel_color,
+                width=theme.LW_SELECTED if self.emphasized else theme.LW_THIN,
+            )
         if self.role is None:
             return theme.waveform_pen(
                 selected=self.selected,
@@ -130,6 +159,8 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
             self.effective_role(),
             self.selected,
             self.dense,
+            self.channel_color,
+            self.emphasized,
             bool(thick),
             theme.current_theme(),
         )
@@ -139,11 +170,15 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
         self.setPen(self.trace_pen(thick))
 
     def symbol_brush(self):
+        if self.channel_color is not None:
+            return theme.brush(self.channel_color)
         if self.role is None:
             return theme.brush(self.color)
         return theme.trace_symbol_brush(self.role)
 
     def symbol_pen(self):
+        if self.channel_color is not None:
+            return theme.pen(self.channel_color)
         if self.role is None:
             return theme.pen(self.color)
         return theme.trace_symbol_pen(self.role)
@@ -324,6 +359,28 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
                 return (idx + mini) / self.rate, amin
         else:
             return idx / self.rate, self.data.buffer[i0, self.channel]
+
+
+class OverlayTraceItem(TraceItem):
+    """One more channel drawn into another channel's trace plot.
+
+    The overlay panel is the first selected channel's lane with every other
+    selected channel added to it, so these items draw channels whose own
+    lanes are hidden.  They do not mirror their visibility into the trace's
+    `visible_channels` flags, so that each flag keeps one writer: the flag
+    for channel 3 is lane 3's own item's, and a second item writing it would
+    make it mean whichever of the two moved last.
+
+    That is an invariant rather than a fix.  With mirroring put back, no
+    path found reaches a wrong flag: taking an item out of a plot emits no
+    visibility change, and every path that ends the overlay removes its
+    items before it hides anything.  Nothing is lost by staying out either
+    -- the flags are only read through `.any()`, and the lane hosting the
+    overlay is visible by construction, so the trace stays live.
+    """
+
+    def mirror_visibility(self) -> None:
+        pass
 
 
 if __name__ == "__main__":

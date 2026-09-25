@@ -220,6 +220,10 @@ __all__ = [
     "LIGHT_MARKER_COLORS",
     "marker_colors",
     "marker_color",
+    "CHANNEL_COLORS",
+    "LIGHT_CHANNEL_COLORS",
+    "channel_colors",
+    "channel_color",
     "MARKER_ICON_BG",
     "MARKER_ICON_RING",
     # annotations
@@ -2919,6 +2923,62 @@ def marker_color(index: int) -> str:
     """
     palette_ = marker_colors()
     return palette_[int(index) % len(palette_)]
+
+
+#: One colour per channel, for the overlay trace panel where every channel's
+#: waveform shares one view box.  Six hues, cycled: channel ``c`` is always
+#: ``CHANNEL_COLORS[c % 6]``, so a channel keeps its colour whatever else is
+#: selected.
+#:
+#: Six because six is the most any palette reaches while clearing
+#: :data:`MIN_CATEGORY_SEPARATION` in the worst of :data:`VISION_KINDS`.  An
+#: exhaustive search over Okabe-Ito, Paul Tol's bright, vibrant, muted and
+#: light sets and IBM's five, keeping hues >= 3:1 against ``bg.plot`` and
+#: dropping the greys that would sit on the zero line, found a worst pair of
+#: 15.29 (dark) and 15.05 (light) at six; the best seven were 14.57 and
+#: 13.26.  :data:`MARKER_COLORS` was not a candidate for this: its worst pair
+#: is 0.72 under deuteranopia.  Sixteen channels therefore repeat each hue
+#: two or three times; the caption's legend and the hover emphasis are what
+#: tell a repeated pair apart.
+#:
+#: Ordered so that consecutive entries -- neighbouring channels, which on a
+#: grid are neighbouring electrodes -- are the most separated: worst adjacent
+#: pair 20.34 (dark) and 22.65 (light).
+#: (contrast on bg.plot)
+CHANNEL_COLORS: list[str] = [
+    "#117733",  # 3.32
+    "#AA3377",  # 3.09
+    "#648FFF",  # 6.19
+    "#999933",  # 6.23
+    "#F0E442",  # 14.21
+    "#CC79A7",  # 6.14
+]
+
+#: The light theme's six, chosen by the same search against the white plot.
+LIGHT_CHANNEL_COLORS: list[str] = [
+    "#117733",  # 5.66
+    "#AA4499",  # 5.26
+    "#999933",  # 3.02
+    "#648FFF",  # 3.04
+    "#332288",  # 12.17
+    "#CC79A7",  # 3.06
+]
+
+_CHANNEL_TABLES: dict[str, list[str]] = {
+    THEME_DARK: CHANNEL_COLORS,
+    THEME_LIGHT: LIGHT_CHANNEL_COLORS,
+}
+
+
+def channel_colors(theme_name: str | None = None) -> list[str]:
+    """Return the per-channel palette for a theme (active one by default)."""
+    return _CHANNEL_TABLES[theme_name or current_theme()]
+
+
+def channel_color(channel: int) -> str:
+    """The colour channel `channel` is drawn in wherever channels share a view."""
+    palette_ = channel_colors()
+    return palette_[int(channel) % len(palette_)]
 
 
 #: Backdrop and hairline ring for the marker swatch icon drawn by

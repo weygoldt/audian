@@ -245,6 +245,39 @@ one channel's waveform would be two pictures of two different things in one
 lane.
 
 
+## Overlay traces
+
+`Ctrl+Shift+F2` is the mean's counterpart for traces: **one** full-height
+panel with every selected channel's waveform drawn on top of the others, so
+the whole grid can be read at once instead of lane by lane. It uses the same
+channels the mean does, so solo and mute choose what is overlaid, and the
+channel rail goes off screen the same way.
+
+Each channel is drawn in its own colour, and a channel keeps that colour
+whatever else is selected. There are six colours, the most any palette
+offers while staying distinguishable under every kind of colour vision
+deficiency, so on sixteen channels each colour appears two or three times.
+The caption is the legend — `OVERLAY 00 01 02 …`, each number in its
+channel's colour — and pointing at a line names the channel in the status
+bar and draws that channel's trace thicker and on top. The cross hair snaps
+to the nearest channel's trace.
+
+The panel has one Y range, fitted to hold every overlaid channel. The
+per-channel Y mode means the same as the shared one here.
+
+Labels of every overlaid channel are drawn on the panel, and a label drawn
+on it names no channel, as on the mean spectrogram.
+
+**With the mean.** Press `Shift+F2` while the overlay is showing, or
+`Ctrl+Shift+F2` while the mean is, and the lane shows both: overlay traces
+above the mean spectrogram, sharing the time axis and the draggable split,
+the way a single channel's lane shows its trace over its spectrogram. Either
+key pressed again leaves you in the other mode as it was. `F2` on the pair
+keeps the mean and drops the overlay; `F3` keeps the overlay and drops the
+mean. On its own the overlay turns the spectrograms off, since one channel's
+spectrogram under every channel's waveform would be two pictures of two
+different things, and pressing the key twice puts back what it changed.
+
 ## Amplitude operations and the Y mode
 
 Reset (`Shift+V`), Center (`C`), Fit Y (`v`) and the amplitude zoom steps

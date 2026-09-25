@@ -2992,6 +2992,7 @@ class Audian(QMainWindow):
             (self.acts.toggle_traces, bool(browser.show_traces)),
             (self.acts.toggle_spectrograms, bool(browser.show_specs)),
             (self.acts.toggle_mean_spec, bool(browser.mean_spec)),
+            (self.acts.toggle_overlay_traces, bool(browser.overlay_traces)),
             (self.acts.toggle_power, bool(browser.show_powers)),
             (self.acts.toggle_cbars, bool(browser.show_cbars)),
             (self.acts.toggle_fulldata, bool(browser.show_fulldata)),
@@ -4689,6 +4690,21 @@ class Audian(QMainWindow):
         browser.notify("info", browser.mean_spectrogram_message())
         self.sync_toolbar()
 
+    def toggle_overlay_traces(self):
+        """Ctrl+Shift+F2: every selected channel's trace in one panel.
+
+        Not propagated by `link_panels`, for the reason the mean is not: it
+        is a statement about one recording's own channels.  Announced in the
+        status bar because a caption that has run out of room says only how
+        many channels it holds.
+        """
+        browser = self.browser()
+        if not isinstance(browser, DataBrowser):
+            return
+        browser.toggle_overlay_traces()
+        browser.notify("info", browser.overlay_traces_message())
+        self.sync_toolbar()
+
     def reset_panel_split(self):
         """Shift+F3: the trace / spectrogram boundary back to its default.
 
@@ -5168,6 +5184,20 @@ class Audian(QMainWindow):
         )
         self.acts.toggle_mean_spec.triggered.connect(self.toggle_mean_spectrogram)
 
+        # Ctrl+Shift+F2, the next modifier on the same key: it is the mean's
+        # counterpart for traces.  Not Ctrl+F2 and not Alt+F2, which KDE
+        # Plasma claims by default (switch to desktop 2, KRunner) before the
+        # window ever sees them.  No toolbar button: the bar is already the
+        # width budget on a 14" panel, and the menu carries the check state.
+        self.acts.toggle_overlay_traces = QAction("Toggle &overlay traces", self)
+        self.acts.toggle_overlay_traces.setCheckable(True)
+        self.acts.toggle_overlay_traces.setShortcut("Ctrl+Shift+F2")
+        self.acts.toggle_overlay_traces.setToolTip(
+            "Every selected channel's trace in one full-height panel, each in "
+            "its own colour, instead of one lane per channel"
+        )
+        self.acts.toggle_overlay_traces.triggered.connect(self.toggle_overlay_traces)
+
         self.acts.toggle_power = QAction("Toggle power", self)
         self.acts.toggle_power.setShortcut("F4")
         self.acts.toggle_power.triggered.connect(self.toggle_powers)
@@ -5202,6 +5232,7 @@ class Audian(QMainWindow):
         panel_menu.addAction(self.acts.toggle_traces)
         panel_menu.addAction(self.acts.toggle_spectrograms)
         panel_menu.addAction(self.acts.toggle_mean_spec)
+        panel_menu.addAction(self.acts.toggle_overlay_traces)
         panel_menu.addAction(self.acts.reset_panel_split)
         panel_menu.addAction(self.acts.toggle_power)
         panel_menu.addAction(self.acts.toggle_cbars)
