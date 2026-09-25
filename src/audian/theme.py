@@ -220,10 +220,6 @@ __all__ = [
     "LIGHT_MARKER_COLORS",
     "marker_colors",
     "marker_color",
-    "CHANNEL_COLORS",
-    "LIGHT_CHANNEL_COLORS",
-    "channel_colors",
-    "channel_color",
     "MARKER_ICON_BG",
     "MARKER_ICON_RING",
     # annotations
@@ -2923,82 +2919,6 @@ def marker_color(index: int) -> str:
     """
     palette_ = marker_colors()
     return palette_[int(index) % len(palette_)]
-
-
-#: One colour per channel, for the overlay trace panel where every channel's
-#: waveform shares one view box.  Sixteen hues, one per electrode of the
-#: design-centre grid, so no two of its channels share a colour; channel ``c``
-#: is always ``CHANNEL_COLORS[c % 16]``, whatever else is selected.
-#:
-#: A ring in OKLCH: sixteen hues evenly spaced from 25 degrees at one
-#: lightness and chroma (L 0.78, C 0.13 here), which is what makes them read
-#: as a set rather than as a box of crayons -- the six-hue palette this
-#: replaced was chosen for colour-blind separation alone and looked it
-#: (olive, bottle green, mustard).  Channel ``c`` takes hue ``5c mod 16``, so
-#: neighbouring channels -- neighbouring electrodes -- sit 112.5 degrees
-#: apart.  Measured with :func:`delta_e2000`: neighbours 39.3 apart, the
-#: closest pair of all 8.68, contrast >= 8.82:1 on ``bg.plot``.
-#:
-#: **The price is colour-vision deficiency.**  At one lightness only hue
-#: separates them, and the worst pair under :data:`VISION_KINDS` is 0.36
-#: (neighbours 2.03), against 15.29 for the palette it replaced.  Chosen
-#: knowingly, for looks; the caption's legend and the hover emphasis are
-#: what name a channel whatever colour it is seen as.
-CHANNEL_COLORS: list[str] = [
-    "#FF958D",
-    "#8ECB77",
-    "#73BDFF",
-    "#FC93B0",
-    "#B5C159",
-    "#46C7F8",
-    "#EE95D1",
-    "#D5B549",
-    "#1ACFDF",
-    "#D99CEE",
-    "#ECA851",
-    "#30D2BE",
-    "#BDA6FF",
-    "#FB9C6C",
-    "#61D19A",
-    "#9BB1FF",
-]
-
-#: The same ring at L 0.58 for the white plot: contrast >= 3.87:1, neighbours
-#: 37.34 apart, closest pair 8.11, worst under colour-vision deficiency 0.49.
-LIGHT_CHANNEL_COLORS: list[str] = [
-    "#BB5752",
-    "#528C3A",
-    "#347EC4",
-    "#B75573",
-    "#798205",
-    "#0088B6",
-    "#AC5892",
-    "#957700",
-    "#008F9F",
-    "#995FAC",
-    "#AA6A00",
-    "#009281",
-    "#8168BE",
-    "#B75F2D",
-    "#06915F",
-    "#6173C7",
-]
-
-_CHANNEL_TABLES: dict[str, list[str]] = {
-    THEME_DARK: CHANNEL_COLORS,
-    THEME_LIGHT: LIGHT_CHANNEL_COLORS,
-}
-
-
-def channel_colors(theme_name: str | None = None) -> list[str]:
-    """Return the per-channel palette for a theme (active one by default)."""
-    return _CHANNEL_TABLES[theme_name or current_theme()]
-
-
-def channel_color(channel: int) -> str:
-    """The colour channel `channel` is drawn in wherever channels share a view."""
-    palette_ = channel_colors()
-    return palette_[int(channel) % len(palette_)]
 
 
 #: Backdrop and hairline ring for the marker swatch icon drawn by

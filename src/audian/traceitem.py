@@ -53,10 +53,7 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
         self.lw_thick = self.data.lw_thick
         self.selected = False
         self.dense = False
-        # set while the trace is one of several channels sharing a view box
-        # (the overlay panel): the channel's own colour replaces the role's
-        self.channel_color = None
-        # the overlaid channel the pointer is nearest, drawn over the rest
+        # the channel picked out on the overlay panel, drawn over the rest
         self.emphasized = False
         # last pen state applied, so update_plot() does not re-create and
         # re-assign an identical QPen on every pan of every channel:
@@ -96,14 +93,14 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
             self.dense = dense
             self.apply_pen()
 
-    def set_channel_color(self, color) -> None:
-        """Paint in `color` instead of the role colour, or `None` to go back."""
-        if color != self.channel_color:
-            self.channel_color = color
-            self.apply_pen()
-
     def set_emphasized(self, emphasized: bool) -> None:
-        """Lift this trace over the others sharing its view box."""
+        """Pick this trace out of the others sharing its view box.
+
+        Drawn on top, in the selected colour, at the selected width even in
+        a dense stack: on the overlay panel it is one line among sixteen of
+        the same muted colour, and a hairline in a different hue would not
+        be found.
+        """
         emphasized = bool(emphasized)
         if emphasized != self.emphasized:
             self.emphasized = emphasized
@@ -126,15 +123,9 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
     def trace_pen(self, thick: bool = False) -> Any:
         """Pen for this trace, resolved by role, selection and stack density."""
         self.role = self.effective_role()
-        if self.channel_color is not None:
-            # A hairline at every zoom: sixteen of these share one view box
-            # and a 2 px sample-level stroke would bury its neighbours.  The
-            # emphasised one gets the selected width instead, which is how
-            # the line under the pointer is picked out of sixteen without
-            # relying on its hue.
-            return theme.pen(
-                self.channel_color,
-                width=theme.LW_SELECTED if self.emphasized else theme.LW_THIN,
+        if self.emphasized:
+            return theme.waveform_pen(
+                self.role, selected=True, dense=False, thick=True, color=self.color
             )
         if self.role is None:
             return theme.waveform_pen(
@@ -159,7 +150,6 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
             self.effective_role(),
             self.selected,
             self.dense,
-            self.channel_color,
             self.emphasized,
             bool(thick),
             theme.current_theme(),
@@ -170,15 +160,11 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
         self.setPen(self.trace_pen(thick))
 
     def symbol_brush(self):
-        if self.channel_color is not None:
-            return theme.brush(self.channel_color)
         if self.role is None:
             return theme.brush(self.color)
         return theme.trace_symbol_brush(self.role)
 
     def symbol_pen(self):
-        if self.channel_color is not None:
-            return theme.pen(self.channel_color)
         if self.role is None:
             return theme.pen(self.color)
         return theme.trace_symbol_pen(self.role)

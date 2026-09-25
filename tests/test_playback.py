@@ -204,6 +204,7 @@ def _clickable(current=0, mode=DataBrowser.MODE_ZOOM):
         # read before anything else: a Ctrl+click in label mode reaches for
         # an editable label instead of focusing the lane
         region_mode=mode,
+        collapsed=lambda: False,
         rail_clicked=lambda ch, extend: calls.append((ch, extend)),
     )
     return stub, calls

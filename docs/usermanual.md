@@ -253,15 +253,19 @@ the whole grid can be read at once instead of lane by lane. It uses the same
 channels the mean does, so solo and mute choose what is overlaid, and the
 channel rail goes off screen the same way.
 
-Each channel is drawn in its own colour, and a channel keeps that colour
-whatever else is selected: sixteen hues of equal lightness, with
-neighbouring channels far apart on the colour wheel. The caption is the
-legend — `OVERLAY 00 01 02 …`, each number in its channel's colour — and
-pointing at a line names the channel in the status bar and draws that
-channel's trace thicker and on top, which is the way to tell channels apart
-if you do not see the colours well. The cross hair snaps to the nearest
-channel's trace. The tool bar button beside the mean spectrogram's toggles
-the mode.
+All the lines are drawn in the same muted trace colour, so the picture is
+the shape of the whole array rather than sixteen colours to decode. To pick
+one channel out, **click its line** or **click its number** in the caption
+(`OVERLAY 00 01 02 …`): it is drawn on top, thicker, in the accent colour,
+and its number goes bold. Click it again to put it back. The picked channel
+is also the current channel, so `Space` with the playback source on
+*selected channel* plays it. Pointing at a line names its channel in the
+status bar without changing the picture, and the cross hair snaps to the
+nearest channel's trace. The tool bar button beside the mean spectrogram's
+toggles the mode.
+
+A click on the overlay or the mean panel never changes which channels are
+selected or moves the focus to the lane the mode borrowed.
 
 The panel has one Y range, fitted to hold every overlaid channel. The
 per-channel Y mode means the same as the shared one here.

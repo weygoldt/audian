@@ -1893,6 +1893,8 @@ class DataBrowser(QWidget):
         # back: the traces it turned on and the spectrograms it turned off
         self.traces_before_overlay = True
         self.specs_before_overlay = False
+        # the channel picked out of the overlay by a click, or None
+        self.overlay_highlight = None
 
         # auto scroll:
         self.scroll_step = 0.0
@@ -5130,7 +5132,18 @@ class DataBrowser(QWidget):
         # 48 px column to select the plot you were already looking at.  Every
         # panel of a channel lives in that channel's own figure, so the
         # spectrogram selects it as readily as the trace.
-        if evt[0].button() == Qt.MouseButton.LeftButton:
+        #
+        # Not on a collapsed stack.  Its one lane stands for every selected
+        # channel and is merely borrowed from the first, so `rail_clicked`
+        # there moved the focus to a channel the reader never pointed at:
+        # focus on 12, one click on the mean panel, focus on 0 -- against
+        # the mean's own rule that the focus is left where it was so that
+        # leaving the mode gives it back.  On the overlay a click picks a
+        # line out instead.
+        if evt[0].button() == Qt.MouseButton.LeftButton and self.collapsed():
+            if self.overlay_traces:
+                self.overlay_click(evt[0].scenePos(), channel)
+        elif evt[0].button() == Qt.MouseButton.LeftButton:
             extend = bool(evt[0].modifiers() & Qt.KeyboardModifier.ShiftModifier)
             # guarded: rail_clicked() relays out the stack, which is not
             # something to do on every click inside the current channel
@@ -10283,6 +10296,9 @@ class DataBrowser(QWidget):
         """
         lane = self.overlay_lane()
         channels = self.overlay_channels()
+        if self.overlay_highlight not in channels:
+            # muted, soloed away, or the overlay is off
+            self.overlay_highlight = None
         changed = False
         for panel in self.panels.values():
             if not panel.is_trace():
@@ -10290,6 +10306,8 @@ class DataBrowser(QWidget):
             for ax in panel.axs:
                 if ax.set_overlay_channels(channels if ax.channel == lane else None):
                     changed = True
+                if ax.channel == lane:
+                    ax.set_highlight(self.overlay_highlight)
         self.apply_rail_width()
         if changed:
             self.update_current_plot()
@@ -10317,6 +10335,7 @@ class DataBrowser(QWidget):
                 self.show_specs = 0
         else:
             self.overlay_traces = False
+            self.overlay_highlight = None
             self.show_traces = self.traces_before_overlay and not self.mean_spec
             if self.specs_before_overlay:
                 self.show_specs = 1
@@ -10329,6 +10348,56 @@ class DataBrowser(QWidget):
 
     def toggle_overlay_traces(self) -> None:
         self.set_overlay_traces(not self.overlay_traces)
+
+    def highlight_overlay_channel(self, channel) -> None:
+        """Pick `channel` out of the overlay; the same channel again drops it.
+
+        The picked channel also becomes the current one, without touching
+        the selection: playback's "selected channel" and the navigator then
+        follow what the reader is looking at, and leaving the overlay lands
+        the focus on it.  The selection is what the overlay draws, so
+        narrowing it -- which is what a click on a lane does elsewhere --
+        would take the other fifteen away.
+        """
+        if not self.overlay_traces:
+            return
+        if channel == self.overlay_highlight or channel not in self.overlay_channels():
+            channel = None
+        self.overlay_highlight = channel
+        lane = self.overlay_lane()
+        for panel in self.panels.values():
+            if panel.is_trace() and lane is not None and lane < len(panel.axs):
+                panel.axs[lane].set_highlight(channel)
+        if channel is not None:
+            self.current_channel = channel
+            self.update_current_plot()
+            self.set_readout("ch", f"ch {channel:02d}", False)
+
+    def overlay_click(self, scene_pos, lane: int) -> bool:
+        """Turn a click on the overlay panel into a highlight.  True if it was one.
+
+        A channel number in the caption picks that channel; a click on a
+        line picks the line's.  A click in empty space between the lines is
+        not a choice and is left alone.
+        """
+        for panel in self.panels.values():
+            if not panel.is_trace() or lane >= len(panel.axs):
+                continue
+            ax = panel.axs[lane]
+            if not ax.overlay_channels:
+                continue
+            channel = ax.legend_channel_at(scene_pos)
+            if channel is None:
+                view = ax.getViewBox()
+                if not view.sceneBoundingRect().contains(scene_pos):
+                    continue
+                pos = view.mapSceneToView(scene_pos)
+                channel = ax.pick_channel(pos.x(), pos.y())
+            if channel is None:
+                return False
+            self.highlight_overlay_channel(channel)
+            return True
+        return False
 
     def overlay_traces_message(self) -> str:
         """What the status bar says about the mode that was just entered."""

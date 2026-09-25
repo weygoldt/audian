@@ -562,15 +562,16 @@ action that leaves state behind has to join them.
     twice restores the panels it changed.  `traces_before_mean` survives.
   * **Channels.**  `overlay_channels()` is `mean_channels()`'s set, so the
     two panels always describe the same electrodes.
-  * **Colours.**  `theme.CHANNEL_COLORS` / `LIGHT_CHANNEL_COLORS`: an OKLCH
-    ring of sixteen hues at one lightness (L 0.78 dark, 0.58 light), channel
-    c on hue 5c mod 16.  Replaced a first six-hue palette chosen for
-    colour-blind separation (worst pair 15.29) that the reader found ugly;
-    the ring trades that away knowingly (worst CVD pair 0.36) for sixteen
-    unrepeated colours, neighbours 39.3 apart under normal vision.  The
-    caption is a coloured legend (`OVERLAY 00 01 ...`), hovering emphasises
-    and names the nearest channel, and the cross hair snaps to it.  The rail
-    is off screen in this mode as in the mean, so it carries no colour.
+  * **Telling channels apart.**  Two colour passes were tried and dropped
+    at the reader's call: six CVD-safe hues (read as ugly) and a 16-hue
+    OKLCH ring (pretty, but CVD worst pair 0.36).  Settled on no per-channel
+    colour at all: every line in the plain muted trace colour, and a click
+    on a line (within 6 px) or on its number in the caption picks that
+    channel out -- selected pen, on top, bold number -- and makes it the
+    current channel without touching the selection.  Hover only names the
+    nearest channel.  The collapsed lane no longer turns a click into
+    `rail_clicked`, which had moved the focus to the borrowed lane's
+    channel in mean mode.
   * **Y.**  One range fitted over every overlaid channel; per-channel means
     shared here.
   * **Cost.**  Measured (`tests/measure_overlay.py`, 16 ch, 300 s window):

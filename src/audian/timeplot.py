@@ -107,13 +107,15 @@ class TimePlot(RangePlot):
         self.current = False
         self.dense = False
         # The overlay panel: every channel in `overlay_channels` drawn into
-        # this one plot, each in its own colour.  None when the plot draws
-        # only its own channel, which is always, except on the one lane the
-        # overlay borrows -- see `DataBrowser.apply_overlay_traces`.
+        # this one plot, all in the plain trace colour.  None when the plot
+        # draws only its own channel, which is always, except on the one
+        # lane the overlay borrows -- see `DataBrowser.apply_overlay_traces`.
         self.overlay_channels = None
         self.overlay_items = []
-        # the channel the pointer was last nearest, drawn emphasised
-        self.emphasized_channel = None
+        # the one channel picked out of the overlay, or None
+        self.highlighted_channel = None
+        # the caption's channel numbers, one clickable item each
+        self.legend_chips = []
         # the channel the last cross-hair snap landed on
         self.marker_channel = channel
         self.channel_label = pg.TextItem(text="", anchor=(0, 0))
@@ -158,8 +160,7 @@ class TimePlot(RangePlot):
         self._update_caption()
         self.update_axis_label()
         self._style_traces(retheme=True)
-        # the palette is per theme, so the colours are re-read, not re-used
-        self._color_overlay()
+        self._style_legend()
 
     # --- channel emphasis -------------------------------------------------
 
@@ -184,7 +185,7 @@ class TimePlot(RangePlot):
         the colours behind them are not, so `retheme` forces each item to
         re-resolve its pen from the current token table.
         """
-        for item in self.data_items:
+        for item in self.data_items + self.overlay_items:
             if hasattr(item, "set_selected"):
                 item.set_selected(self.current)
             if hasattr(item, "set_dense"):
@@ -253,10 +254,11 @@ class TimePlot(RangePlot):
                     item.source = source
                     self.addItem(item)
                     self.overlay_items.append(item)
-        self.emphasized_channel = None
         self.marker_channel = self.channel
         self.sync_overlay_visibility()
-        self._color_overlay()
+        self._style_traces()
+        self._build_legend()
+        self.set_highlight(None)
         self._update_caption()
         return True
 
@@ -265,30 +267,20 @@ class TimePlot(RangePlot):
         for item in self.overlay_items:
             item.setVisible(item.source.isVisibleTo(self))
 
-    def _color_overlay(self) -> None:
-        """Paint every drawn channel in its own colour, or give the role back."""
-        on = bool(self.overlay_channels)
-        for item in self.own_traces():
-            item.set_channel_color(theme.channel_color(item.channel) if on else None)
-            item.set_emphasized(False)
-        for item in self.overlay_items:
-            item.set_channel_color(theme.channel_color(item.channel))
-            item.set_emphasized(False)
-        self.emphasized_channel = None
-
     def drawn_traces(self) -> list:
         """Every visible trace item, own and overlaid."""
         return [
             item for item in self.own_traces() + self.overlay_items if item.isVisible()
         ]
 
-    def nearest_channel(self, x: float, y: float):
-        """The overlaid channel whose trace passes closest to `(x, y)`.
+    def nearest_trace(self, x: float, y: float):
+        """`(channel, distance)` of the trace passing closest to `(x, y)`.
 
         Measured against the value the trace is *drawn* at under the
         pointer -- `TraceItem.get_amplitude` snaps to the min or max of the
         decimation block, which is the vertex on screen -- so the channel
-        named is the line the pointer is visibly on.  None off the buffer.
+        named is the line the pointer is visibly on.  `(None, None)` off
+        the buffer.  The distance is in data units.
         """
         best, best_distance = None, None
         for item in self.drawn_traces():
@@ -298,15 +290,75 @@ class TimePlot(RangePlot):
             distance = abs(float(value) - y)
             if best_distance is None or distance < best_distance:
                 best, best_distance = item.channel, distance
-        return best
+        return best, best_distance
 
-    def emphasize_channel(self, channel) -> None:
-        """Draw `channel`'s traces over the others, and at the selected width."""
-        if channel == self.emphasized_channel:
-            return
-        self.emphasized_channel = channel
+    def nearest_channel(self, x: float, y: float):
+        """The channel whose trace passes closest to `(x, y)`, or None."""
+        return self.nearest_trace(x, y)[0]
+
+    #: How far from a line a click may land and still pick it, in pixels.
+    #: Sixteen overlaid traces are hairlines; a click has to be allowed to
+    #: miss one by about the width of the pointer's hot spot.
+    PICK_TOLERANCE_PX = 6
+
+    def pick_channel(self, x: float, y: float):
+        """The channel a click at `(x, y)` lands on, or None if it is on none.
+
+        None rather than the nearest line whatever the distance, so that a
+        click in empty space between the traces is not read as a choice.
+        """
+        channel, distance = self.nearest_trace(x, y)
+        if channel is None:
+            return None
+        view = self.getViewBox()
+        y0, y1 = view.viewRange()[1]
+        per_pixel = (y1 - y0) / max(view.height(), 1.0)
+        return channel if distance <= self.PICK_TOLERANCE_PX * per_pixel else None
+
+    def set_highlight(self, channel) -> None:
+        """Pick `channel` out of the overlay, or `None` for none.
+
+        Its traces go on top, in the selected colour and at the selected
+        width, and its number in the caption goes bold in the same colour.
+        """
+        if channel is not None and channel not in (self.overlay_channels or []):
+            channel = None
+        self.highlighted_channel = channel
         for item in self.own_traces() + self.overlay_items:
             item.set_emphasized(item.channel == channel)
+        self._style_legend()
+
+    # --- the legend ------------------------------------------------------
+
+    def _build_legend(self) -> None:
+        """One text item per overlaid channel, so each number can be clicked."""
+        for chip in self.legend_chips:
+            self.removeItem(chip)
+        self.legend_chips = []
+        channels = self.overlay_channels or []
+        if len(channels) > MAX_LEGEND_CHANNELS:
+            return
+        for c in channels:
+            chip = pg.TextItem(text=f"{c:02d}", anchor=(0, 0))
+            chip.channel = c
+            chip.setZValue(50)
+            self.addItem(chip, ignoreBounds=True)
+            self.legend_chips.append(chip)
+        self._style_legend()
+
+    def _style_legend(self) -> None:
+        for chip in self.legend_chips:
+            on = chip.channel == self.highlighted_channel
+            chip.setColor(theme.qcolor("primary" if on else "fg.muted"))
+            chip.setFont(theme.font_mono(theme.SIZE_SMALL_PT, bold=on))
+        self._place_caption()
+
+    def legend_channel_at(self, scene_pos):
+        """The channel whose number in the caption is under `scene_pos`."""
+        for chip in self.legend_chips:
+            if chip.isVisible() and chip.sceneBoundingRect().contains(scene_pos):
+                return chip.channel
+        return None
 
     def update_plot(self):
         """Redraw own and overlaid traces, each decimated as a lane's is.
@@ -328,29 +380,14 @@ class TimePlot(RangePlot):
 
     def caption_text(self) -> str:
         if self.overlay_channels:
-            return f"OVERLAY {self.overlay_legend()}"
+            channels = self.overlay_channels
+            if len(channels) > MAX_LEGEND_CHANNELS:
+                return f"OVERLAY {len(channels)} ch"
+            return "OVERLAY " + " ".join(f"{c:02d}" for c in channels)
         text = f"CH {self.channel:02d}"
         if self.caption:
             text += f"   {self.caption}"
         return text
-
-    def overlay_legend(self, html: bool = False) -> str:
-        """The overlaid channels in display order, each in its own colour.
-
-        This is the legend: sixteen hues at one lightness are told apart
-        side by side far more easily than named from memory, and not at all
-        by a reader with a colour-vision deficiency, so the number beside
-        each colour is what names the channel.  Plain text for `caption_text`, HTML for the item.
-        """
-        channels = self.overlay_channels or []
-        if len(channels) > MAX_LEGEND_CHANNELS:
-            return f"{len(channels)} ch"
-        if not html:
-            return " ".join(f"{c:02d}" for c in channels)
-        return " ".join(
-            f'<span style="color:{theme.channel_color(c)}">{c:02d}</span>'
-            for c in channels
-        )
 
     def data_unit(self) -> str:
         """Unit of the traces this panel draws, from the recording metadata.
@@ -464,13 +501,10 @@ class TimePlot(RangePlot):
             theme.font_mono(theme.SIZE_SMALL_PT, bold=self.current)
         )
         text = self.caption_text()
-        if self.overlay_channels and len(self.overlay_channels) <= MAX_LEGEND_CHANNELS:
-            # `setHtml` keeps the item's font and default colour, so only the
-            # channel numbers need a span
-            text = text[: -len(self.overlay_legend())] + self.overlay_legend(True)
-            self.channel_label.setHtml(text)
-        else:
-            self.channel_label.setText(text)
+        if self.legend_chips:
+            # the numbers are the chips, drawn after this word
+            text = "OVERLAY"
+        self.channel_label.setText(text)
         self._place_caption()
 
     def _place_caption(self) -> None:
@@ -489,6 +523,13 @@ class TimePlot(RangePlot):
         dx = (x1 - x0) * theme.S8 / width
         dy = (y1 - y0) * theme.S4 / height
         self.channel_label.setPos(x0 + dx, y1 - dy)
+        # The legend continues the caption's line, one chip per channel, in
+        # pixels converted to data units because the chips are placed in the
+        # view's coordinates but are drawn unscaled.
+        pixels = theme.S8 + self.channel_label.boundingRect().width()
+        for chip in self.legend_chips:
+            chip.setPos(x0 + (x1 - x0) * pixels / width, y1 - dy)
+            pixels += chip.boundingRect().width()
 
     def _view_resized(self) -> None:
         self._place_caption()
@@ -509,14 +550,17 @@ class TimePlot(RangePlot):
             # that case, and the channel rail already names every row, so
             # the in-plot caption is redundant there rather than missing.
             self.channel_label.setVisible(show)
+            for chip in self.legend_chips:
+                chip.setVisible(show)
 
     def _hovered(self, x, y) -> None:
         channel = self.channel
         if self.overlay_items:
+            # names the line under the pointer in the readout; picking one
+            # out is a click, so the picture does not flicker as it moves
             nearest = self.nearest_channel(float(x), float(y))
             if nearest is not None:
                 channel = nearest
-                self.emphasize_channel(nearest)
         self.sigHoverValue.emit(channel, float(x), float(y))
 
     # --- ranges -----------------------------------------------------------

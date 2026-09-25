@@ -41,6 +41,8 @@ from test_panelsplitter import (  # noqa: E402
     spec_image,
 )
 
+from PySide6.QtCore import QPointF, Qt  # noqa: E402
+
 from audian import theme  # noqa: E402
 from audian.traceitem import OverlayTraceItem  # noqa: E402
 
@@ -139,29 +141,38 @@ def test_the_overlay_draws_every_selected_channel_from_its_own_samples(
         )
 
 
-def test_every_channel_is_drawn_in_its_own_colour(stack, overlay_off):
-    """The lane's own channel too: it is one of the sixteen, not the host."""
+def test_every_line_is_drawn_in_the_plain_trace_colour(stack, overlay_off):
+    """Nothing picked out: sixteen lines, one muted colour, one width.
+
+    The lane's own channel too -- it is one of the sixteen, not the host --
+    and none of them in the selected colour, which is kept for the one the
+    reader picks.
+    """
     lane = enter_overlay(stack)
     plot = trace_plot(stack, lane)
-    for item in plot.own_traces() + plot.overlay_items:
-        assert pen_color(item) == theme.channel_color(item.channel).upper(), (
-            f"channel {item.channel}"
-        )
+    raw = [i for i in plot.own_traces() + plot.overlay_items if i.data.name == "data"]
+    assert len(raw) == CHANNELS
+    assert {pen_color(item) for item in raw} == {pen_color(raw[0])}
+    assert {item.opts["pen"].widthF() for item in raw} == {theme.LW_THIN}
+    assert pen_color(raw[0]) != theme.qcolor("primary").name().upper()
 
 
-def test_the_caption_is_a_legend(stack, overlay_off):
-    """Colour alone does not name one of sixteen channels; the number beside
-    the colour does, so every number is in its colour."""
+def test_the_caption_lists_every_channel_as_a_chip(stack, overlay_off):
     lane = enter_overlay(stack)
     plot = trace_plot(stack, lane)
     text = plot.caption_text()
-    assert text.startswith("OVERLAY ")
-    assert text.split()[1:] == [f"{c:02d}" for c in range(CHANNELS)]
-    html = plot.channel_label.textItem.toHtml().lower()
-    for c in range(CHANNELS):
-        # Qt rewrites the span, so look for the colour and the number
-        assert theme.channel_color(c).lower() in html
-        assert f">{c:02d}<" in html
+    assert text.split() == ["OVERLAY"] + [f"{c:02d}" for c in range(CHANNELS)]
+    assert plot.channel_label.toPlainText() == "OVERLAY"
+    assert [chip.toPlainText() for chip in plot.legend_chips] == [
+        f"{c:02d}" for c in range(CHANNELS)
+    ]
+    # one line, left to right, none on top of another
+    rects = [chip.sceneBoundingRect() for chip in plot.legend_chips]
+    label = plot.channel_label.sceneBoundingRect()
+    assert rects[0].left() >= label.right() - 1
+    for a, b in zip(rects, rects[1:]):
+        assert b.left() >= a.right() - 1
+        assert abs(b.top() - a.top()) < 1
 
 
 def test_the_y_range_holds_every_channel(stack, overlay_off):
@@ -248,8 +259,9 @@ def test_leaving_gives_every_lane_its_own_channel_back(stack, overlay_off):
         assert not any(
             isinstance(item, OverlayTraceItem) for item in plot.listDataItems()
         )
+        assert plot.legend_chips == []
         for item in plot.own_traces():
-            assert item.channel_color is None
+            assert not item.emphasized
         assert plot.caption_text().startswith(f"CH {c:02d}")
     data = stack.data["data"]
     assert data.visible_channels.all(), np.flatnonzero(~data.visible_channels)
@@ -259,22 +271,141 @@ def test_leaving_gives_every_lane_its_own_channel_back(stack, overlay_off):
 # ------------------------------------------------------- pointer and labels
 
 
-def test_the_hover_names_the_channel_under_the_pointer(stack, overlay_off):
+def scene_point(plot, x, y):
+    return plot.getViewBox().mapViewToScene(QPointF(x, y))
+
+
+def pens(plot):
+    """channel -> (colour, width, z) of its raw trace."""
+    return {
+        item.channel: (pen_color(item), item.opts["pen"].widthF(), item.zValue())
+        for item in plot.own_traces() + plot.overlay_items
+        if item.data.name == "data"
+    }
+
+
+def test_the_hover_names_the_channel_without_repainting(stack, overlay_off):
+    """The readout follows the pointer; the picture does not flicker."""
     lane = enter_overlay(stack)
     plot = trace_plot(stack, lane)
+    before = pens(plot)
     heard = []
     plot.sigHoverValue.connect(lambda c, t, a: heard.append(c))
-    t = 1.0
     for target in (0, 7, 15):
-        plot._hovered(t, target * OFFSET + RIPPLE / 2)
+        plot._hovered(1.0, target * OFFSET + RIPPLE / 2)
         assert heard[-1] == target
-        assert plot.emphasized_channel == target
-        widths = {
-            item.channel: item.opts["pen"].widthF()
-            for item in plot.own_traces() + plot.overlay_items
-        }
-        assert widths[target] == theme.LW_SELECTED
-        assert all(w == theme.LW_THIN for c, w in widths.items() if c != target)
+    assert pens(plot) == before
+
+
+def test_clicking_a_line_picks_that_channel_out(stack, overlay_off):
+    """On top, in the selected colour, at the selected width -- the rest
+    untouched -- and it becomes the current channel without narrowing the
+    selection the overlay draws."""
+    lane = enter_overlay(stack)
+    plot = trace_plot(stack, lane)
+    before = pens(plot)
+    assert stack.overlay_click(scene_point(plot, 1.0, 7 * OFFSET), lane)
+    after = pens(plot)
+    primary = theme.qcolor("primary").name().upper()
+    assert after[7][0] == primary
+    assert after[7][1] == theme.LW_SELECTED
+    assert after[7][2] > max(z for c, (_, _, z) in after.items() if c != 7)
+    assert {c: v for c, v in after.items() if c != 7} == {
+        c: v for c, v in before.items() if c != 7
+    }
+    assert stack.overlay_highlight == 7
+    assert stack.current_channel == 7
+    assert stack.overlay_channels() == list(range(CHANNELS))
+    assert sorted(drawn_channels(plot)) == list(range(CHANNELS))
+    chip = plot.legend_chips[7]
+    assert chip.textItem.defaultTextColor().name().upper() == primary
+    assert chip.textItem.font().bold()
+    # the same line again puts it back
+    assert stack.overlay_click(scene_point(plot, 1.0, 7 * OFFSET), lane)
+    assert stack.overlay_highlight is None
+    assert pens(plot) == before
+
+
+def test_a_click_between_the_lines_picks_nothing(stack, overlay_off):
+    lane = enter_overlay(stack)
+    plot = trace_plot(stack, lane)
+    stack.overlay_click(scene_point(plot, 1.0, 4 * OFFSET), lane)
+    assert stack.overlay_highlight == 4
+    # halfway between channels 9 and 10: 30 px from either at this height
+    assert not stack.overlay_click(scene_point(plot, 1.0, 9.5 * OFFSET), lane)
+    assert stack.overlay_highlight == 4
+
+
+def test_clicking_a_number_in_the_caption_picks_that_channel(stack, overlay_off):
+    lane = enter_overlay(stack)
+    plot = trace_plot(stack, lane)
+    chip = plot.legend_chips[12]
+    assert stack.overlay_click(chip.sceneBoundingRect().center(), lane)
+    assert stack.overlay_highlight == 12
+    assert pens(plot)[12][1] == theme.LW_SELECTED
+
+
+def test_the_pick_survives_a_solo_and_goes_with_its_channel(stack, overlay_off):
+    lane = enter_overlay(stack)
+    plot = trace_plot(stack, lane)
+    stack.overlay_click(plot.legend_chips[9].sceneBoundingRect().center(), lane)
+    # 9 first: soloing 3 alone would take 9 away, and the pick with it
+    stack.toggle_solo(9)
+    stack.toggle_solo(3)
+    settle()
+    pump(0.4)
+    plot = trace_plot(stack, stack.overlay_lane())
+    assert plot.highlighted_channel == 9
+    assert pens(plot)[9][1] == theme.LW_SELECTED
+    stack.toggle_solo(9)
+    settle()
+    pump(0.4)
+    assert stack.overlay_highlight is None
+
+
+class _Click:
+    def __init__(self, pos):
+        self._pos = pos
+
+    def button(self):
+        return Qt.MouseButton.LeftButton
+
+    def modifiers(self):
+        return Qt.KeyboardModifier.NoModifier
+
+    def scenePos(self):
+        return self._pos
+
+
+def test_a_click_on_the_mean_panel_leaves_the_focus_alone(stack, overlay_off):
+    """The mean's lane is borrowed from the first selected channel, and a
+    click on a lane focuses that lane's channel -- so with the focus on 12,
+    one click on the mean panel moved it to 0, and leaving the mode no
+    longer gave the reader's place back."""
+    stack.set_panels(traces=False, specs=1)
+    settle()
+    stack.rail_clicked(12, False)
+    stack.set_mean_spectrogram(True)
+    settle()
+    pump(0.5)
+    lane = stack.mean_spec_lane()
+    assert lane != 12
+    spec = panel(stack, "spectrogram").axs[lane]
+    stack.mouse_clicked((_Click(spec.getViewBox().sceneBoundingRect().center()),), lane)
+    settle()
+    assert stack.current_channel == 12
+    assert stack.mean_channels() == list(range(CHANNELS))
+
+
+def test_a_click_on_the_overlay_picks_rather_than_focusing_the_lane(stack, overlay_off):
+    """Through the real click handler, not only `overlay_click`."""
+    lane = enter_overlay(stack)
+    plot = trace_plot(stack, lane)
+    stack.mouse_clicked((_Click(scene_point(plot, 1.0, 7 * OFFSET)),), lane)
+    settle()
+    assert stack.overlay_highlight == 7
+    assert stack.current_channel == 7
+    assert stack.overlay_channels() == list(range(CHANNELS))
 
 
 def test_the_cross_hair_snaps_to_the_nearest_channel(stack, overlay_off):
@@ -442,32 +573,3 @@ def test_the_menu_says_which_mode_the_stack_is_in(stack, overlay_off):
     settle()
     pump(0.4)
     assert not stack.overlay_traces and not act.isChecked()
-
-
-# ------------------------------------------------------------ the palette
-
-
-@pytest.mark.parametrize("name", [theme.THEME_DARK, theme.THEME_LIGHT])
-def test_the_channel_palette_gives_every_electrode_its_own_colour(name):
-    """What the ring promises, and nothing it does not.
-
-    Sixteen distinct colours, legible on the plot ground, neighbouring
-    channels far apart and no two alike under normal vision.  It makes no
-    colour-vision-deficiency claim -- see `theme.CHANNEL_COLORS` -- so none
-    is asserted.  The floors are the measured values rounded down.
-    """
-    colors = theme.channel_colors(name)
-    assert len(set(colors)) == CHANNELS
-    ground = theme.THEMES[name]["bg.plot"]
-    for color in colors:
-        assert theme.contrast_ratio(color, ground) >= 3.0, color
-    for a, b in zip(colors, colors[1:]):
-        assert theme.delta_e2000(a, b) >= 35.0, (a, b)
-    for a, b in itertools.combinations(colors, 2):
-        assert theme.delta_e2000(a, b) >= 7.5, (a, b)
-
-
-def test_a_channel_keeps_its_colour_whatever_is_selected():
-    n = len(theme.channel_colors())
-    for c in range(CHANNELS):
-        assert theme.channel_color(c) == theme.channel_colors()[c % n]
