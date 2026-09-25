@@ -1,0 +1,4 @@
+# Pure reformatting; `git config blame.ignoreRevsFile .git-blame-ignore-revs`
+# makes `git blame` look through it.
+# ruff format of src, tests and scripts
+24f4914f43fbfc351e11876e5e312dc3c8789cb5

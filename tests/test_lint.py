@@ -1,4 +1,4 @@
-"""The whole tree holds the lint rule set named in ``pyproject.toml``.
+"""The whole tree holds the lint rules in ``pyproject.toml`` and is formatted.
 
 This used to check theme.py alone, with the rules passed on the command
 line.  The rules now live in ``[tool.ruff.lint]``, so ``ruff check`` run by
@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+TREE = ("src", "tests", "scripts")
 
 
 def _find_ruff():
@@ -29,7 +30,7 @@ def _find_ruff():
     return shutil.which("ruff")
 
 
-def test_the_tree_is_lint_clean():
+def test_the_tree_is_lint_clean_and_formatted():
     # A failure rather than a skip: ruff is in the dev group, so a missing
     # one is an environment that was never synced, and a skip there is a
     # lint nobody notices has stopped running.
@@ -38,10 +39,11 @@ def test_the_tree_is_lint_clean():
         "ruff not found beside the interpreter at "
         f"{Path(sys.executable).parent / 'ruff'} or on PATH; run `uv sync`"
     )
-    result = subprocess.run(
-        [ruff, "check", "src", "tests"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+    for command in (["check"], ["format", "--check"]):
+        result = subprocess.run(
+            [ruff, *command, *TREE],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
