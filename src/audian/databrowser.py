@@ -39,6 +39,7 @@ from audioio import fade
 from audioio import update_starttime
 from audioio import bext_history_str, add_history
 from thunderlab.datawriter import available_formats, write_data
+from thunderlab.tabledata import TableData
 
 from . import denoise, smoothing, theme
 from .data import Data
@@ -10697,8 +10698,11 @@ class DataBrowser(QWidget):
         )
         if not file_path:
             return
-        table = self.analyzers[0].data
-        for a in self.analyzers[1:]:
+        # A fresh table: appending onto `analyzers[0].data` itself, as this
+        # once did, grew the first analyzer's table by every other
+        # analyzer's columns on each save, so the next save wrote them twice.
+        table = TableData()
+        for a in self.analyzers:
             for c in range(a.data.columns()):
                 table.append(
                     a.data.label(c),

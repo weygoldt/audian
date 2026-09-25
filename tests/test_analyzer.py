@@ -150,3 +150,27 @@ def test_saving_writes_every_analyzers_columns_once(browser, save_to):
     assert row.split(";")[:4] == ["1.000", "2.500", "1.500", "1"]
     assert float(row.split(";")[5]) == pytest.approx(rms(1), rel=1e-3)
 
+
+def test_saving_twice_writes_the_same_columns_both_times(browser, save_to):
+    """The regression this module found.
+
+    `save_analysis` used to append the other analyzers' columns onto the
+    first analyzer's own table and write that.  The first save was right;
+    after it, PlainAnalyzer held six columns instead of four, so the second
+    save wrote the statistics twice -- once as a frozen copy from the first
+    save, with ``-`` in every row analysed since -- and each later save
+    added another copy.
+    """
+    plain = browser.get_analyzer("plain")
+    browser.analyze_region(1.0, 2.5, 1)
+    browser.save_analysis()
+    first = save_to.read_text().splitlines()[0]
+    assert plain.data.columns() == 4
+
+    browser.analyze_region(0.5, 1.0, 0)
+    browser.save_analysis()
+    header, _, second = save_to.read_text().splitlines()
+    assert header == first
+    cells = second.split(";")
+    assert "-" not in cells
+    assert float(cells[5]) == pytest.approx(rms(0), rel=1e-3)
