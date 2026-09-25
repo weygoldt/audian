@@ -75,9 +75,7 @@ class TestToolTipsAreShown:
         """Including submenus, which are separate QMenu objects."""
         window = view.window()
         hidden = [
-            path
-            for path, menu in every_menu(window)
-            if not menu.toolTipsVisible()
+            path for path, menu in every_menu(window) if not menu.toolTipsVisible()
         ]
         assert hidden == []
 
@@ -124,11 +122,7 @@ class TestTheSpectrogramPageIsDocumented:
 class TestPluginEntriesAreDocumented:
     def test_the_bundled_detector_says_what_it_is_for(self, view):
         window = view.window()
-        acts = [
-            act
-            for act, path in window.all_actions()
-            if path.startswith("Plugins")
-        ]
+        acts = [act for act, path in window.all_actions() if path.startswith("Plugins")]
         assert acts, "no Plugins menu"
         for act in acts:
             assert real_tip(act), act.text()
@@ -137,8 +131,11 @@ class TestPluginEntriesAreDocumented:
         """Traces, spectrograms and channels are named after the data, so
         their labels are bare nouns and the tip has to carry the verb."""
         window = view.window()
-        for wanted in ("View › Traces", "Spectrogram › Active",
-                       "View › Channels › Show channels"):
+        for wanted in (
+            "View › Traces",
+            "Spectrogram › Active",
+            "View › Channels › Show channels",
+        ):
             acts = [a for a, path in window.all_actions() if path == wanted]
             assert acts, wanted
             for act in acts:

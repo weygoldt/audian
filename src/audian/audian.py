@@ -1872,8 +1872,18 @@ class Audian(QMainWindow):
         view_menu = self.setup_view_actions(self.menuBar())
         plugin_menu = self.setup_plugin_actions(self.menuBar())
         help_menu = self.setup_help_actions(self.menuBar())
-        self.menus = [m for m in (file_menu, region_menu, spec_menu, view_menu,
-                                  plugin_menu, help_menu) if m is not None]
+        self.menus = [
+            m
+            for m in (
+                file_menu,
+                region_menu,
+                spec_menu,
+                view_menu,
+                plugin_menu,
+                help_menu,
+            )
+            if m is not None
+        ]
         self.setup_mnemonics()
         self.show_menu_tooltips()
 
@@ -4182,9 +4192,7 @@ class Audian(QMainWindow):
             if entry.tip:
                 act.setToolTip(entry.tip)
                 act.setStatusTip(entry.tip)
-            act.toggled.connect(
-                lambda on, key=entry.key: self.choose_denoiser(key, on)
-            )
+            act.toggled.connect(lambda on, key=entry.key: self.choose_denoiser(key, on))
             self.acts.denoisers[entry.key] = act
             # Also in the attribute bag under a generated name, so
             # `tests/test_actioninventory` pins each entry's menu path and
@@ -4193,9 +4201,7 @@ class Audian(QMainWindow):
             # stays because it is what the sync code looks up by key.
             setattr(self.acts, f"denoiser_{entry.key}", act)
 
-        self.acts.denoise_threshold_up = QAction(
-            "Increase spatial threshold", self
-        )
+        self.acts.denoise_threshold_up = QAction("Increase spatial threshold", self)
         self.acts.denoise_threshold_up.setShortcut("Shift+U")
         self.acts.denoise_threshold_up.setToolTip(
             "Raise the spread a bin must show across electrodes to be kept"
@@ -4204,9 +4210,7 @@ class Audian(QMainWindow):
             lambda x: self.browser().denoise_threshold_up()
         )
 
-        self.acts.denoise_threshold_down = QAction(
-            "Decrease spatial threshold", self
-        )
+        self.acts.denoise_threshold_down = QAction("Decrease spatial threshold", self)
         self.acts.denoise_threshold_down.setShortcut("U")
         self.acts.denoise_threshold_down.setToolTip(
             "Lower the spread a bin must show across electrodes to be kept"
@@ -4295,37 +4299,57 @@ class Audian(QMainWindow):
         # since the label already carries the verb and a tool tip that only
         # restates it is worse than none.
         for name, tip in (
-            ("frequency_resolution_up",
-             "A longer Fourier window: finer in frequency, blurrier in time"),
-            ("frequency_resolution_down",
-             "A shorter Fourier window: sharper in time, coarser in frequency"),
-            ("overlap_up",
-             "Overlap the Fourier windows further -- a smoother picture, and "
-             "more of them to compute"),
-            ("overlap_down",
-             "Overlap the Fourier windows less -- quicker, and blockier in time"),
-            ("color_map_cycler",
-             "Step through the colour maps, all of them perceptually uniform"),
-            ("link_power",
-             "Hold every open recording at the same power scale, so two of "
-             "them can be compared by eye"),
-            ("power_up",
-             "Slide the whole colour scale up, keeping its span: brings the "
-             "loud parts back out of saturation"),
-            ("power_down",
-             "Slide the whole colour scale down, keeping its span: brings the "
-             "quiet parts up out of the floor"),
+            (
+                "frequency_resolution_up",
+                "A longer Fourier window: finer in frequency, blurrier in time",
+            ),
+            (
+                "frequency_resolution_down",
+                "A shorter Fourier window: sharper in time, coarser in frequency",
+            ),
+            (
+                "overlap_up",
+                "Overlap the Fourier windows further -- a smoother picture, and "
+                "more of them to compute",
+            ),
+            (
+                "overlap_down",
+                "Overlap the Fourier windows less -- quicker, and blockier in time",
+            ),
+            (
+                "color_map_cycler",
+                "Step through the colour maps, all of them perceptually uniform",
+            ),
+            (
+                "link_power",
+                "Hold every open recording at the same power scale, so two of "
+                "them can be compared by eye",
+            ),
+            (
+                "power_up",
+                "Slide the whole colour scale up, keeping its span: brings the "
+                "loud parts back out of saturation",
+            ),
+            (
+                "power_down",
+                "Slide the whole colour scale down, keeping its span: brings the "
+                "quiet parts up out of the floor",
+            ),
             ("max_power_up", "Raise the top of the colour scale"),
-            ("max_power_down",
-             "Lower the top of the colour scale, so less of it is saturated"),
-            ("min_power_up",
-             "Raise the bottom of the colour scale, cutting more of the noise "
-             "floor out of the picture"),
-            ("min_power_down",
-             "Lower the bottom of the colour scale, showing more of the noise "
-             "floor"),
-            ("link_filter",
-             "Hold every open recording at the same filter band"),
+            (
+                "max_power_down",
+                "Lower the top of the colour scale, so less of it is saturated",
+            ),
+            (
+                "min_power_up",
+                "Raise the bottom of the colour scale, cutting more of the noise "
+                "floor out of the picture",
+            ),
+            (
+                "min_power_down",
+                "Lower the bottom of the colour scale, showing more of the noise floor",
+            ),
+            ("link_filter", "Hold every open recording at the same filter band"),
             ("highpass_up", "Raise the high-pass cutoff, drawn on the spectrogram"),
             ("highpass_down", "Lower the high-pass cutoff, drawn on the spectrogram"),
             ("lowpass_up", "Raise the low-pass cutoff, drawn on the spectrogram"),
@@ -4887,9 +4911,7 @@ class Audian(QMainWindow):
             # menu, which speaks for the tab in front
             return
         blocked = act.blockSignals(True)
-        act.setChecked(
-            isinstance(browser, DataBrowser) and browser.side_panel_shown()
-        )
+        act.setChecked(isinstance(browser, DataBrowser) and browser.side_panel_shown())
         act.blockSignals(blocked)
 
     def next_annotation(self):

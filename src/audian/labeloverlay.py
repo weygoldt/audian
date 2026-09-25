@@ -894,9 +894,15 @@ class CategoryModel(QAbstractTableModel):
         return len(self.HEADER)
 
     def headerData(self, index, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+        if (
+            orientation == Qt.Orientation.Horizontal
+            and role == Qt.ItemDataRole.DisplayRole
+        ):
             return self.HEADER[index]
-        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
+        if (
+            orientation == Qt.Orientation.Vertical
+            and role == Qt.ItemDataRole.DisplayRole
+        ):
             return f"{index}"
         return None
 
@@ -923,7 +929,11 @@ class CategoryModel(QAbstractTableModel):
     def flags(self, index):
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
-        return Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
+        return (
+            Qt.ItemFlag.ItemIsSelectable
+            | Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsEditable
+        )
 
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole) -> bool:
         if not index.isValid():
@@ -1052,7 +1062,10 @@ class CategoryDialog(QDialog):
         remove.clicked.connect(lambda: self.model.remove_rows(self.view))
         buttons.addWidget(remove)
         buttons.addStretch(1)
-        box = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok, self)
+        box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok,
+            self,
+        )
         box.rejected.connect(self.reject)
         box.accepted.connect(self.accept)
         outer.addWidget(box)
@@ -1107,9 +1120,15 @@ class LabelTableModel(QAbstractTableModel):
         return len(self.HEADER)
 
     def headerData(self, index, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+        if (
+            orientation == Qt.Orientation.Horizontal
+            and role == Qt.ItemDataRole.DisplayRole
+        ):
             return self.HEADER[index]
-        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
+        if (
+            orientation == Qt.Orientation.Vertical
+            and role == Qt.ItemDataRole.DisplayRole
+        ):
             return f"{index}"
         return None
 
@@ -1376,8 +1395,7 @@ class CategoryStrip(QWidget):
         rather than two so a strip that folds and a row that does not
         cannot end up breaking lines differently.
         """
-        return pack_row(widths, budget, self.SPACING, rows=self.ROWS,
-                        reserve=reserve)
+        return pack_row(widths, budget, self.SPACING, rows=self.ROWS, reserve=reserve)
 
     def relayout(self) -> None:
         """Place the chips that fit, and fold the rest into the ``+N`` menu."""

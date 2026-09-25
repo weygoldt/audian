@@ -245,11 +245,13 @@ def _sweep(paths, templates, settings, channel, token, progress) -> list:
         while start < duration:
             token.check()
             stop = min(start + step, duration)
-            block, t0 = recording.samples(max(start - margin, 0.0),
-                                          min(stop + margin, duration), channel)
+            block, t0 = recording.samples(
+                max(start - margin, 0.0), min(stop + margin, duration), channel
+            )
             if block.size:
-                for candidate in detection.detect(block, recording.rate,
-                                                  templates, settings, t0):
+                for candidate in detection.detect(
+                    block, recording.rate, templates, settings, t0
+                ):
                     if start <= candidate.t0 < stop:
                         found.append(candidate)
             start = stop
@@ -303,7 +305,10 @@ def _fit(paths, templates, examples, settings, channel, token, progress) -> FitR
                 return block
 
             templates = detection.learn_from_reader(
-                read, recording.rate, examples, settings,
+                read,
+                recording.rate,
+                examples,
+                settings,
             )
         else:
             progress(0.25)
@@ -318,7 +323,11 @@ def _fit(paths, templates, examples, settings, channel, token, progress) -> FitR
             block, actual = recording.samples(start, stop, channel)
             if block.size:
                 score, times, _level = detection.score_curve(
-                    block, recording.rate, templates, settings, actual,
+                    block,
+                    recording.rate,
+                    templates,
+                    settings,
+                    actual,
                 )
                 k = detection.calibrate_k(score, times, here, templates)
                 if k is not None:
@@ -335,12 +344,19 @@ def _fit(paths, templates, examples, settings, channel, token, progress) -> FitR
         for index, (start, stop, here) in enumerate(windows):
             token.check()
             block, actual = recording.samples(start, stop, channel)
-            found = detection.detect(
-                block, recording.rate, templates, fitted_settings, actual,
-            ) if block.size else []
+            found = (
+                detection.detect(
+                    block,
+                    recording.rate,
+                    templates,
+                    fitted_settings,
+                    actual,
+                )
+                if block.size
+                else []
+            )
             recalled += sum(
-                any(abs(candidate.t0 - example.t0) <= tolerance
-                    for candidate in found)
+                any(abs(candidate.t0 - example.t0) <= tolerance for candidate in found)
                 for example in here
             )
             progress(0.625 + 0.375 * (index + 1) / max(len(windows), 1))
@@ -366,8 +382,14 @@ class SweepWorker(QObject):
 
     def run(self) -> None:
         try:
-            found = _sweep(self.paths, self.templates, self.settings,
-                           self.channel, self.token, self.sigProgress.emit)
+            found = _sweep(
+                self.paths,
+                self.templates,
+                self.settings,
+                self.channel,
+                self.token,
+                self.sigProgress.emit,
+            )
         except Cancelled:
             self.sigFinished.emit(None)
         except Exception as exc:  # noqa: BLE001 - a plugin may not take the app down
@@ -395,8 +417,13 @@ class FitWorker(QObject):
     def run(self) -> None:
         try:
             result = _fit(
-                self.paths, self.templates, self.examples, self.settings,
-                self.channel, self.token, self.sigProgress.emit,
+                self.paths,
+                self.templates,
+                self.examples,
+                self.settings,
+                self.channel,
+                self.token,
+                self.sigProgress.emit,
             )
         except Cancelled:
             self.sigFinished.emit(None)
@@ -457,8 +484,12 @@ class DetectorPanel(QWidget):
         group.add_row("Learn from", "", self.sourcew)
 
         self.pointwidthw = pg.SpinBox(
-            self, DEFAULT_POINT_WIDTH_MS, bounds=(0.01, 10000.0),
-            suffix=" ms", step=1.0, decimals=4,
+            self,
+            DEFAULT_POINT_WIDTH_MS,
+            bounds=(0.01, 10000.0),
+            suffix=" ms",
+            step=1.0,
+            decimals=4,
         )
         if hasattr(browser, "style_parameter_spinbox"):
             browser.style_parameter_spinbox(self.pointwidthw)
@@ -469,12 +500,16 @@ class DetectorPanel(QWidget):
         )
         self.pointwidthw.sigValueChanged.connect(self._invalidate)
         self._point_width_row = group.add_row(
-            "Point width", "", self.pointwidthw,
+            "Point width",
+            "",
+            self.pointwidthw,
         )
 
         self.domainw = narrow_combo(QComboBox(self))
-        for key, name in ((detection.SPECTROGRAM, "Spectrogram"),
-                          (detection.TRACE, "Trace")):
+        for key, name in (
+            (detection.SPECTROGRAM, "Spectrogram"),
+            (detection.TRACE, "Trace"),
+        ):
             self.domainw.addItem(name, key)
         self.domainw.setToolTip("Match the examples as pictures or as waveforms")
         self.domainw.currentIndexChanged.connect(self._domain_changed)
@@ -482,21 +517,28 @@ class DetectorPanel(QWidget):
 
         self.representationw = narrow_combo(QComboBox(self))
         for key, name, tip in (
-            ("pcen", "PCEN", "Per-channel energy normalisation. Measured best, "
-                             "and the only one that holds up at -5 dB."),
+            (
+                "pcen",
+                "PCEN",
+                "Per-channel energy normalisation. Measured best, "
+                "and the only one that holds up at -5 dB.",
+            ),
             ("db", "Decibel", "What the spectrogram on screen is drawn from."),
-            ("whitened", "Whitened", "Decibel with each bin's own median "
-                                     "removed. The cheap classic."),
+            (
+                "whitened",
+                "Whitened",
+                "Decibel with each bin's own median removed. The cheap classic.",
+            ),
         ):
             self.representationw.addItem(name, key)
             self.representationw.setItemData(
-                self.representationw.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
+                self.representationw.count() - 1, tip, Qt.ItemDataRole.ToolTipRole
+            )
         self.representationw.currentIndexChanged.connect(self._invalidate)
         # the caption comes back with the field so the whole row can be
         # hidden: hiding only the field leaves its label beside nothing,
         # which reads as a control that failed to load
-        self._representation_row = group.add_row("Match on", "",
-                                                 self.representationw)
+        self._representation_row = group.add_row("Match on", "", self.representationw)
 
         self.combinerw = narrow_combo(QComboBox(self))
         self.combinerw.setToolTip("How several examples become one score")
@@ -521,16 +563,22 @@ class DetectorPanel(QWidget):
         )
         self.sensitivityw.setToolTip(self.sensitivityw.tooltip)
         self.sensitivityw.valueChanged.connect(self._sensitivity_moved)
-        self.kw = pg.SpinBox(self, detection.DEFAULT_K_SPECTROGRAM,
-                             bounds=(detection.MIN_K, detection.MAX_K),
-                             suffix=" σ", step=0.1, decimals=3)
+        self.kw = pg.SpinBox(
+            self,
+            detection.DEFAULT_K_SPECTROGRAM,
+            bounds=(detection.MIN_K, detection.MAX_K),
+            suffix=" σ",
+            step=0.1,
+            decimals=3,
+        )
         if hasattr(browser, "style_parameter_spinbox"):
             browser.style_parameter_spinbox(self.kw)
         self.kw.tooltip = self.sensitivityw.tooltip
         self.kw.setToolTip(self.kw.tooltip)
         self.kw.sigValueChanged.connect(self._k_typed)
-        group.add_row("Sensitivity", "",
-                      ParameterGroup.expanding(self.sensitivityw), self.kw)
+        group.add_row(
+            "Sensitivity", "", ParameterGroup.expanding(self.sensitivityw), self.kw
+        )
 
         # The level gate.  Measured nearly inert on a clean recording, and
         # that is not a fault in it: the correlation is already independent
@@ -551,16 +599,22 @@ class DetectorPanel(QWidget):
         )
         self.levelw.setToolTip(self.levelw.tooltip)
         self.levelw.valueChanged.connect(self._level_moved)
-        self.leveldbw = pg.SpinBox(self, float(LEVEL_FLOOR_DB),
-                                   bounds=(float(LEVEL_FLOOR_DB), 0.0),
-                                   suffix=" dB", step=1.0, decimals=4)
+        self.leveldbw = pg.SpinBox(
+            self,
+            float(LEVEL_FLOOR_DB),
+            bounds=(float(LEVEL_FLOOR_DB), 0.0),
+            suffix=" dB",
+            step=1.0,
+            decimals=4,
+        )
         if hasattr(browser, "style_parameter_spinbox"):
             browser.style_parameter_spinbox(self.leveldbw)
         self.leveldbw.tooltip = self.levelw.tooltip
         self.leveldbw.setToolTip(self.leveldbw.tooltip)
         self.leveldbw.sigValueChanged.connect(self._level_typed)
-        group.add_row("Min level", "",
-                      ParameterGroup.expanding(self.levelw), self.leveldbw)
+        group.add_row(
+            "Min level", "", ParameterGroup.expanding(self.levelw), self.leveldbw
+        )
 
         self.nmsw = QCheckBox("Suppress overlapping matches", self)
         self.nmsw.setChecked(True)
@@ -575,9 +629,7 @@ class DetectorPanel(QWidget):
         self.nmsoverlapw.setRange(0, 100)
         self.nmsoverlapw.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.nmsoverlapw.setTickInterval(25)
-        self.nmsoverlapw.setValue(
-            int(round(100 * detection.DEFAULT_NMS_OVERLAP))
-        )
+        self.nmsoverlapw.setValue(int(round(100 * detection.DEFAULT_NMS_OVERLAP)))
         self.nmsoverlapw.tooltip = (
             "Maximum intersection-over-union between surviving matches. "
             "Lower values suppress more nearby detections."
@@ -585,8 +637,12 @@ class DetectorPanel(QWidget):
         self.nmsoverlapw.setToolTip(self.nmsoverlapw.tooltip)
         self.nmsoverlapw.valueChanged.connect(self._nms_overlap_moved)
         self.nmsoverlapbox = pg.SpinBox(
-            self, 100.0 * detection.DEFAULT_NMS_OVERLAP,
-            bounds=(0.0, 100.0), suffix=" %", step=1.0, decimals=3,
+            self,
+            100.0 * detection.DEFAULT_NMS_OVERLAP,
+            bounds=(0.0, 100.0),
+            suffix=" %",
+            step=1.0,
+            decimals=3,
         )
         if hasattr(browser, "style_parameter_spinbox"):
             browser.style_parameter_spinbox(self.nmsoverlapbox)
@@ -594,8 +650,10 @@ class DetectorPanel(QWidget):
         self.nmsoverlapbox.setToolTip(self.nmsoverlapbox.tooltip)
         self.nmsoverlapbox.sigValueChanged.connect(self._nms_overlap_typed)
         self._nms_overlap_row = group.add_row(
-            "Max overlap", "",
-            ParameterGroup.expanding(self.nmsoverlapw), self.nmsoverlapbox,
+            "Max overlap",
+            "",
+            ParameterGroup.expanding(self.nmsoverlapw),
+            self.nmsoverlapbox,
         )
 
         # How far from the marked examples a detection's length may stray,
@@ -603,9 +661,14 @@ class DetectorPanel(QWidget):
         # and milliseconds rather than absolute times, because both are
         # really statements about the examples: a reader who marks a longer
         # call should not have to retype the bounds that go with it.
-        self.tolerancew = pg.SpinBox(self, detection.DURATION_TOLERANCE,
-                                     bounds=(1.0, 10.0), suffix="x",
-                                     step=0.1, decimals=3)
+        self.tolerancew = pg.SpinBox(
+            self,
+            detection.DURATION_TOLERANCE,
+            bounds=(1.0, 10.0),
+            suffix="x",
+            step=0.1,
+            decimals=3,
+        )
         if hasattr(browser, "style_parameter_spinbox"):
             browser.style_parameter_spinbox(self.tolerancew)
         self.tolerancew.setToolTip(
@@ -616,8 +679,9 @@ class DetectorPanel(QWidget):
         self.tolerancew.sigValueChanged.connect(lambda _s: self._postprocess_changed())
         group.add_row("Length", "", self.tolerancew)
 
-        self.gapw = pg.SpinBox(self, 0.0, bounds=(0.0, 5000.0), suffix=" ms",
-                               step=5.0, decimals=5)
+        self.gapw = pg.SpinBox(
+            self, 0.0, bounds=(0.0, 5000.0), suffix=" ms", step=5.0, decimals=5
+        )
         if hasattr(browser, "style_parameter_spinbox"):
             browser.style_parameter_spinbox(self.gapw)
         self.gapw.setToolTip(
@@ -808,14 +872,18 @@ class DetectorPanel(QWidget):
             return
         if abs(shown - recording.duration) <= 1.0 / max(recording.rate, 1.0):
             return
-        message = (f"detector opened {recording.duration:.1f} s in "
-                   f"{len(recording.paths)} file(s), but the browser shows "
-                   f"{shown:.1f} s")
+        message = (
+            f"detector opened {recording.duration:.1f} s in "
+            f"{len(recording.paths)} file(s), but the browser shows "
+            f"{shown:.1f} s"
+        )
         self._say(message + " -- results past the join will be wrong")
         notify = getattr(self.browser, "notify", None)
         if notify is not None:
-            notify("error", f"{message}: "
-                            f"{', '.join(Path(p).name for p in recording.paths)}")
+            notify(
+                "error",
+                f"{message}: {', '.join(Path(p).name for p in recording.paths)}",
+            )
 
     def about_to_flush_labels(self) -> None:
         """Take an uncommitted preview back before the sidecar is written.
@@ -908,8 +976,9 @@ class DetectorPanel(QWidget):
         labels = getattr(self.browser, "labels", None)
         name = self.sourcew.currentData()
         has_points = bool(
-            labels is not None and name and
-            any(label.category == name and label.is_point() for label in labels)
+            labels is not None
+            and name
+            and any(label.category == name and label.is_point() for label in labels)
         )
         for widget in self._point_width_row:
             widget.setVisible(has_points)
@@ -956,7 +1025,8 @@ class DetectorPanel(QWidget):
         try:
             self.kw.setValue(k)
             self.sensitivityw.setValue(
-                int(round(detection.sensitivity_from_k(k, self._domain()))))
+                int(round(detection.sensitivity_from_k(k, self._domain())))
+            )
         finally:
             self._writing = False
 
@@ -976,7 +1046,8 @@ class DetectorPanel(QWidget):
         self._writing = True
         try:
             self.sensitivityw.setValue(
-                int(round(detection.sensitivity_from_k(spin.value(), self._domain()))))
+                int(round(detection.sensitivity_from_k(spin.value(), self._domain())))
+            )
         finally:
             self._writing = False
         self._postprocess_changed()
@@ -1135,8 +1206,10 @@ class DetectorPanel(QWidget):
         self._committed = False
         self._drawing = True
         if was_committed:
-            self._say("settings changed -- previewing this window again; "
-                      "Run to redo the whole recording")
+            self._say(
+                "settings changed -- previewing this window again; "
+                "Run to redo the whole recording"
+            )
         self._schedule()
 
     def _learn(self):
@@ -1157,9 +1230,12 @@ class DetectorPanel(QWidget):
     def _fit_key(self, settings) -> tuple:
         """Everything that changes the learned score at an example."""
         return (
-            self.sourcew.currentData(), settings.domain,
-            settings.representation, settings.combiner,
-            tuple(self.examples()), self._channel(),
+            self.sourcew.currentData(),
+            settings.domain,
+            settings.representation,
+            settings.combiner,
+            tuple(self.examples()),
+            self._channel(),
         )
 
     def preview(self) -> None:
@@ -1208,28 +1284,37 @@ class DetectorPanel(QWidget):
                 self._say("no examples to learn from")
                 return
             margin = detection.margin_s(self.templates)
-            block, start = recording.samples(max(s0 - margin, 0.0),
-                                             min(s1 + margin, recording.duration),
-                                             self._channel())
+            block, start = recording.samples(
+                max(s0 - margin, 0.0),
+                min(s1 + margin, recording.duration),
+                self._channel(),
+            )
             if not block.size:
                 return
             self._score, self._times, self._level = detection.score_curve(
-                block, recording.rate, self.templates, settings, start)
+                block, recording.rate, self.templates, settings, start
+            )
             self._scored_for = stamp
 
         if self._score is None or self._score.size == 0:
             self._say("the window is shorter than one example")
             return
 
-        found = [c for c in detection.pick(self._score, self._times,
-                                           self._level, self.templates, settings)
-                 if t0 <= c.t0 < t1]
+        found = [
+            c
+            for c in detection.pick(
+                self._score, self._times, self._level, self.templates, settings
+            )
+            if t0 <= c.t0 < t1
+        ]
         self._draw(found)
         cut = detection.threshold_of(self._score, settings.k)
         recall = f" · {self._fit_recall}" if self._fit_recall else ""
-        self._say(f"{len(found)} in view · cut {cut:.3f} of "
-                  f"{float(self._score.max()):.3f} · "
-                  f"{len(self.templates)} examples{recall}")
+        self._say(
+            f"{len(found)} in view · cut {cut:.3f} of "
+            f"{float(self._score.max()):.3f} · "
+            f"{len(self.templates)} examples{recall}"
+        )
 
         # A new source/representation is fitted automatically, as before,
         # but now the global work is visible and cancellable rather than a
@@ -1260,8 +1345,9 @@ class DetectorPanel(QWidget):
         name = self._category_name()
         if len(found) > PREVIEW_LIMIT:
             found = []
-            self._say(f"over {PREVIEW_LIMIT} matches -- not drawn. Lower the "
-                      f"sensitivity.")
+            self._say(
+                f"over {PREVIEW_LIMIT} matches -- not drawn. Lower the sensitivity."
+            )
         channel = self._channel()
         if self._drawing:
             # a preview is about to replace whatever is in the category, so
@@ -1271,12 +1357,19 @@ class DetectorPanel(QWidget):
             labels.remove_category(name)
             labels.add_category(name, KIND_SPAN, labels.next_color())
             for candidate in found:
-                labels.add(Label(name, KIND_SPAN, channel, candidate.t0,
-                                 candidate.t1, candidate.f_low_hz,
-                                 candidate.f_high_hz,
-                                 f"score {candidate.score:.3f}"))
-        for call in ("revalidate_selection", "redraw_labels",
-                     "update_label_status"):
+                labels.add(
+                    Label(
+                        name,
+                        KIND_SPAN,
+                        channel,
+                        candidate.t0,
+                        candidate.t1,
+                        candidate.f_low_hz,
+                        candidate.f_high_hz,
+                        f"score {candidate.score:.3f}",
+                    )
+                )
+        for call in ("revalidate_selection", "redraw_labels", "update_label_status"):
             fn = getattr(self.browser, call, None)
             if fn is not None:
                 fn()
@@ -1292,8 +1385,7 @@ class DetectorPanel(QWidget):
             if self._job == "fit":
                 self._stop_job()
             else:
-                self._say("still scanning the recording -- "
-                          "wait for it, or press Stop")
+                self._say("still scanning the recording -- wait for it, or press Stop")
             return
         # pressing a button is asking for an answer, so it also undoes Clear
         self._drawing = True
@@ -1318,7 +1410,12 @@ class DetectorPanel(QWidget):
         self._fitting_for = source
         self._token = CancelToken()
         self._worker = FitWorker(
-            paths, templates, examples, self.settings(), self._channel(), self._token,
+            paths,
+            templates,
+            examples,
+            self.settings(),
+            self._channel(),
+            self._token,
         )
         self._thread = QThread(self)
         self._thread.setObjectName("audian-detector-fit")
@@ -1333,10 +1430,20 @@ class DetectorPanel(QWidget):
         self.calibratew.setText("Stop fitting")
         self.runw.setEnabled(False)
         for widget in (
-            self.sourcew, self.pointwidthw, self.domainw, self.representationw,
-            self.combinerw, self.sensitivityw, self.kw, self.levelw,
-            self.leveldbw, self.nmsw, self.nmsoverlapw, self.nmsoverlapbox,
-            self.tolerancew, self.gapw,
+            self.sourcew,
+            self.pointwidthw,
+            self.domainw,
+            self.representationw,
+            self.combinerw,
+            self.sensitivityw,
+            self.kw,
+            self.levelw,
+            self.leveldbw,
+            self.nmsw,
+            self.nmsoverlapw,
+            self.nmsoverlapbox,
+            self.tolerancew,
+            self.gapw,
         ):
             widget.setEnabled(False)
         self._say(f"fitting {len(examples)} examples from the recording ...")
@@ -1390,8 +1497,10 @@ class DetectorPanel(QWidget):
             if self._job == "run":
                 self._stop_job()
             else:
-                self._say("still fitting to the examples -- "
-                          "wait for it, or press Stop fitting")
+                self._say(
+                    "still fitting to the examples -- "
+                    "wait for it, or press Stop fitting"
+                )
             return
         self._drawing = True
         recording = self._open()
@@ -1406,8 +1515,13 @@ class DetectorPanel(QWidget):
             return
 
         self._token = CancelToken()
-        self._worker = SweepWorker(recording.paths, self.templates,
-                                   self.settings(), self._channel(), self._token)
+        self._worker = SweepWorker(
+            recording.paths,
+            self.templates,
+            self.settings(),
+            self._channel(),
+            self._token,
+        )
         self._thread = QThread(self)
         self._thread.setObjectName("audian-detector")
         self._worker.moveToThread(self._thread)
@@ -1450,10 +1564,20 @@ class DetectorPanel(QWidget):
         self.calibratew.setText("Fit to examples")
         self.calibratew.setEnabled(True)
         for widget in (
-            self.sourcew, self.pointwidthw, self.domainw, self.representationw,
-            self.combinerw, self.sensitivityw, self.kw, self.levelw,
-            self.leveldbw, self.nmsw, self.nmsoverlapw, self.nmsoverlapbox,
-            self.tolerancew, self.gapw,
+            self.sourcew,
+            self.pointwidthw,
+            self.domainw,
+            self.representationw,
+            self.combinerw,
+            self.sensitivityw,
+            self.kw,
+            self.levelw,
+            self.leveldbw,
+            self.nmsw,
+            self.nmsoverlapw,
+            self.nmsoverlapbox,
+            self.tolerancew,
+            self.gapw,
         ):
             widget.setEnabled(True)
         self._sync_point_width_row()
@@ -1497,8 +1621,10 @@ class DetectorPanel(QWidget):
         path = self._write_csv(found)
         self.refresh_categories()
         where = f" · {path.name}" if path is not None else ""
-        self._say(f"{len(found)} found in the recording{where} · "
-                  f"seek freely; move a control to preview again")
+        self._say(
+            f"{len(found)} found in the recording{where} · "
+            f"seek freely; move a control to preview again"
+        )
         save = getattr(self.browser, "schedule_label_save", None)
         if save is not None:
             save()
@@ -1524,14 +1650,41 @@ class DetectorPanel(QWidget):
         try:
             with path.open("w", encoding="utf-8", newline="") as fh:
                 writer = csv.writer(fh)
-                writer.writerow(("category", "kind", "channel", "t_start_s",
-                                 "t_end_s", "f_low_hz", "f_high_hz", "note"))
+                writer.writerow(
+                    (
+                        "category",
+                        "kind",
+                        "channel",
+                        "t_start_s",
+                        "t_end_s",
+                        "f_low_hz",
+                        "f_high_hz",
+                        "note",
+                    )
+                )
                 for candidate in found:
-                    low = "" if candidate.f_low_hz is None else f"{candidate.f_low_hz:.3f}"
-                    high = "" if candidate.f_high_hz is None else f"{candidate.f_high_hz:.3f}"
-                    writer.writerow((self._category_name(), KIND_SPAN, cell,
-                                     f"{candidate.t0:.6f}", f"{candidate.t1:.6f}",
-                                     low, high, f"score {candidate.score:.3f}"))
+                    low = (
+                        ""
+                        if candidate.f_low_hz is None
+                        else f"{candidate.f_low_hz:.3f}"
+                    )
+                    high = (
+                        ""
+                        if candidate.f_high_hz is None
+                        else f"{candidate.f_high_hz:.3f}"
+                    )
+                    writer.writerow(
+                        (
+                            self._category_name(),
+                            KIND_SPAN,
+                            cell,
+                            f"{candidate.t0:.6f}",
+                            f"{candidate.t1:.6f}",
+                            low,
+                            high,
+                            f"score {candidate.score:.3f}",
+                        )
+                    )
         except OSError as exc:
             self._say(f"could not write the CSV: {exc}")
             return None

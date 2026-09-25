@@ -103,8 +103,7 @@ def _vertices(run) -> tuple:
             return (np.array([float(label.t0)]), np.array([hz]))
         return (np.array([float(label.t0), t1]), np.array([hz, hz]))
     times = np.array(
-        [0.5 * (lab.t0 + (lab.t1 if lab.t1 is not None else lab.t0))
-         for lab in run],
+        [0.5 * (lab.t0 + (lab.t1 if lab.t1 is not None else lab.t0)) for lab in run],
         dtype=np.float64,
     )
     freqs = np.array([_mid_hz(lab) for lab in run], dtype=np.float64)

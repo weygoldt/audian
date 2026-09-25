@@ -40,6 +40,7 @@ EXP2 = Path("/home/weygoldt/wrk/analyses/fakefish/experiments/exp2")
 METADATA = EXP2 / "PULS0002_metadata.toml"
 RECORDING = EXP2 / "DR0000_0087.wav"
 
+
 def needs_session(present: bool, reason: str):
     """Mark a test as wanting one of the reader's own recorded sessions.
 
@@ -52,7 +53,9 @@ def needs_session(present: bool, reason: str):
     """
 
     def decorate(func):
-        return pytest.mark.realdata(pytest.mark.skipif(not present, reason=reason)(func))
+        return pytest.mark.realdata(
+            pytest.mark.skipif(not present, reason=reason)(func)
+        )
 
     return decorate
 
@@ -821,8 +824,7 @@ def write_split_recording(
 
     if len(gaps) != len(seconds) - 1:
         raise ValueError(
-            f"{len(seconds)} parts have {len(seconds) - 1} joins, "
-            f"not {len(gaps)}"
+            f"{len(seconds)} parts have {len(seconds) - 1} joins, not {len(gaps)}"
         )
     directory.mkdir(parents=True, exist_ok=True)
     names = list(names or SPLIT_NAMES[: len(seconds)])
@@ -838,10 +840,17 @@ def write_split_recording(
         closed = opened + datetime.timedelta(
             seconds=sum(seconds[: index + 1]) + sum(gaps[:index])
         )
-        write_audio(str(path), signal, rate, metadata=dict(BEXT=dict(
-            OriginationDate=closed.strftime("%Y-%m-%d"),
-            OriginationTime=closed.strftime("%H:%M:%S"),
-        )))
+        write_audio(
+            str(path),
+            signal,
+            rate,
+            metadata=dict(
+                BEXT=dict(
+                    OriginationDate=closed.strftime("%Y-%m-%d"),
+                    OriginationTime=closed.strftime("%H:%M:%S"),
+                )
+            ),
+        )
         paths.append(path)
         frames.append(count)
         digests.append(hashlib.sha256(path.read_bytes()).hexdigest())

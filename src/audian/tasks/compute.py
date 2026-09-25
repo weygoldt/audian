@@ -110,17 +110,13 @@ def run_job(job: ComputeJob) -> ComputeResult:
             i0, i1, nbefore = trace.source_window(
                 step.offset, step.shape[0], source_offset, len(source_buffer)
             )
-            extra = trace.process(
-                source_buffer[i0:i1], dest, nbefore, job.cancel
-            )
+            extra = trace.process(source_buffer[i0:i1], dest, nbefore, job.cancel)
             produced[id(trace)] = (dest, step.offset)
             updates.append(TraceUpdate(trace, dest, step.offset, extra or {}))
     except Cancelled:
         return ComputeResult(job.epoch, cancelled=True, owner=job.owner)
     except Exception:  # noqa: BLE001 - a worker may not raise past here
-        return ComputeResult(
-            job.epoch, error=traceback.format_exc(), owner=job.owner
-        )
+        return ComputeResult(job.epoch, error=traceback.format_exc(), owner=job.owner)
     return ComputeResult(job.epoch, tuple(updates), owner=job.owner)
 
 

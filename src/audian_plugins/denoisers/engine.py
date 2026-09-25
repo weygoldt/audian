@@ -153,7 +153,7 @@ def mains_comb(
     harmonics = int(values.get("harmonics", 8))
     width = float(values.get("width", 1.0))
     # Declared as a percentage because that is what the panel shows.
-    strength = float(np.clip(values.get("strength", 100.0), 0.0, 100.0))/100.0
+    strength = float(np.clip(values.get("strength", 100.0), 0.0, 100.0)) / 100.0
     if f0 <= 0 or harmonics < 1 or width <= 0 or strength <= 0:
         return block
 
@@ -173,7 +173,7 @@ def mains_comb(
     # comb this spectrogram can draw where it cannot.
     spacing = float(freqs[1] - freqs[0])
     half = max(width, spacing)
-    outer = max(MAINS_REFERENCE_SPAN*half, half + 2.0*spacing)
+    outer = max(MAINS_REFERENCE_SPAN * half, half + 2.0 * spacing)
     out = None
 
     for h in range(1, harmonics + 1):

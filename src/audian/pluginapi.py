@@ -89,13 +89,13 @@ from .tasks.tokens import Cancelled, CancelToken
 #: Attributes a panel factory may assume its browser has.  Everything else
 #: about a `DataBrowser` is internal and may move.
 PLUGIN_BROWSER_ATTRS = (
-    "labels",           # the editable LabelSet: read examples, add results
-    "data",             # the open recording: rate, channels, file_path
-    "plot_ranges",      # the visible ranges, keyed by Panel.times/etc.
-    "notify",           # (level, message) to the message log
-    "redraw_labels",    # after changing the label set
+    "labels",  # the editable LabelSet: read examples, add results
+    "data",  # the open recording: rate, channels, file_path
+    "plot_ranges",  # the visible ranges, keyed by Panel.times/etc.
+    "notify",  # (level, message) to the message log
+    "redraw_labels",  # after changing the label set
     "schedule_label_save",
-    "spectrogram_axes", # the lanes, for a plugin that draws in frequency
+    "spectrogram_axes",  # the lanes, for a plugin that draws in frequency
 )
 
 __all__ = [

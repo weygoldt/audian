@@ -49,14 +49,14 @@ LOCAL_HZ = 1000.0
 
 def array_signal(seed: int = 20260901) -> np.ndarray:
     rng = np.random.default_rng(seed)
-    t = np.arange(FRAMES)/RATE
-    common = 0.30*np.sin(2*np.pi*COMMON_HZ*t)
-    local = 0.30*np.sin(2*np.pi*LOCAL_HZ*t)
+    t = np.arange(FRAMES) / RATE
+    common = 0.30 * np.sin(2 * np.pi * COMMON_HZ * t)
+    local = 0.30 * np.sin(2 * np.pi * LOCAL_HZ * t)
     # 1.0, 0.25, 0.06, 0.016 -- about 36 dB across four electrodes
-    gains = 0.25**np.arange(CHANNELS)
+    gains = 0.25 ** np.arange(CHANNELS)
     signal = np.empty((FRAMES, CHANNELS))
     for c in range(CHANNELS):
-        signal[:, c] = common + gains[c]*local
+        signal[:, c] = common + gains[c] * local
     signal += rng.normal(0.0, 2e-4, signal.shape)
     return signal
 
@@ -97,14 +97,14 @@ class TestSpatialLayer:
         before = power_at(view, COMMON_HZ)
         enable(view, "spatial")
         assert view.denoiser_is_on("spatial")
-        assert power_at(view, COMMON_HZ) < 0.2*before
+        assert power_at(view, COMMON_HZ) < 0.2 * before
         all_off(view)
 
     def test_the_localised_tone_survives_it(self, view):
         all_off(view)
         before = power_at(view, LOCAL_HZ)
         enable(view, "spatial")
-        assert power_at(view, LOCAL_HZ) > 0.8*before
+        assert power_at(view, LOCAL_HZ) > 0.8 * before
         all_off(view)
 
     def test_switching_it_off_restores_the_buffer(self, view):
@@ -113,7 +113,7 @@ class TestSpatialLayer:
         all_off(view)
         plain = power_at(view, COMMON_HZ)
         enable(view, "spatial")
-        assert power_at(view, COMMON_HZ) < 0.2*plain
+        assert power_at(view, COMMON_HZ) < 0.2 * plain
         enable(view, "spatial", False)
         assert view.denoisers_enabled() == ()
         assert power_at(view, COMMON_HZ) == pytest.approx(plain, rel=1e-6)
@@ -129,11 +129,10 @@ class TestMainsLayer:
         enable(view, "mains")
         view.request_recompute(
             view.data[view.spectrogram],
-            denoise_params={"mains": {"frequency": 50.0, "width": 4.0,
-                                      "harmonics": 8}},
+            denoise_params={"mains": {"frequency": 50.0, "width": 4.0, "harmonics": 8}},
         )
         pump(1.5)
-        assert power_at(view, COMMON_HZ) < 0.5*before
+        assert power_at(view, COMMON_HZ) < 0.5 * before
         all_off(view)
 
     def test_pointing_the_comb_elsewhere_leaves_it_alone(self, view):
@@ -144,11 +143,10 @@ class TestMainsLayer:
         enable(view, "mains")
         view.request_recompute(
             view.data[view.spectrogram],
-            denoise_params={"mains": {"frequency": 60.0, "width": 4.0,
-                                      "harmonics": 8}},
+            denoise_params={"mains": {"frequency": 60.0, "width": 4.0, "harmonics": 8}},
         )
         pump(1.5)
-        assert power_at(view, COMMON_HZ) > 0.9*before
+        assert power_at(view, COMMON_HZ) > 0.9 * before
         all_off(view)
 
     def test_a_parameter_out_of_bounds_is_clamped_not_stored(self, view):

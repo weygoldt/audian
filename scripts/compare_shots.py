@@ -120,7 +120,9 @@ def main(argv=None) -> int:
         diff_path = after.parent / f"{after.name}{suffix.removesuffix('.png')}-diff.png"
         result = compare(shot, other, diff_path)
         if "error" in result:
-            rows.append((suffix.lstrip("-").removesuffix(".png"), None, result["error"]))
+            rows.append(
+                (suffix.lstrip("-").removesuffix(".png"), None, result["error"])
+            )
             worst = 100.0
             continue
         structural = result["structural"] * 100
@@ -136,10 +138,16 @@ def main(argv=None) -> int:
 
     width = max(len(name) for name, _, _ in rows)
     for name, structural, note in rows:
-        flag = " " if structural is not None and structural <= args.structural_budget else "!"
+        flag = (
+            " "
+            if structural is not None and structural <= args.structural_budget
+            else "!"
+        )
         print(f"{flag} {name:<{width}}  {note}")
 
-    print(f"\nworst structural difference: {worst:.2f}% (budget {args.structural_budget}%)")
+    print(
+        f"\nworst structural difference: {worst:.2f}% (budget {args.structural_budget}%)"
+    )
     return 0 if worst <= args.structural_budget else 1
 
 

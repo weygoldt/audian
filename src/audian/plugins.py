@@ -293,7 +293,7 @@ def panel_label(factory) -> str:
         return str(label)
     name = getattr(factory, "__name__", "") or "plugin"
     if name.startswith("audian_"):
-        name = name[len("audian_"):]
+        name = name[len("audian_") :]
     if name.endswith("_panel"):
         name = name[: -len("_panel")]
     return name.replace("_", " ").strip().capitalize() or "Plugin"
@@ -364,10 +364,7 @@ def build_panel(factory, browser):
     try:
         title, widget = made
     except (TypeError, ValueError):
-        log.error("side panel factory %s returned %r, not (title, widget)",
-                  name, made)
-        browser.notify(
-            "error", f"plugin panel {name} returned {made!r}, not a pair"
-        )
+        log.error("side panel factory %s returned %r, not (title, widget)", name, made)
+        browser.notify("error", f"plugin panel {name} returned {made!r}, not a pair")
         return None
     return str(title), widget

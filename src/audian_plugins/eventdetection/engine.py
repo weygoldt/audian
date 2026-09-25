@@ -237,6 +237,7 @@ def default_k(domain: str) -> float:
     """The `k` the sensitivity control centres on, for this domain."""
     return DEFAULT_K_TRACE if domain == TRACE else DEFAULT_K_SPECTROGRAM
 
+
 #: How far under the weakest marked example `calibrate_k` puts the cut.
 #: Exactly at it would make every example a detection by construction and
 #: leave no room for one the reader drew a little loosely.
@@ -322,12 +323,22 @@ def k_from_sensitivity(sensitivity: float, domain: str = SPECTROGRAM) -> float:
 def sensitivity_from_k(k: float, domain: str = SPECTROGRAM) -> float:
     """`k` back as a slider percentage, so the two controls stay in step."""
     k = float(np.clip(k, MIN_K, MAX_K))
-    return float(np.clip(50.0 - 50.0 * np.log(k / default_k(domain))
-                         / np.log(SENSITIVITY_SPAN), 0.0, 100.0))
+    return float(
+        np.clip(
+            50.0 - 50.0 * np.log(k / default_k(domain)) / np.log(SENSITIVITY_SPAN),
+            0.0,
+            100.0,
+        )
+    )
 
 
-def pcen(power: np.ndarray, s: float = PCEN_S, alpha: float = PCEN_ALPHA,
-         delta: float = PCEN_DELTA, r: float = PCEN_R) -> np.ndarray:
+def pcen(
+    power: np.ndarray,
+    s: float = PCEN_S,
+    alpha: float = PCEN_ALPHA,
+    delta: float = PCEN_DELTA,
+    r: float = PCEN_R,
+) -> np.ndarray:
     """Per-channel energy normalisation of a ``(freq, time)`` power image.
 
     Divides each bin by a running estimate of its own background before
@@ -346,7 +357,7 @@ def pcen(power: np.ndarray, s: float = PCEN_S, alpha: float = PCEN_ALPHA,
     # of every block is not a transient the detector would score
     zi = lfilter_zi(b, a)[None, :] * power[:, :1]
     smoothed, _ = lfilter(b, a, power, axis=1, zi=zi)
-    return (power / (1e-6 + smoothed) ** alpha + delta) ** r - delta ** r
+    return (power / (1e-6 + smoothed) ** alpha + delta) ** r - delta**r
 
 
 def represent(power: np.ndarray, how: str) -> np.ndarray:
@@ -389,8 +400,7 @@ def _scores_1d(signal: np.ndarray, patches: Sequence[np.ndarray]) -> list:
     n = patches[0].size
     if signal.size < n:
         return []
-    den = _sliding_norm(_window_sum(signal, n),
-                        _window_sum(signal * signal, n), n)
+    den = _sliding_norm(_window_sum(signal, n), _window_sum(signal * signal, n), n)
     out = []
     for p in patches:
         t = p - p.mean()
@@ -418,8 +428,11 @@ def _scores_patch(image: np.ndarray, patches: Sequence[np.ndarray]) -> list:
         raise ValueError("template and image must cover the same bins")
     if image.shape[1] < n:
         return []
-    den = _sliding_norm(_window_sum(image.sum(axis=0), n),
-                        _window_sum((image * image).sum(axis=0), n), nf * n)
+    den = _sliding_norm(
+        _window_sum(image.sum(axis=0), n),
+        _window_sum((image * image).sum(axis=0), n),
+        nf * n,
+    )
     out = []
     for p in patches:
         t = p - p.mean()
@@ -427,8 +440,7 @@ def _scores_patch(image: np.ndarray, patches: Sequence[np.ndarray]) -> list:
         if tn < EPS:
             out.append(np.zeros(den.size))
             continue
-        out.append(oaconvolve(image, t[::-1, ::-1], mode="valid")[0]
-                   / (den * tn))
+        out.append(oaconvolve(image, t[::-1, ::-1], mode="valid")[0] / (den * tn))
     return out
 
 
@@ -508,8 +520,10 @@ class Settings:
             gap = None
         nms_enabled = bool(self.nms_enabled)
         overlap = float(self.nms_overlap)
-        overlap = float(np.clip(overlap, 0.0, 1.0)) if np.isfinite(overlap) else (
-            DEFAULT_NMS_OVERLAP
+        overlap = (
+            float(np.clip(overlap, 0.0, 1.0))
+            if np.isfinite(overlap)
+            else (DEFAULT_NMS_OVERLAP)
         )
         floor = None if self.power_floor_db is None else float(self.power_floor_db)
         if floor is not None:
@@ -665,8 +679,13 @@ def _spectrogram_of(samples: np.ndarray, rate: float, nfft: int, hop: int):
 
     def one(signal):
         freqs, times, power = spectrogram(
-            signal, rate, freq_resolution=None, overlap_frac=None,
-            n_fft=int(nfft), n_overlap=int(max(nfft - hop, 0)))
+            signal,
+            rate,
+            freq_resolution=None,
+            overlap_frac=None,
+            n_fft=int(nfft),
+            n_overlap=int(max(nfft - hop, 0)),
+        )
         return np.asarray(power), np.asarray(freqs), np.asarray(times)
 
     if samples.ndim <= 1:
@@ -688,8 +707,13 @@ def _band_slice(freqs: np.ndarray, f0, f1) -> np.ndarray:
     return keep if keep.any() else np.ones(freqs.size, dtype=bool)
 
 
-def learn(samples: np.ndarray, rate: float, examples: Iterable[Example],
-          settings: Settings, t_offset: float = 0.0) -> Templates:
+def learn(
+    samples: np.ndarray,
+    rate: float,
+    examples: Iterable[Example],
+    settings: Settings,
+    t_offset: float = 0.0,
+) -> Templates:
     """Cut the marked examples out of `samples` as templates.
 
     `t_offset` is the time of the first sample, so that example times taken
@@ -699,8 +723,9 @@ def learn(samples: np.ndarray, rate: float, examples: Iterable[Example],
     settings = settings.normalized()
     examples = [e for e in examples if e.t1 > e.t0]
     if not examples:
-        return Templates(domain=settings.domain, rate=rate,
-                         representation=settings.representation)
+        return Templates(
+            domain=settings.domain, rate=rate, representation=settings.representation
+        )
 
     duration = float(np.median([e.t1 - e.t0 for e in examples]))
     f0, f1 = _band_of(examples)
@@ -721,11 +746,17 @@ def learn(samples: np.ndarray, rate: float, examples: Iterable[Example],
             # padded slice, because `hilbert` of a whole recording is a
             # transform of millions of samples to keep a few thousand.
             pad = min(n, i, samples.size - i - n)
-            piece = np.abs(hilbert(samples[i - pad:i + n + pad]))
-            patches.append(piece[pad:pad + n])
-        return Templates(patches=patches, domain=TRACE, rate=rate,
-                         representation=settings.representation,
-                         duration_s=duration, f_low_hz=f0, f_high_hz=f1)
+            piece = np.abs(hilbert(samples[i - pad : i + n + pad]))
+            patches.append(piece[pad : pad + n])
+        return Templates(
+            patches=patches,
+            domain=TRACE,
+            rate=rate,
+            representation=settings.representation,
+            duration_s=duration,
+            f_low_hz=f0,
+            f_high_hz=f1,
+        )
 
     nfft, hop = _resolution_for(duration, rate)
     nfft = settings.nfft or nfft
@@ -749,19 +780,27 @@ def learn(samples: np.ndarray, rate: float, examples: Iterable[Example],
         image = represent(power[keep], settings.representation)
         j = int(np.searchsorted(times, (i - lo) / rate))
         if j + nt <= image.shape[1]:
-            patches.append(image[:, j:j + nt])
+            patches.append(image[:, j : j + nt])
     if patches:
         # a ragged patch would be scored against a mismatched image
         rows = min(p.shape[0] for p in patches)
         patches = [p[:rows] for p in patches]
-    return Templates(patches=patches, domain=SPECTROGRAM, rate=rate,
-                     representation=settings.representation,
-                     duration_s=duration, f_low_hz=f0, f_high_hz=f1,
-                     nfft=nfft, hop=hop)
+    return Templates(
+        patches=patches,
+        domain=SPECTROGRAM,
+        rate=rate,
+        representation=settings.representation,
+        duration_s=duration,
+        f_low_hz=f0,
+        f_high_hz=f1,
+        nfft=nfft,
+        hop=hop,
+    )
 
 
-def learn_from_reader(reader, rate: float, examples: Iterable[Example],
-                      settings: Settings) -> Templates:
+def learn_from_reader(
+    reader, rate: float, examples: Iterable[Example], settings: Settings
+) -> Templates:
     """Learn examples through bounded reads rather than their whole span.
 
     The examples a reader chooses may be minutes apart.  Reading from the
@@ -778,8 +817,9 @@ def learn_from_reader(reader, rate: float, examples: Iterable[Example],
     settings = settings.normalized()
     examples = [e for e in examples if e.t1 > e.t0]
     if not examples:
-        return Templates(domain=settings.domain, rate=rate,
-                         representation=settings.representation)
+        return Templates(
+            domain=settings.domain, rate=rate, representation=settings.representation
+        )
 
     duration = float(np.median([e.t1 - e.t0 for e in examples]))
     f0, f1 = _band_of(examples)
@@ -797,8 +837,7 @@ def learn_from_reader(reader, rate: float, examples: Iterable[Example],
     learned = None
     for source in examples:
         example = Example(source.t0, source.t0 + duration, f0, f1)
-        samples, actual_t0 = reader(example.t0 - context,
-                                    example.t1 + context)
+        samples, actual_t0 = reader(example.t0 - context, example.t1 + context)
         if np.asarray(samples).size == 0:
             continue
         one = learn(samples, rate, [example], shared, actual_t0)
@@ -807,15 +846,26 @@ def learn_from_reader(reader, rate: float, examples: Iterable[Example],
         patches.extend(one.patches)
 
     if learned is None:
-        return Templates(domain=settings.domain, rate=rate,
-                         representation=settings.representation,
-                         duration_s=duration, f_low_hz=f0, f_high_hz=f1)
-    return replace(learned, patches=patches, duration_s=duration,
-                   f_low_hz=f0, f_high_hz=f1)
+        return Templates(
+            domain=settings.domain,
+            rate=rate,
+            representation=settings.representation,
+            duration_s=duration,
+            f_low_hz=f0,
+            f_high_hz=f1,
+        )
+    return replace(
+        learned, patches=patches, duration_s=duration, f_low_hz=f0, f_high_hz=f1
+    )
 
 
-def score_curve(samples: np.ndarray, rate: float, templates: Templates,
-                settings: Settings, t_offset: float = 0.0):
+def score_curve(
+    samples: np.ndarray,
+    rate: float,
+    templates: Templates,
+    settings: Settings,
+    t_offset: float = 0.0,
+):
     """Score every offset of `samples`, as ``(score, times, level_db)``.
 
     `times` are the **onsets** a match would have: a ``valid`` correlation
@@ -838,8 +888,9 @@ def score_curve(samples: np.ndarray, rate: float, templates: Templates,
         n = templates.patches[0].size
         if signal.size < n:
             return np.zeros(0), np.zeros(0), None
-        score = _combine(_scores_1d(signal, _to_score(templates, settings)),
-                         settings.combiner)
+        score = _combine(
+            _scores_1d(signal, _to_score(templates, settings)), settings.combiner
+        )
         if score.size == 0:
             return np.zeros(0), np.zeros(0), None
         times = t_offset + np.arange(score.size) / rate
@@ -848,8 +899,9 @@ def score_curve(samples: np.ndarray, rate: float, templates: Templates,
             s2 = _window_sum(samples * samples, n)
             rms = np.sqrt(np.maximum(s2 / n, EPS))
             with np.errstate(divide="ignore"):
-                level = 20.0 * np.log10(np.maximum(rms, EPS)
-                                        / max(np.abs(samples).max(), EPS))
+                level = 20.0 * np.log10(
+                    np.maximum(rms, EPS) / max(np.abs(samples).max(), EPS)
+                )
         return score, times, level
 
     nfft = templates.nfft or settings.nfft
@@ -867,24 +919,27 @@ def score_curve(samples: np.ndarray, rate: float, templates: Templates,
     n = templates.patches[0].shape[1]
     if image.shape[1] < n:
         return np.zeros(0), np.zeros(0), None
-    score = _combine(_scores_patch(image, _to_score(templates, settings)),
-                     settings.combiner)
+    score = _combine(
+        _scores_patch(image, _to_score(templates, settings)), settings.combiner
+    )
     if score.size == 0:
         return np.zeros(0), np.zeros(0), None
-    times = t_offset + times_ax[:score.size]
+    times = t_offset + times_ax[: score.size]
     level = None
     if settings.power_floor_db is not None:
         band_power = band.sum(axis=0)
         s1 = _window_sum(band_power, n)
         with np.errstate(divide="ignore"):
-            level = 10.0 * np.log10(np.maximum(s1 / n, EPS)
-                                    / max(band_power.max(), EPS))
-        level = level[:score.size]
+            level = 10.0 * np.log10(
+                np.maximum(s1 / n, EPS) / max(band_power.max(), EPS)
+            )
+        level = level[: score.size]
     return score, times, level
 
 
-def _subspace_basis(patches: Sequence[np.ndarray],
-                    components: int = SUBSPACE_COMPONENTS) -> list:
+def _subspace_basis(
+    patches: Sequence[np.ndarray], components: int = SUBSPACE_COMPONENTS
+) -> list:
     """An orthonormal basis for what the marked examples have in common.
 
     Averaging asks the examples to agree on one shape.  This asks only that
@@ -936,8 +991,7 @@ def _combine(curves: list, how: str) -> np.ndarray:
         return np.zeros(0)
     if how == SUBSPACE:
         # the squared cosine onto the span of the basis, back as a cosine
-        return np.sqrt(np.clip(np.sum(np.square(np.stack(curves)), axis=0),
-                               0.0, 1.0))
+        return np.sqrt(np.clip(np.sum(np.square(np.stack(curves)), axis=0), 0.0, 1.0))
     if len(curves) == 1:
         return curves[0]
     stack = np.stack(curves)
@@ -960,9 +1014,13 @@ def threshold_of(score: np.ndarray, k: float) -> float:
     return med + float(k) * max(mad, EPS)
 
 
-def calibrate_k(score: np.ndarray, times: np.ndarray,
-                examples: Iterable[Example], templates: Templates,
-                margin: float = CALIBRATION_MARGIN) -> Optional[float]:
+def calibrate_k(
+    score: np.ndarray,
+    times: np.ndarray,
+    examples: Iterable[Example],
+    templates: Templates,
+    margin: float = CALIBRATION_MARGIN,
+) -> Optional[float]:
     """The `k` that puts the cut just under the weakest marked example.
 
     A detector that cannot find the events it was handed is set too high,
@@ -1021,8 +1079,13 @@ def _extent(times: np.ndarray, peak: int, duration_s: float) -> tuple:
     return t0, t0 + float(duration_s)
 
 
-def pick(score: np.ndarray, times: np.ndarray, level, templates: Templates,
-          settings: Settings) -> list:
+def pick(
+    score: np.ndarray,
+    times: np.ndarray,
+    level,
+    templates: Templates,
+    settings: Settings,
+) -> list:
     """Peaks of a score curve as candidate events.
 
     SciPy's peak picker performs the non-maximum suppression.  Its
@@ -1053,9 +1116,16 @@ def pick(score: np.ndarray, times: np.ndarray, level, templates: Templates,
     out = []
     for p in peaks:
         t0, t1 = _extent(times, int(p), templates.duration_s)
-        out.append(Candidate(t0, t1, float(score[p]),
-                             templates.f_low_hz, templates.f_high_hz,
-                             templates.channel))
+        out.append(
+            Candidate(
+                t0,
+                t1,
+                float(score[p]),
+                templates.f_low_hz,
+                templates.f_high_hz,
+                templates.channel,
+            )
+        )
     return _tidy(out, templates, settings)
 
 
@@ -1078,15 +1148,15 @@ def _tidy(found: list, templates: Templates, settings: Settings) -> list:
     for c in found[1:]:
         last = merged[-1]
         if c.t0 - last.t1 < gap:
-            merged[-1] = last._replace(t1=max(last.t1, c.t1),
-                                       score=max(last.score, c.score))
+            merged[-1] = last._replace(
+                t1=max(last.t1, c.t1), score=max(last.score, c.score)
+            )
         else:
             merged.append(c)
     return _within_duration(merged, templates, settings)
 
 
-def tidy(found: Iterable[Candidate], templates: Templates,
-         settings: Settings) -> list:
+def tidy(found: Iterable[Candidate], templates: Templates, settings: Settings) -> list:
     """Apply merge and duration rules to an already-scored candidate stream.
 
     Public for streaming callers: each block is peak-picked independently,
@@ -1095,8 +1165,7 @@ def tidy(found: Iterable[Candidate], templates: Templates,
     return _tidy(list(found), templates, settings.normalized())
 
 
-def _within_duration(found: list, templates: Templates,
-                     settings: Settings) -> list:
+def _within_duration(found: list, templates: Templates, settings: Settings) -> list:
     """Drop what is too short or too long to be one of the marked events.
 
     Only ever bites after a merge, since an unmerged detection is exactly
@@ -1111,12 +1180,16 @@ def _within_duration(found: list, templates: Templates,
     return [c for c in found if lo <= (c.t1 - c.t0) <= hi]
 
 
-def detect(samples: np.ndarray, rate: float, templates: Templates,
-           settings: Settings, t_offset: float = 0.0) -> list:
+def detect(
+    samples: np.ndarray,
+    rate: float,
+    templates: Templates,
+    settings: Settings,
+    t_offset: float = 0.0,
+) -> list:
     """Every place in `samples` that looked like the marked examples."""
     if not templates.ok:
         return []
     settings = settings.normalized()
-    score, times, level = score_curve(samples, rate, templates, settings,
-                                      t_offset)
+    score, times, level = score_curve(samples, rate, templates, settings, t_offset)
     return pick(score, times, level, templates, settings)

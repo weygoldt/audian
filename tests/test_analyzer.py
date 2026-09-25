@@ -132,7 +132,12 @@ def test_the_results_dialog_shows_each_column_in_its_own_format(browser):
     headers = [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
     assert headers[:4] == ["tstart/s", "tend/s", "duration/s", "channel"]
     # 8 kHz resolves 125 us, so PlainAnalyzer formats times to 3 decimals.
-    assert [table.item(0, c).text() for c in range(4)] == ["1.000", "2.500", "1.500", "1"]
+    assert [table.item(0, c).text() for c in range(4)] == [
+        "1.000",
+        "2.500",
+        "1.500",
+        "1",
+    ]
 
 
 def test_saving_writes_every_analyzers_columns_once(browser, save_to):

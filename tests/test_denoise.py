@@ -46,7 +46,7 @@ def spatial_block(patterns, frames=4, freqs=3):
 
 def kept(out, source):
     """Fraction of power the gate let through."""
-    return float(out.sum()/source.sum())
+    return float(out.sum() / source.sum())
 
 
 def spatial(block, threshold=6.0, softness=3.0):
@@ -74,7 +74,7 @@ class TestSpatialCoherence:
         the default is no longer defensible and this fails.
         """
         entry = denoise.denoiser("spatial")
-        fish = spatial_block([1.0, 0.31, 0.69, 0.102])       # 9.8x max/min
+        fish = spatial_block([1.0, 0.31, 0.69, 0.102])  # 9.8x max/min
         hum = spatial_block([1.0, 1.0, 1.0, 1.0])
         freqs = np.arange(fish.shape[2], dtype=float)
         f = entry.apply(fish, freqs, entry.defaults())
@@ -108,13 +108,11 @@ class TestSpatialCoherence:
         assert np.array_equal(b, before)
 
     def test_threshold_moves_the_gate(self):
-        b = spatial_block([1.0, 0.1, 0.1, 0.1])              # 10 dB of spread
-        assert kept(spatial(b, threshold=0.0), b) > kept(
-            spatial(b, threshold=30.0), b
-        )
+        b = spatial_block([1.0, 0.1, 0.1, 0.1])  # 10 dB of spread
+        assert kept(spatial(b, threshold=0.0), b) > kept(spatial(b, threshold=30.0), b)
 
     def test_zero_softness_is_a_hard_cut(self):
-        b = spatial_block([1.0, 0.1, 0.1, 0.1])              # 10 dB
+        b = spatial_block([1.0, 0.1, 0.1, 0.1])  # 10 dB
         assert kept(spatial(b, threshold=20.0, softness=0.0), b) == pytest.approx(0.0)
         assert kept(spatial(b, threshold=5.0, softness=0.0), b) == pytest.approx(1.0)
 
@@ -182,7 +180,7 @@ class TestMainsComb:
         harmonic, which is the failure this design exists to avoid.
         """
         b = comb_block([50, 100, 150])
-        pulse = 4                                   # one column, every bin
+        pulse = 4  # one column, every bin
         b[pulse, :, :] = NEEDLE
         out = mains(b, frequency=50.0, harmonics=3)
         assert out[pulse].mean() == pytest.approx(NEEDLE, rel=1e-6)
@@ -196,7 +194,7 @@ class TestMainsComb:
         b = comb_block([50])
         half = mains(b, frequency=50.0, harmonics=1, strength=50.0)
         full = mains(b, frequency=50.0, harmonics=1, strength=100.0)
-        assert at(half, 50) == pytest.approx(FLOOR + 0.5*(NEEDLE - FLOOR), rel=1e-6)
+        assert at(half, 50) == pytest.approx(FLOOR + 0.5 * (NEEDLE - FLOOR), rel=1e-6)
         assert at(full, 50) == pytest.approx(FLOOR, abs=0.01)
 
     def test_zero_strength_is_a_no_op(self):
@@ -225,7 +223,7 @@ class TestMainsComb:
         act on a floor it cannot see beats inventing one, but it does mean
         this is the first knob to widen when hum survives the filter.
         """
-        b = comb_block([50], width=4.0)                 # hum spans 46-54 Hz
+        b = comb_block([50], width=4.0)  # hum spans 46-54 Hz
         narrow = mains(b, frequency=50.0, harmonics=1, width=1.0)
         assert at(narrow, 50, width=1.0) == pytest.approx(NEEDLE)
 
@@ -249,7 +247,7 @@ class TestMainsComb:
         """A harmonic loud on one electrode and absent on another must be
         treated separately on each, which is what a real array does."""
         b = np.full((3, 2, len(FREQS)), FLOOR)
-        b[:, 0, np.abs(FREQS - 50) <= 0.5] = NEEDLE      # only channel 0
+        b[:, 0, np.abs(FREQS - 50) <= 0.5] = NEEDLE  # only channel 0
         out = mains(b, frequency=50.0, harmonics=1)
         assert out[:, 0][:, np.abs(FREQS - 50) <= 0.5].mean() == pytest.approx(
             FLOOR, abs=0.01
@@ -267,13 +265,11 @@ class TestChain:
 
     def test_both_layers_run(self):
         b = comb_block([50])
-        b[:, 1, :] *= 1.0                       # identical channels: common mode
-        out = denoise.apply_chain(
-            b, FREQS, ("mains", "spatial"), denoise.defaults()
-        )
+        b[:, 1, :] *= 1.0  # identical channels: common mode
+        out = denoise.apply_chain(b, FREQS, ("mains", "spatial"), denoise.defaults())
         # mains takes the needle down, spatial then gates the whole
         # common-mode picture
-        assert out.sum() < 0.2*b.sum()
+        assert out.sum() < 0.2 * b.sum()
 
     def test_order_is_the_registry_order_not_the_tick_order(self):
         b = comb_block([50])
@@ -304,10 +300,12 @@ class TestChunkInvariance:
         b = rng.random((24, 4, len(FREQS))) + 1e-3
         for entry in denoise.all_denoisers():
             whole = entry.apply(b, FREQS, entry.defaults())
-            halves = np.concatenate([
-                entry.apply(b[:10], FREQS, entry.defaults()),
-                entry.apply(b[10:], FREQS, entry.defaults()),
-            ])
+            halves = np.concatenate(
+                [
+                    entry.apply(b[:10], FREQS, entry.defaults()),
+                    entry.apply(b[10:], FREQS, entry.defaults()),
+                ]
+            )
             assert np.array_equal(whole, halves), entry.key
 
     def test_the_whole_chain_is_pointwise_in_time(self):
@@ -315,10 +313,12 @@ class TestChunkInvariance:
         b = rng.random((30, 4, len(FREQS))) + 1e-3
         params = denoise.defaults()
         whole = denoise.apply_chain(b, FREQS, denoise.keys(), params)
-        pieces = np.concatenate([
-            denoise.apply_chain(b[i:i + 7], FREQS, denoise.keys(), params)
-            for i in range(0, len(b), 7)
-        ])
+        pieces = np.concatenate(
+            [
+                denoise.apply_chain(b[i : i + 7], FREQS, denoise.keys(), params)
+                for i in range(0, len(b), 7)
+            ]
+        )
         assert np.array_equal(whole, pieces)
 
 
@@ -393,10 +393,12 @@ class TestPluginRegistration:
         """
         denoise.clear()
         try:
-            late = denoise.Denoiser(key="late", name="Late", apply=lambda b, f, v: b,
-                                    order=90)
-            early = denoise.Denoiser(key="early", name="Early", apply=lambda b, f, v: b,
-                                     order=10)
+            late = denoise.Denoiser(
+                key="late", name="Late", apply=lambda b, f, v: b, order=90
+            )
+            early = denoise.Denoiser(
+                key="early", name="Early", apply=lambda b, f, v: b, order=10
+            )
             denoise.register(late)
             denoise.register(early)
             assert denoise.keys() == ("early", "late")

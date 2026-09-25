@@ -219,7 +219,9 @@ def test_shift_clicking_a_lane_extends_the_selection():
     from PySide6.QtCore import Qt
 
     stub, calls = _clickable(current=2)
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier),), 6)
+    DataBrowser.mouse_clicked(
+        stub, (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier),), 6
+    )
     assert calls == [(6, True)]
 
 
@@ -254,11 +256,19 @@ def test_ctrl_clicking_a_lane_in_label_mode_does_not_relayout_the_stack():
     stub, calls = _clickable(current=0, mode=DataBrowser.MODE_LABEL)
     stub.mouse_moved = lambda evt, channel: None
     stub.select_label_at = lambda channel, pos: True
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier),), 5)
+    DataBrowser.mouse_clicked(
+        stub,
+        (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier),),
+        5,
+    )
     assert calls == []
 
     stub, calls = _clickable(current=0, mode=DataBrowser.MODE_ZOOM)
-    DataBrowser.mouse_clicked(stub, (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier),), 5)
+    DataBrowser.mouse_clicked(
+        stub,
+        (_Click(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier),),
+        5,
+    )
     assert calls == [(5, False)]
 
 

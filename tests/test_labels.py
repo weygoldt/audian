@@ -207,8 +207,7 @@ def test_a_non_finite_channel_costs_its_row_and_not_the_recording(tmp_path):
     """
     path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
-        ",".join(COLUMNS)
-        + "\nevent,span,nan,1.0,2.0,,,\nevent,span,0,3.0,4.0,,,\n",
+        ",".join(COLUMNS) + "\nevent,span,nan,1.0,2.0,,,\nevent,span,0,3.0,4.0,,,\n",
         encoding="utf-8",
     )
     store = LabelSet(DEFAULT_CATEGORIES)
@@ -240,7 +239,7 @@ def test_a_non_finite_start_time_drops_the_row(tmp_path):
 
 
 def test_an_overflowing_number_is_read_as_absent(tmp_path):
-    """"1e400" parses as inf, and `int(inf)` raises OverflowError."""
+    """ "1e400" parses as inf, and `int(inf)` raises OverflowError."""
     path = tmp_path / "rec-editable-labels.csv"
     path.write_text(
         ",".join(COLUMNS) + "\nevent,span,1e400,1.0,2.0,,,\n", encoding="utf-8"
@@ -403,7 +402,9 @@ def labelling(browser):
     settle()
 
 
-def send(browser, channel, kind, x, y, button, buttons, mods=Qt.KeyboardModifier.NoModifier):
+def send(
+    browser, channel, kind, x, y, button, buttons, mods=Qt.KeyboardModifier.NoModifier
+):
     """One real mouse event, routed the way a pointer is.
 
     The *global* position is not decoration: `QGraphicsScene` finds the item
@@ -1089,8 +1090,16 @@ def ctrl_click(browser, channel, ax, t, y):
     """Pick the label at data ``(t, y)`` the way a reader does."""
     p = ax.getViewBox().mapViewToScene(pg.Point(t, y))
     for kind, button, buttons in (
-        (QEvent.Type.MouseButtonPress, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton),
-        (QEvent.Type.MouseButtonRelease, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton),
+        (
+            QEvent.Type.MouseButtonPress,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+        ),
+        (
+            QEvent.Type.MouseButtonRelease,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+        ),
     ):
         application = QApplication.instance()
         viewport = browser.figs[channel].viewport()
@@ -1136,11 +1145,41 @@ def drag_scene(browser, channel, x0, y0, x1, y1, mods=Qt.KeyboardModifier.NoModi
     this exercises the one a reader actually takes.
     """
     for kind, x, y, button, buttons in (
-        (QEvent.Type.MouseMove, x0, y0, Qt.MouseButton.NoButton, Qt.MouseButton.NoButton),
-        (QEvent.Type.MouseButtonPress, x0, y0, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton),
-        (QEvent.Type.MouseMove, (x0 + x1) / 2, (y0 + y1) / 2, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton),
-        (QEvent.Type.MouseMove, x1, y1, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton),
-        (QEvent.Type.MouseButtonRelease, x1, y1, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton),
+        (
+            QEvent.Type.MouseMove,
+            x0,
+            y0,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+        ),
+        (
+            QEvent.Type.MouseButtonPress,
+            x0,
+            y0,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+        ),
+        (
+            QEvent.Type.MouseMove,
+            (x0 + x1) / 2,
+            (y0 + y1) / 2,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+        ),
+        (
+            QEvent.Type.MouseMove,
+            x1,
+            y1,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+        ),
+        (
+            QEvent.Type.MouseButtonRelease,
+            x1,
+            y1,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+        ),
     ):
         application = QApplication.instance()
         viewport = browser.figs[channel].viewport()
@@ -1177,7 +1216,9 @@ def grip_at(overlay, x, y):
     )
 
 
-def drag_grip(browser, channel, overlay, kind, dx, dy, mods=Qt.KeyboardModifier.NoModifier):
+def drag_grip(
+    browser, channel, overlay, kind, dx, dy, mods=Qt.KeyboardModifier.NoModifier
+):
     """Drag one grip `dx`, `dy` device pixels."""
     at = grip(overlay, kind).scenePos()
     drag_scene(browser, channel, at.x(), at.y(), at.x() + dx, at.y() + dy, mods)
@@ -1681,11 +1722,29 @@ def test_a_ctrl_drag_reaches_for_a_label_and_never_writes_one(labelling):
     label = browser.labels.labels[0]
     assert len(browser.labels) == 1
     # a Ctrl+drag well inside the label: a wobble, not a new box
-    drag(browser, 1, ax, 1.9, 1900.0, 2.1, 2100.0, mods=Qt.KeyboardModifier.ControlModifier)
+    drag(
+        browser,
+        1,
+        ax,
+        1.9,
+        1900.0,
+        2.1,
+        2100.0,
+        mods=Qt.KeyboardModifier.ControlModifier,
+    )
     assert len(browser.labels) == 1, "a Ctrl+drag wrote a label"
     assert browser.selected_label is label
     # and one over empty lane picks nothing, and still writes nothing
-    drag(browser, 1, ax, 3.4, 3400.0, 3.6, 3600.0, mods=Qt.KeyboardModifier.ControlModifier)
+    drag(
+        browser,
+        1,
+        ax,
+        3.4,
+        3400.0,
+        3.6,
+        3600.0,
+        mods=Qt.KeyboardModifier.ControlModifier,
+    )
     assert len(browser.labels) == 1
     assert browser.selected_label is None
 
@@ -1713,7 +1772,15 @@ def test_a_grip_click_that_moves_nothing_is_not_an_edit(labelling):
     # all, so a press and release in one place never reaches the write-back
     # and would prove nothing.  Out and back is the wobble.
     at = grip(overlay, "t").scenePos()
-    send(browser, 0, QEvent.Type.MouseMove, at.x(), at.y(), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton)
+    send(
+        browser,
+        0,
+        QEvent.Type.MouseMove,
+        at.x(),
+        at.y(),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton,
+    )
     send(
         browser,
         0,
@@ -1723,8 +1790,24 @@ def test_a_grip_click_that_moves_nothing_is_not_an_edit(labelling):
         Qt.MouseButton.LeftButton,
         Qt.MouseButton.LeftButton,
     )
-    send(browser, 0, QEvent.Type.MouseMove, at.x() + 9, at.y(), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton)
-    send(browser, 0, QEvent.Type.MouseMove, at.x(), at.y(), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton)
+    send(
+        browser,
+        0,
+        QEvent.Type.MouseMove,
+        at.x() + 9,
+        at.y(),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+    )
+    send(
+        browser,
+        0,
+        QEvent.Type.MouseMove,
+        at.x(),
+        at.y(),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+    )
     send(
         browser,
         0,

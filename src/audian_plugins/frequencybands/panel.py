@@ -306,7 +306,9 @@ class SweepWorker(QObject):
             # The transform's own step, derived the way thunderlab derives it
             # (`n_overlap = int(n_fft * overlap_frac)`), because the chunk
             # walk below has to land on the same grid it does.
-            hop = max(nfft - int(nfft * float(self.settings.get("overlap_frac", 0.5))), 1)
+            hop = max(
+                nfft - int(nfft * float(self.settings.get("overlap_frac", 0.5))), 1
+            )
             step = int(CHUNK_S * rate)
             start = 0
             while start < total:
@@ -326,9 +328,7 @@ class SweepWorker(QObject):
                 offset = start / rate
                 frames.extend(
                     (t + offset, hz)
-                    for t, hz in frames_of_block(
-                        block, rate, self.settings, self.token
-                    )
+                    for t, hz in frames_of_block(block, rate, self.settings, self.token)
                 )
                 # Resume on the window grid, not at the chunk edge.  A window
                 # needs `nfft` samples, so the last one this chunk can
@@ -427,9 +427,7 @@ class BandPanel(QWidget):
         self.tablew.setHorizontalHeaderLabels(["#", "Label", "Start", "Hz"])
         self.tablew.verticalHeader().setVisible(False)
         self.tablew.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.tablew.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
+        self.tablew.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tablew.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tablew.setAlternatingRowColors(True)
         self.tablew.setMinimumHeight(theme.S12 * 10)
@@ -774,14 +772,14 @@ class BandPanel(QWidget):
                 "no spectrogram panel; the recording will be read instead"
             )
             return
-        parts = [f"window {pipeline['nfft']}",
-                 f"overlap {round(100 * pipeline['overlap_frac'])}%"]
+        parts = [
+            f"window {pipeline['nfft']}",
+            f"overlap {round(100 * pipeline['overlap_frac'])}%",
+        ]
         if pipeline.get("sos") is not None:
             parts.append("filtered")
         enabled = pipeline.get("denoisers") or ()
-        parts.append(
-            "denoise: " + ", ".join(enabled) if enabled else "no denoising"
-        )
+        parts.append("denoise: " + ", ".join(enabled) if enabled else "no denoising")
         self.pipelinew.setText(" · ".join(parts))
 
     # --- lifecycle --------------------------------------------------------
@@ -998,8 +996,7 @@ class BandPanel(QWidget):
         is_reference = stem.endswith(B.REFERENCE_TAG)
         if is_reference:
             stem = stem[: -len(B.REFERENCE_TAG)]
-        made, complaints = B.read(chosen.with_name(stem + chosen.suffix),
-                                  is_reference)
+        made, complaints = B.read(chosen.with_name(stem + chosen.suffix), is_reference)
         for complaint in complaints:
             self.browser.notify("warning", f"frequency bands: {complaint}")
         if not len(made):
@@ -1068,19 +1065,21 @@ class BandPanel(QWidget):
         n = len(self.bands)
         labelled = sum(1 for b in self.bands if b.category)
         state = "unsaved" if self.bands.is_dirty() else "saved"
-        selected = (
-            f" · {len(self.selection)} selected" if self.selection else ""
-        )
+        selected = f" · {len(self.selection)} selected" if self.selection else ""
         self.statusw.setText(
             f"{n} band{'' if n == 1 else 's'} · {labelled} labelled{selected} · {state}"
         )
         self.undow.setEnabled(self.bands.can_undo())
         self.undow.setToolTip(
-            f"Undo {self.bands.undo_text()}" if self.bands.can_undo() else "Nothing to undo"
+            f"Undo {self.bands.undo_text()}"
+            if self.bands.can_undo()
+            else "Nothing to undo"
         )
         self.redow.setEnabled(self.bands.can_redo())
         self.redow.setToolTip(
-            f"Redo {self.bands.redo_text()}" if self.bands.can_redo() else "Nothing to redo"
+            f"Redo {self.bands.redo_text()}"
+            if self.bands.can_redo()
+            else "Nothing to redo"
         )
         self.mergew.setEnabled(len(self.selection) >= 2)
         self.deletew.setEnabled(bool(self.selection))
@@ -1090,9 +1089,7 @@ class BandPanel(QWidget):
             if self.reference is not None
             else "no reference loaded"
         )
-        self.saverefw.setEnabled(
-            self.reference is not None and len(self.reference) > 0
-        )
+        self.saverefw.setEnabled(self.reference is not None and len(self.reference) > 0)
         self.clearrefw.setEnabled(self.reference is not None)
         self._fill_label_choices()
         self._fill_table()
@@ -1237,9 +1234,7 @@ class BandPanel(QWidget):
         else:
             band = self.bands.get(hit)
             if hit not in self.selection:
-                menu.addAction(
-                    f"Select band {hit}", lambda: self.set_selection([hit])
-                )
+                menu.addAction(f"Select band {hit}", lambda: self.set_selection([hit]))
             act = menu.addAction(f"Split band {hit} at {t:.3f} s")
             act.triggered.connect(lambda _=False: self._split(hit, t))
             act.setEnabled(band is not None and band.t0 < t < band.t1)
@@ -1257,9 +1252,7 @@ class BandPanel(QWidget):
                 )
             if self.bands.categories():
                 label_menu.addSeparator()
-            label_menu.addAction(
-                "Clear label", lambda: self._label_ids([hit], "")
-            )
+            label_menu.addAction("Clear label", lambda: self._label_ids([hit], ""))
             menu.addSeparator()
             menu.addAction(f"Delete band {hit}", lambda: self._delete_ids([hit]))
         menu.exec(screen_pos.toPoint())
@@ -1283,8 +1276,7 @@ class BandPanel(QWidget):
         if len(ids) < 2:
             self.browser.notify(
                 "warning",
-                "frequency bands: a merge needs two bands; Ctrl+click a "
-                "second one",
+                "frequency bands: a merge needs two bands; Ctrl+click a second one",
             )
             return
         chosen = [self.bands.get(i) for i in ids]
@@ -1466,13 +1458,10 @@ class BandPanel(QWidget):
                         "out or choose a shorter window",
                     )
                     return
-                block = np.asarray(
-                    data[start:stop, self.channel()], dtype=np.float64
-                )
+                block = np.asarray(data[start:stop, self.channel()], dtype=np.float64)
             offset = start / rate
             frames = [
-                (t + offset, hz)
-                for t, hz in frames_of_block(block, rate, settings)
+                (t + offset, hz) for t, hz in frames_of_block(block, rate, settings)
             ]
             found = T.link(
                 frames,
@@ -1508,9 +1497,7 @@ class BandPanel(QWidget):
         if tolerance <= 0 or width <= tolerance:
             return
         where = (
-            "the spectrogram's window"
-            if self.follows_display()
-            else "the window below"
+            "the spectrogram's window" if self.follows_display() else "the window below"
         )
         self.browser.notify(
             "warning",
@@ -1609,9 +1596,7 @@ class BandPanel(QWidget):
         settings = self._settings()
         self.warn_if_too_coarse(settings)
         self._token = CancelToken()
-        self._worker = SweepWorker(
-            paths, settings, self.channel(), self._token
-        )
+        self._worker = SweepWorker(paths, settings, self.channel(), self._token)
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -1657,9 +1642,7 @@ class BandPanel(QWidget):
     # --- importing --------------------------------------------------------
 
     def _import(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, "wavetracker output directory"
-        )
+        folder = QFileDialog.getExistingDirectory(self, "wavetracker output directory")
         if not folder:
             return
         try:

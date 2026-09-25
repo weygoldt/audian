@@ -312,7 +312,6 @@ class BandOverlay:
             self.curves[key] = item
         return item
 
-
     def _text(self, index: int):
         while len(self.texts) <= index:
             item = pg.TextItem(anchor=(0.0, 1.0))
@@ -391,8 +390,13 @@ class BandOverlay:
                 view.sigResized.disconnect(self._view_changed)
             except (RuntimeError, TypeError):
                 pass
-        for item in [self.selected, self.dots, *self.curves.values(),
-                     *self.ref_curves.values(), *self.texts]:
+        for item in [
+            self.selected,
+            self.dots,
+            *self.curves.values(),
+            *self.ref_curves.values(),
+            *self.texts,
+        ]:
             try:
                 self.ax.removeItem(item)
             except (RuntimeError, ValueError):
@@ -514,9 +518,7 @@ class BandOverlay:
             item.setData(x=x, y=y, connect="finite")
 
         sx, sy = joined(chosen)
-        self.selected.setPen(
-            theme.pen(self.selection_color, width=SELECTED_WIDTH_PX)
-        )
+        self.selected.setPen(theme.pen(self.selection_color, width=SELECTED_WIDTH_PX))
         self.selected.setData(x=sx, y=sy, connect="finite")
 
         self.dots.setPen(theme.pen(self.unlabelled_color, width=1.0))

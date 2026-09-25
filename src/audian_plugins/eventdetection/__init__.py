@@ -34,8 +34,10 @@ def audian_event_detection_panel(browser):
 #: because "Detector" says nothing about which of several a reader is
 #: turning on, and the next one to be written will be a detector too --
 #: the heading is what makes the second one cheap to add.
-audian_event_detection_panel.menu_path = ("Event detection",
-                                         "Normalised cross-correlation")
+audian_event_detection_panel.menu_path = (
+    "Event detection",
+    "Normalised cross-correlation",
+)
 
 #: Hover help for that entry.  Set explicitly rather than left to the
 #: docstring above, which explains the naming contract to whoever maintains

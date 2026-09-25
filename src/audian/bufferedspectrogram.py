@@ -162,9 +162,7 @@ class BufferedSpectrogram(BufferedData):
                         break
                     block = Sxx.transpose((1, 2, 0))[:n]
                     if enabled:
-                        block = denoise.apply_chain(
-                            block, freq, enabled, params
-                        )
+                        block = denoise.apply_chain(block, freq, enabled, params)
                     dest[written : written + n] = block
                     written += n
                     extra["frequencies"] = freq
@@ -202,8 +200,7 @@ class BufferedSpectrogram(BufferedData):
         else:
             return False
 
-    def update(self, nfft=None, overlap_frac=None, denoisers=None,
-               denoise_params=None):
+    def update(self, nfft=None, overlap_frac=None, denoisers=None, denoise_params=None):
         if self.prepare_update(nfft, overlap_frac, denoisers, denoise_params):
             self.recompute_all()
 

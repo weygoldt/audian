@@ -74,8 +74,13 @@ def examples():
     with LABELS.open() as fh:
         for row in csv.DictReader(fh):
             out.setdefault(row["category"], []).append(
-                detection.Example(float(row["t_start_s"]), float(row["t_end_s"]),
-                                  float(row["f_low_hz"]), float(row["f_high_hz"])))
+                detection.Example(
+                    float(row["t_start_s"]),
+                    float(row["t_end_s"]),
+                    float(row["f_low_hz"]),
+                    float(row["f_high_hz"]),
+                )
+            )
     return out
 
 
@@ -93,8 +98,7 @@ def scored(recording, examples):
         for domain in detection.DOMAINS:
             settings = detection.Settings(domain=domain)
             templates = detection.learn(data, rate, examples[category], settings)
-            score, times, level = detection.score_curve(
-                data, rate, templates, settings)
+            score, times, level = detection.score_curve(data, rate, templates, settings)
             out[(category, domain)] = (templates, score, times, level)
     return out
 
@@ -123,8 +127,9 @@ def test_the_trace_is_not_offered_the_combiners_that_fail_on_it():
 
 def test_asking_for_a_combiner_the_domain_refuses_falls_back_rather_than_raises():
     """A stale setting restored from a file must not stop the panel."""
-    settings = detection.Settings(domain=detection.TRACE,
-                                  combiner=detection.MEAN_TEMPLATE)
+    settings = detection.Settings(
+        domain=detection.TRACE, combiner=detection.MEAN_TEMPLATE
+    )
     assert settings.normalized().combiner in detection.combiners_for(detection.TRACE)
 
 
@@ -168,8 +173,9 @@ def test_the_trace_does_not_inherit_the_spectrograms_threshold():
 
 def test_normalizing_settings_twice_changes_nothing():
     """Every entry point normalises, so it must be idempotent."""
-    once = detection.Settings(domain=detection.TRACE,
-                              combiner=detection.MEAN_TEMPLATE).normalized()
+    once = detection.Settings(
+        domain=detection.TRACE, combiner=detection.MEAN_TEMPLATE
+    ).normalized()
     assert once.normalized() == once
 
 
@@ -212,13 +218,20 @@ def test_the_level_gate_rejects_a_quiet_shape_match():
     level = np.asarray([-80.0, -5.0, -80.0, -30.0, -80.0])
 
     open_gate = detection.pick(
-        score, times, level, templates,
+        score,
+        times,
+        level,
+        templates,
         detection.Settings(domain=detection.TRACE, k=detection.MIN_K),
     )
     gated = detection.pick(
-        score, times, level, templates,
-        detection.Settings(domain=detection.TRACE, k=detection.MIN_K,
-                           power_floor_db=-20.0),
+        score,
+        times,
+        level,
+        templates,
+        detection.Settings(
+            domain=detection.TRACE, k=detection.MIN_K, power_floor_db=-20.0
+        ),
     )
     assert [c.t0 for c in open_gate] == pytest.approx([0.1, 0.3])
     assert [c.t0 for c in gated] == pytest.approx([0.1])
@@ -237,9 +250,13 @@ def test_scipy_peak_distance_applies_equal_interval_iou_nms():
     times = np.arange(score.size, dtype=float) / 10.0
 
     found = detection.pick(
-        score, times, None, templates,
-        detection.Settings(domain=detection.TRACE, k=detection.MIN_K,
-                           nms_enabled=True, nms_overlap=0.5),
+        score,
+        times,
+        None,
+        templates,
+        detection.Settings(
+            domain=detection.TRACE, k=detection.MIN_K, nms_enabled=True, nms_overlap=0.5
+        ),
     )
     assert [candidate.t0 for candidate in found] == pytest.approx([1.0, 1.4])
 
@@ -256,16 +273,21 @@ def test_non_maximum_suppression_can_be_disabled():
     times = np.arange(score.size, dtype=float) / 10.0
 
     found = detection.pick(
-        score, times, None, templates,
-        detection.Settings(domain=detection.TRACE, k=detection.MIN_K,
-                           nms_enabled=False),
+        score,
+        times,
+        None,
+        templates,
+        detection.Settings(
+            domain=detection.TRACE, k=detection.MIN_K, nms_enabled=False
+        ),
     )
     assert [candidate.t0 for candidate in found] == pytest.approx([1.0, 1.2, 1.4])
 
 
 def test_stream_postprocessing_joins_candidates_across_block_boundaries():
     templates = detection.Templates(
-        patches=[np.asarray([0.0, 1.0])], duration_s=0.1,
+        patches=[np.asarray([0.0, 1.0])],
+        duration_s=0.1,
     )
     found = [
         detection.Candidate(9.90, 10.00, 0.8),
@@ -320,7 +342,9 @@ def test_the_score_ignores_how_loud_the_recording_is():
 
 def test_a_flat_stretch_does_not_divide_by_its_own_silence():
     """Digital silence has no shape, and must not produce a match."""
-    signal = np.concatenate([np.zeros(2000), np.random.default_rng(7).normal(size=2000)])
+    signal = np.concatenate(
+        [np.zeros(2000), np.random.default_rng(7).normal(size=2000)]
+    )
     curve = detection._scores_1d(signal, [np.ones(200)])[0]
     assert np.isfinite(curve).all()
 
@@ -329,7 +353,7 @@ def test_the_subspace_score_is_bounded_like_the_others():
     """It is a cosine onto a span, so it shares the [0, 1] the rest use."""
     rng = np.random.default_rng(8)
     image = rng.normal(size=(20, 900))
-    patches = [image[:, i:i + 30] for i in (100, 300, 500, 700)]
+    patches = [image[:, i : i + 30] for i in (100, 300, 500, 700)]
     basis = detection._subspace_basis(patches)
     assert len(basis) == detection.SUBSPACE_COMPONENTS
     curves = detection._scores_patch(image, basis)
@@ -361,10 +385,16 @@ def test_a_mean_spectrogram_averages_power_not_opposite_phase_waveforms():
     signal = np.sin(2.0 * np.pi * 1000.0 * time)
     channels = np.column_stack((signal, -signal))
     mean_power, freqs, times = detection._spectrogram_of(
-        channels, rate, 256, 64,
+        channels,
+        rate,
+        256,
+        64,
     )
     one_power, one_freqs, one_times = detection._spectrogram_of(
-        signal, rate, 256, 64,
+        signal,
+        rate,
+        256,
+        64,
     )
     assert mean_power == pytest.approx(one_power)
     assert freqs == pytest.approx(one_freqs)
@@ -388,7 +418,8 @@ def test_the_window_is_short_enough_to_resolve_the_event():
 
 @pytest.mark.parametrize("domain", detection.DOMAINS)
 def test_the_examples_are_cut_out_with_the_length_and_band_they_were_drawn_with(
-        recording, examples, scored, domain):
+    recording, examples, scored, domain
+):
     """Almost every other parameter is derived from these two numbers."""
     templates, _, _, _ = scored[("pulse", domain)]
     assert len(templates) == len(examples["pulse"]) == 11
@@ -413,7 +444,8 @@ def test_every_hand_labelled_pulse_is_found_again(recording, examples, scored, d
 
 @pytest.mark.parametrize("domain", detection.DOMAINS)
 def test_the_detected_pulses_fall_into_the_syllables_the_reader_drew(
-        recording, examples, scored, domain):
+    recording, examples, scored, domain
+):
     """The two categories nest, so each is a check on the other.
 
     The reader marked four pulses in the first syllable, four in the second
@@ -422,21 +454,26 @@ def test_the_detected_pulses_fall_into_the_syllables_the_reader_drew(
     """
     templates, score, times, level = scored[("pulse", domain)]
     k = detection.calibrate_k(score, times, examples["pulse"], templates)
-    found = detection.pick(score, times, level, templates,
-                            detection.Settings(domain=domain, k=k))
+    found = detection.pick(
+        score, times, level, templates, detection.Settings(domain=domain, k=k)
+    )
     for syllable in examples["syllable"]:
-        inside = [c for c in found
-                  if syllable.t0 - 0.02 <= c.t0 <= syllable.t1 + 0.02]
-        drawn = [e for e in examples["pulse"]
-                 if syllable.t0 - 1e-3 <= e.t0 and e.t1 <= syllable.t1 + 1e-3]
+        inside = [c for c in found if syllable.t0 - 0.02 <= c.t0 <= syllable.t1 + 0.02]
+        drawn = [
+            e
+            for e in examples["pulse"]
+            if syllable.t0 - 1e-3 <= e.t0 and e.t1 <= syllable.t1 + 1e-3
+        ]
         assert len(inside) == pytest.approx(len(drawn), abs=1), (
             f"syllable at {syllable.t0:.3f}s: found {len(inside)}, "
-            f"reader drew {len(drawn)}")
+            f"reader drew {len(drawn)}"
+        )
 
 
 @pytest.mark.parametrize("domain", detection.DOMAINS)
 def test_both_categories_agree_about_how_often_the_cricket_sings(
-        recording, examples, scored, domain):
+    recording, examples, scored, domain
+):
     """Two template sets, two event sizes, one song.
 
     Detecting syllables directly and grouping detected pulses into chirps
@@ -448,13 +485,15 @@ def test_both_categories_agree_about_how_often_the_cricket_sings(
 
     templates, score, times, level = scored[("syllable", domain)]
     k = detection.calibrate_k(score, times, examples["syllable"], templates)
-    syllables = detection.pick(score, times, level, templates,
-                                detection.Settings(domain=domain, k=k))
+    syllables = detection.pick(
+        score, times, level, templates, detection.Settings(domain=domain, k=k)
+    )
 
     templates, score, times, level = scored[("pulse", domain)]
     k = detection.calibrate_k(score, times, examples["pulse"], templates)
-    pulses = detection.pick(score, times, level, templates,
-                             detection.Settings(domain=domain, k=k))
+    pulses = detection.pick(
+        score, times, level, templates, detection.Settings(domain=domain, k=k)
+    )
     starts = np.array(sorted(c.t0 for c in pulses))
     chirps = 1 + int(np.sum(np.diff(starts) > 0.050))
 
@@ -463,7 +502,8 @@ def test_both_categories_agree_about_how_often_the_cricket_sings(
     grouped = chirps / duration
     assert direct == pytest.approx(grouped, rel=0.35), (
         f"{direct:.2f}/s from syllable templates against "
-        f"{grouped:.2f}/s from grouping pulses")
+        f"{grouped:.2f}/s from grouping pulses"
+    )
     assert 1.5 < direct < 8.0, f"{direct:.2f} chirps/s is not a cricket"
 
 
@@ -472,7 +512,8 @@ def test_both_categories_agree_about_how_often_the_cricket_sings(
 
 @pytest.mark.parametrize("category", ["pulse", "syllable"])
 def test_the_threshold_calibrated_from_the_examples_finds_the_examples(
-        recording, examples, scored, category):
+    recording, examples, scored, category
+):
     """The setting that suits one template set does not suit another.
 
     Eleven small pulse templates peak at 0.821 and three large syllable
@@ -484,14 +525,16 @@ def test_the_threshold_calibrated_from_the_examples_finds_the_examples(
     templates, score, times, level = scored[(category, domain)]
     k = detection.calibrate_k(score, times, examples[category], templates)
     assert k is not None
-    found = detection.pick(score, times, level, templates,
-                            detection.Settings(domain=domain, k=k))
+    found = detection.pick(
+        score, times, level, templates, detection.Settings(domain=domain, k=k)
+    )
     tol = 0.030 if category == "syllable" else ONSET_TOL_S
     assert _recovered(found, examples[category], tol) == len(examples[category])
 
 
 def test_calibration_reaches_the_same_threshold_the_sweep_chose(
-        recording, examples, scored):
+    recording, examples, scored
+):
     """Two unrelated routes to `k`, which ought to agree where both apply.
 
     A leave-one-syllable-out sweep across an injected-noise range chose 4.5
@@ -503,11 +546,13 @@ def test_calibration_reaches_the_same_threshold_the_sweep_chose(
         k = detection.calibrate_k(score, times, examples["pulse"], templates)
         assert k == pytest.approx(detection.default_k(domain), rel=0.25), (
             f"{domain}: calibrated {k:.2f} against default "
-            f"{detection.default_k(domain):.2f}")
+            f"{detection.default_k(domain):.2f}"
+        )
 
 
 def test_a_threshold_relative_to_the_noise_survives_noise_that_an_absolute_one_does_not(
-        recording, examples):
+    recording, examples
+):
     """The measurement the whole module is shaped around.
 
     An absolute correlation cut tuned on a clean window returns *zero*
@@ -523,16 +568,18 @@ def test_a_threshold_relative_to_the_noise_survives_noise_that_an_absolute_one_d
     settings = detection.Settings(domain=detection.TRACE)
     templates = detection.learn(clean, rate, examples["pulse"], settings)
     score, times, level = detection.score_curve(
-        clean[window], rate, templates, settings)
+        clean[window], rate, templates, settings
+    )
     absolute_cut = detection.threshold_of(score, settings.normalized().k)
     relative_k = detection.calibrate_k(score, times, here, templates)
 
     rng = np.random.default_rng(11)
-    loud = np.concatenate([clean[int(e.t0 * rate):int(e.t1 * rate)] for e in here])
-    noisy = clean + rng.normal(0.0, np.sqrt(np.mean(loud ** 2)), clean.size)
+    loud = np.concatenate([clean[int(e.t0 * rate) : int(e.t1 * rate)] for e in here])
+    noisy = clean + rng.normal(0.0, np.sqrt(np.mean(loud**2)), clean.size)
     noisy /= np.max(np.abs(noisy))
     score_n, times_n, level_n = detection.score_curve(
-        noisy[window], rate, templates, settings)
+        noisy[window], rate, templates, settings
+    )
 
     kept_absolute = int(np.sum(score_n >= absolute_cut))
     relative_cut = detection.threshold_of(score_n, relative_k)
@@ -540,7 +587,8 @@ def test_a_threshold_relative_to_the_noise_survives_noise_that_an_absolute_one_d
 
     assert kept_absolute == 0, (
         "the fixture is meant to be noisy enough to sink a fixed cut; "
-        f"{kept_absolute} offsets still cleared {absolute_cut:.3f}")
+        f"{kept_absolute} offsets still cleared {absolute_cut:.3f}"
+    )
     assert kept_relative > 0, "the relative cut sank with it"
 
 
@@ -568,25 +616,28 @@ def test_taking_the_best_of_many_templates_raises_the_floor_it_has_to_clear():
     for count in counts:
         subset = curves[:count]
         floors[count] = (
-            float(np.percentile(detection._combine(subset, detection.MAX_TEMPLATES), 99)),
+            float(
+                np.percentile(detection._combine(subset, detection.MAX_TEMPLATES), 99)
+            ),
             float(np.percentile(detection._combine(subset, detection.MEAN_SCORES), 99)),
         )
     highest = [floors[c][0] for c in counts]
     averaged = [floors[c][1] for c in counts]
     assert highest == sorted(highest), f"max floor should only rise: {floors}"
     assert averaged == sorted(averaged, reverse=True), (
-        f"mean floor should only fall: {floors}")
+        f"mean floor should only fall: {floors}"
+    )
     widened = (highest[-1] / averaged[-1]) / (highest[0] / averaged[0])
     assert widened > 3.0, (
         f"the two combiners should pull apart as examples are added, "
-        f"but the gap grew only {widened:.2f}x: {floors}")
+        f"but the gap grew only {widened:.2f}x: {floors}"
+    )
 
 
 # ------------------------------------------------------- the awkward inputs
 
 
-def test_a_category_with_nothing_in_it_detects_nothing_rather_than_raising(
-        recording):
+def test_a_category_with_nothing_in_it_detects_nothing_rather_than_raising(recording):
     """The panel will ask before the reader has drawn anything."""
     rate, data = recording
     settings = detection.Settings()
@@ -602,12 +653,13 @@ def test_one_example_is_enough_to_run(recording, examples):
         settings = detection.Settings(domain=domain)
         templates = detection.learn(data, rate, examples["pulse"][:1], settings)
         assert len(templates) == 1
-        found = detection.detect(data[:int(4.0 * rate)], rate, templates, settings)
+        found = detection.detect(data[: int(4.0 * rate)], rate, templates, settings)
         assert isinstance(found, list)
 
 
 def test_a_block_shorter_than_the_template_yields_no_score_rather_than_an_error(
-        recording, examples):
+    recording, examples
+):
     """Streaming hands out whatever is left at the end of a file."""
     rate, data = recording
     for domain in detection.DOMAINS:
@@ -620,8 +672,7 @@ def test_a_block_shorter_than_the_template_yields_no_score_rather_than_an_error(
 def test_the_streaming_margin_covers_an_event_on_a_block_edge(recording, examples):
     """A template straddling a boundary is a detection nobody would get."""
     rate, data = recording
-    templates = detection.learn(data, rate, examples["syllable"],
-                                detection.Settings())
+    templates = detection.learn(data, rate, examples["syllable"], detection.Settings())
     assert detection.margin_s(templates) >= templates.duration_s
 
 
@@ -640,7 +691,9 @@ def test_far_apart_examples_are_learned_through_bounded_reads():
         return np.sin(2.0 * np.pi * 80.0 * time), t0
 
     templates = detection.learn_from_reader(
-        reader, rate, examples,
+        reader,
+        rate,
+        examples,
         detection.Settings(domain=detection.TRACE),
     )
     assert len(templates) == 2
@@ -649,12 +702,12 @@ def test_far_apart_examples_are_learned_through_bounded_reads():
 
 
 def test_detections_carry_the_band_and_channel_the_examples_had(
-        recording, examples, scored):
+    recording, examples, scored
+):
     """They are about to become label rows, which need both."""
     templates, score, times, level = scored[("pulse", detection.SPECTROGRAM)]
     k = detection.calibrate_k(score, times, examples["pulse"], templates)
-    found = detection.pick(score, times, level, templates,
-                            detection.Settings(k=k))
+    found = detection.pick(score, times, level, templates, detection.Settings(k=k))
     assert found
     for candidate in found[:20]:
         assert candidate.f_low_hz == templates.f_low_hz

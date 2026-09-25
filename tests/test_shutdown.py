@@ -130,9 +130,7 @@ def test_closing_the_window_tears_the_browser_down(window):
     QApplication.instance().sendEvent(window, QCloseEvent())
     pump(0.2)
 
-    assert browser.data.data is None, (
-        "closing the window never released the recording"
-    )
+    assert browser.data.data is None, "closing the window never released the recording"
 
 
 def test_closing_the_window_writes_a_pending_label(window):

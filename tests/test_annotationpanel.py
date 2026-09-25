@@ -363,7 +363,10 @@ def test_a_modifier_click_switches_just_that_layer(panel):
 def test_ctrl_and_shift_both_extend(app, panel, monkeypatch):
     """A reader reaching for either modifier is asking for the same thing."""
     panel.solo_annotation_layer("pulses.volley")
-    for modifier in (Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.ShiftModifier):
+    for modifier in (
+        Qt.KeyboardModifier.ControlModifier,
+        Qt.KeyboardModifier.ShiftModifier,
+    ):
         monkeypatch.setattr(QApplication, "keyboardModifiers", lambda m=modifier: m)
         panel.annotation_chip_clicked("trials.silence")
         assert "pulses.volley" in switched_on(panel)

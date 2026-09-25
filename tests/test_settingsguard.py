@@ -128,8 +128,11 @@ def test_another_process_writing_there_is_not_this_suites_doing(tmp_path):
 
     with watching(watched) as recorded:
         subprocess.run(
-            [sys.executable, "-c",
-             f"from pathlib import Path; Path({os.fspath(target)!r}).write_text('{{}}')"],
+            [
+                sys.executable,
+                "-c",
+                f"from pathlib import Path; Path({os.fspath(target)!r}).write_text('{{}}')",
+            ],
             check=True,
         )
         assert target.is_file()

@@ -78,8 +78,7 @@ def group_minimums(view):
 
 #: The `Sent` row of a loaded session bundle, which is the widest chip row
 #: in the application and the one the wrapping was written for.
-CHIP_NAMES = ("All", "Volley", "Baseline", "Silence",
-              "Resting pulses", "Volley pulses")
+CHIP_NAMES = ("All", "Volley", "Baseline", "Silence", "Resting pulses", "Volley pulses")
 
 
 def danger_pixels(button, checked=False):
@@ -212,8 +211,7 @@ def test_a_wrapping_row_folds_nothing_and_overlaps_nothing(app):
         assert len(row.widgets()) == len(CHIP_NAMES)
         assert all(not chip.isHidden() for chip in row.widgets())
         placed = sorted(
-            (chip.geometry().top(), chip.geometry().left(),
-             chip.geometry().right())
+            (chip.geometry().top(), chip.geometry().left(), chip.geometry().right())
             for chip in row.widgets()
         )
         for (top, left, _right), (prev_top, _prev_left, prev_right) in zip(
@@ -1041,9 +1039,7 @@ def test_a_page_is_usable_the_first_time_its_tab_is_raised(browser):
     # the row said what it could of its line, and kept the whole of it
     assert view.label_statusw.toolTip() == view.label_status_text()
     assert view.label_statusw.text()
-    assert view.label_status_text().startswith(
-        view.label_statusw.text().rstrip("…")
-    )
+    assert view.label_status_text().startswith(view.label_statusw.text().rstrip("…"))
     # and the chips are folded against the width the strip really has
     strip = view.label_chipbox
     names = [c.name for c in view.labels.categories]

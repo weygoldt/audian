@@ -59,7 +59,9 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 # suite has no pytest.raises(TypeError) -- but a test that adds one will die
 # rather than fail.
 _qt_preloaded = any(m == "PySide6" or m.startswith("PySide6.") for m in sys.modules)
-_enum_mode_chosen = None if _qt_preloaded else os.environ.get("PYSIDE6_OPTION_PYTHON_ENUM")
+_enum_mode_chosen = (
+    None if _qt_preloaded else os.environ.get("PYSIDE6_OPTION_PYTHON_ENUM")
+)
 os.environ.setdefault("PYSIDE6_OPTION_PYTHON_ENUM", "16")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -326,9 +328,13 @@ def _isolate_settings(tmp_path_factory):
     # hijack.  What made it worth catching rather than tolerating is that any
     # test reworked to read the directory this fixture yields would have been
     # reading a file the application was not writing.
-    hijacked = [
-        f"audian.audian.settings_path() -> {audian_app.settings_path()}",
-    ] if audian_app.settings_path() != directory / "settings.json" else []
+    hijacked = (
+        [
+            f"audian.audian.settings_path() -> {audian_app.settings_path()}",
+        ]
+        if audian_app.settings_path() != directory / "settings.json"
+        else []
+    )
     qsettings_file = Path(QSettings("audian", "audian").fileName())
     if directory not in qsettings_file.parents:
         hijacked.append(f"QSettings -> {qsettings_file}")

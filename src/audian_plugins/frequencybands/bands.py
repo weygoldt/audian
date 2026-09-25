@@ -665,8 +665,7 @@ def _replace_atomically(path: Path, write: Callable) -> None:
         raise
 
 
-def write(bandset: BandSet, recording: Path | str,
-          reference: bool = False) -> tuple:
+def write(bandset: BandSet, recording: Path | str, reference: bool = False) -> tuple:
     """Write both files beside `recording`; return the paths written.
 
     An empty set still writes both files.  The alternative -- deleting them,
@@ -823,7 +822,11 @@ def read(recording: Path | str, reference: bool = False) -> tuple:
             "does not contain; those rows were ignored"
         )
     bands = [
-        replace(b, category=claims.get(b.bid, ("", ""))[0], note=claims.get(b.bid, ("", ""))[1])
+        replace(
+            b,
+            category=claims.get(b.bid, ("", ""))[0],
+            note=claims.get(b.bid, ("", ""))[1],
+        )
         for b in bands
     ]
     return BandSet(bands), complaints

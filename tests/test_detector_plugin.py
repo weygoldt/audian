@@ -80,8 +80,8 @@ def pulse_train():
     t = FIRST_S
     while t + PULSE_S < DURATION_S:
         i = int(round(t * RATE))
-        signal[i:i + n, 0] += tone.astype(np.float32)
-        signal[i:i + n, 1] += tone.astype(np.float32)
+        signal[i : i + n, 0] += tone.astype(np.float32)
+        signal[i : i + n, 1] += tone.astype(np.float32)
         onsets.append(t)
         t += EVERY_S
     return signal, onsets
@@ -113,8 +113,9 @@ def panel(app, tmp_path_factory):
     browser.labels.clear()
     browser.labels.add_category("pulse", KIND_SPAN, 0)
     for onset in ONSETS[:SHOTS]:
-        browser.labels.add(Label("pulse", KIND_SPAN, None, onset,
-                                 onset + PULSE_S, 600.0, 2000.0))
+        browser.labels.add(
+            Label("pulse", KIND_SPAN, None, onset, onset + PULSE_S, 600.0, 2000.0)
+        )
     browser.labels.forget_undo()
 
     title, widget = eventdetection.audian_event_detection_panel(browser)
@@ -163,8 +164,11 @@ def test_the_factory_is_found_by_the_name_the_convention_gives_it():
     renaming the function is what breaks the plugin -- not an import, not a
     registration call that would fail loudly.
     """
-    names = [k for k in dir(eventdetection)
-             if k.startswith("audian_") and callable(getattr(eventdetection, k))]
+    names = [
+        k
+        for k in dir(eventdetection)
+        if k.startswith("audian_") and callable(getattr(eventdetection, k))
+    ]
     assert "audian_event_detection_panel" in names
     assert [n for n in names if n.endswith("panel")] == ["audian_event_detection_panel"]
 
@@ -174,7 +178,8 @@ def test_a_plugin_file_in_the_working_directory_is_discovered(tmp_path, monkeypa
     from audian.plugins import Plugins
 
     (tmp_path / "audian_probe.py").write_text(
-        "def audian_probe_panel(browser):\n    return 'Probe', None\n")
+        "def audian_probe_panel(browser):\n    return 'Probe', None\n"
+    )
     monkeypatch.chdir(tmp_path)
     plugins = Plugins()
     plugins.load_local()
@@ -192,11 +197,12 @@ def test_a_bundled_plugin_is_found_from_any_directory(tmp_path, monkeypatch):
     """
     from audian.plugins import Plugins
 
-    monkeypatch.chdir(tmp_path)          # nothing here at all
+    monkeypatch.chdir(tmp_path)  # nothing here at all
     plugins = Plugins()
     plugins.load_plugins()
     assert "audian_event_detection_panel" in [
-        f.__name__ for f in plugins.panel_factories]
+        f.__name__ for f in plugins.panel_factories
+    ]
 
 
 def test_the_same_plugin_found_twice_is_registered_once(tmp_path, monkeypatch):
@@ -234,7 +240,8 @@ def test_an_extracted_plugin_would_be_found_by_its_entry_point():
     # second distribution installed to prove it
     assert plugins.bind(eventdetection, "eventdetection")
     assert [f.__name__ for f in plugins.panel_factories] == [
-        "audian_event_detection_panel"]
+        "audian_event_detection_panel"
+    ]
 
 
 def test_the_detector_reopens_every_file_in_a_split_recording(panel):
@@ -334,8 +341,9 @@ def test_five_point_labels_are_templates_not_silently_discarded(panel):
     labels.add_category(category, KIND_POINT, labels.next_color())
     centres = [onset + 0.5 * PULSE_S for onset in ONSETS[:5]]
     for centre in centres:
-        labels.add(Label(category, KIND_POINT, None, centre, None,
-                         CARRIER_HZ, CARRIER_HZ))
+        labels.add(
+            Label(category, KIND_POINT, None, centre, None, CARRIER_HZ, CARRIER_HZ)
+        )
     labels.forget_undo()
 
     try:
@@ -345,8 +353,9 @@ def test_five_point_labels_are_templates_not_silently_discarded(panel):
         examples = panel.examples()
         assert len(examples) == 5
         assert all(e.t1 - e.t0 == pytest.approx(0.020) for e in examples)
-        assert all(0.5 * (e.t0 + e.t1) == pytest.approx(c)
-                   for e, c in zip(examples, centres))
+        assert all(
+            0.5 * (e.t0 + e.t1) == pytest.approx(c) for e, c in zip(examples, centres)
+        )
         assert all(widget.isVisible() for widget in panel._point_width_row)
 
         templates = panel._learn()
@@ -389,12 +398,14 @@ def test_the_slider_and_the_box_never_disagree(panel):
         panel.sensitivityw.setValue(value)
         pump(0.05)
         assert panel.kw.value() == pytest.approx(
-            detection.k_from_sensitivity(value, detection.SPECTROGRAM), rel=1e-6)
+            detection.k_from_sensitivity(value, detection.SPECTROGRAM), rel=1e-6
+        )
     for k in (1.0, 2.5, 6.0):
         panel.kw.setValue(k)
         pump(0.05)
         assert panel.sensitivityw.value() == pytest.approx(
-            round(detection.sensitivity_from_k(k, detection.SPECTROGRAM)), abs=1)
+            round(detection.sensitivity_from_k(k, detection.SPECTROGRAM)), abs=1
+        )
 
 
 def test_the_level_slider_and_box_share_an_off_position(panel):
@@ -449,7 +460,8 @@ def test_the_postprocessing_controls_reach_the_engine(panel):
 
 
 def test_threshold_fitting_uses_all_labels_not_only_the_visible_window(
-        panel, monkeypatch):
+    panel, monkeypatch
+):
     """The viewport is a tuning surface, never the training-set boundary."""
     _select(panel, domain=detection.TRACE)
     panel.browser.set_times(0.0, 0.1)
@@ -473,8 +485,13 @@ def test_threshold_fitting_uses_all_labels_not_only_the_visible_window(
 
     progress = []
     result = detector_panel._fit(
-        panel._paths(), panel.templates, panel.examples(), panel.settings(),
-        panel._channel(), CancelToken(), progress.append,
+        panel._paths(),
+        panel.templates,
+        panel.examples(),
+        panel.settings(),
+        panel._channel(),
+        CancelToken(),
+        progress.append,
     )
     assert result.k is not None
     assert seen == expected
@@ -512,8 +529,8 @@ def test_the_preview_finds_the_pulses_that_are_on_screen(panel):
     found = browser.labels.count_in(panel._category_name())
     expected = sum(1 for t in ONSETS if 0.0 <= t < 4.0)
     assert found == pytest.approx(expected, abs=2), (
-        f"{found} found where {expected} pulses are on screen: "
-        f"{panel.statusw.text()}")
+        f"{found} found where {expected} pulses are on screen: {panel.statusw.text()}"
+    )
 
 
 def test_moving_the_sensitivity_does_not_rescore(panel):
@@ -562,8 +579,7 @@ def test_moving_an_example_invalidates_the_template_cache(panel):
     panel.browser.set_times(0.0, 4.0)
     panel.preview()
     before = panel._scored_for
-    example = Label("pulse", KIND_SPAN, None, 1.5, 1.5 + PULSE_S,
-                    600.0, 2000.0)
+    example = Label("pulse", KIND_SPAN, None, 1.5, 1.5 + PULSE_S, 600.0, 2000.0)
     panel.browser.labels.add(example)
     panel.preview()
     assert panel._scored_for != before
@@ -636,7 +652,8 @@ def test_detections_survive_the_panel_being_hidden(panel):
     panel.hide()
     pump(0.2)
     assert browser.labels.count_in(panel._category_name()) == drawn, (
-        "hiding the panel emptied the category")
+        "hiding the panel emptied the category"
+    )
     panel.show()
     pump(0.4)
     assert browser.labels.count_in(panel._category_name()) >= drawn
@@ -694,22 +711,27 @@ def test_running_over_the_recording_finds_every_pulse_and_writes_a_csv(panel):
 
     found = browser.labels.count_in(panel._category_name())
     assert found == pytest.approx(len(ONSETS), abs=3), (
-        f"{found} found against {len(ONSETS)} pulses: {panel.statusw.text()}")
+        f"{found} found against {len(ONSETS)} pulses: {panel.statusw.text()}"
+    )
 
-    onsets = sorted(la.t0 for la in browser.labels
-                    if la.category == panel._category_name())
+    onsets = sorted(
+        la.t0 for la in browser.labels if la.category == panel._category_name()
+    )
     for wanted in ONSETS:
         assert any(abs(t - wanted) < 0.030 for t in onsets), (
-            f"nothing found at {wanted:.3f} s")
+            f"nothing found at {wanted:.3f} s"
+        )
     assert len(onsets) == len(set(round(t, 3) for t in onsets)), (
-        "an event was counted twice, which is a block-overlap fault")
+        "an event was counted twice, which is a block-overlap fault"
+    )
 
     recording = Path(panel.recording.path)
     csvs = list(recording.parent.glob("*-found.csv"))
     assert len(csvs) == 1, f"expected one output file, got {csvs}"
     rows = csvs[0].read_text().splitlines()
-    assert rows[0] == ("category,kind,channel,t_start_s,t_end_s,"
-                       "f_low_hz,f_high_hz,note")
+    assert rows[0] == (
+        "category,kind,channel,t_start_s,t_end_s,f_low_hz,f_high_hz,note"
+    )
     assert len(rows) - 1 == found
     panel._committed = False
 
@@ -762,7 +784,8 @@ def window(app, tmp_path_factory):
     original_path = audian_app.settings_path
     home = Path(QSettings("audian", "audian").fileName()).parent.parent
     Plugins.load_plugins = lambda self: self.add_panel_factory(
-        eventdetection.audian_event_detection_panel)
+        eventdetection.audian_event_detection_panel
+    )
     try:
         directory = tmp_path_factory.mktemp("detector-menu")
         signal, _ = pulse_train()
@@ -814,8 +837,9 @@ def test_the_menu_entry_opens_and_closes_the_panel(window):
     # the tab holds a scroll area so a tall plugin scrolls rather than
     # squeezing itself; the plugin's own widget is inside it
     assert isinstance(region.widget(0), QScrollArea)
-    assert isinstance(browser.plugin_panels["Event detection"],
-                      detector_panel.DetectorPanel)
+    assert isinstance(
+        browser.plugin_panels["Event detection"], detector_panel.DetectorPanel
+    )
 
     act.setChecked(False)
     pump(0.5)
@@ -930,16 +954,17 @@ SESSION_FILE_S = 6.0
 def session_signal(index):
     """One file of a session, with the pulse train running through it."""
     n = int(PULSE_S * RATE)
-    tone = (np.sin(2 * np.pi * CARRIER_HZ * np.arange(n) / RATE)
-            * np.hanning(n)).astype(np.float32)
+    tone = (
+        np.sin(2 * np.pi * CARRIER_HZ * np.arange(n) / RATE) * np.hanning(n)
+    ).astype(np.float32)
     rng = np.random.default_rng(100 + index)
     frames = int(SESSION_FILE_S * RATE)
     signal = rng.normal(0.0, 0.002, (frames, 2)).astype(np.float32)
     onsets, t = [], FIRST_S
     while t + PULSE_S < SESSION_FILE_S:
         i = int(round(t * RATE))
-        signal[i:i + n, 0] += tone
-        signal[i:i + n, 1] += tone
+        signal[i : i + n, 0] += tone
+        signal[i : i + n, 1] += tone
         onsets.append(index * SESSION_FILE_S + t)
         t += EVERY_S
     return signal, onsets
@@ -972,10 +997,17 @@ def session(app, tmp_path_factory):
         onsets.extend(marks)
         stamp = start + datetime.timedelta(seconds=index * SESSION_FILE_S)
         path = directory / f"rec-{index:02d}.wav"
-        write_audio(str(path), signal, RATE, metadata=dict(BEXT=dict(
-            OriginationDate=stamp.strftime("%Y-%m-%d"),
-            OriginationTime=stamp.strftime("%H:%M:%S"),
-        )))
+        write_audio(
+            str(path),
+            signal,
+            RATE,
+            metadata=dict(
+                BEXT=dict(
+                    OriginationDate=stamp.strftime("%Y-%m-%d"),
+                    OriginationTime=stamp.strftime("%H:%M:%S"),
+                )
+            ),
+        )
         paths.append(str(path))
 
     original_load = Plugins.load_plugins
@@ -995,8 +1027,9 @@ def session(app, tmp_path_factory):
     # cannot learn all three
     for index in range(SESSION_FILES):
         onset = onsets[index * len(onsets) // SESSION_FILES + 1]
-        browser.labels.add(Label("pulse", KIND_SPAN, None, onset,
-                                 onset + PULSE_S, 600.0, 2000.0))
+        browser.labels.add(
+            Label("pulse", KIND_SPAN, None, onset, onset + PULSE_S, 600.0, 2000.0)
+        )
     browser.labels.forget_undo()
 
     browser.open_plugin_panel("Event detection")
@@ -1025,8 +1058,7 @@ def test_the_detector_sees_the_same_timeline_the_browser_does(session):
     assert len(recording.paths) == SESSION_FILES
     shown = len(browser.data.data) / browser.data.rate
     assert recording.duration == pytest.approx(shown, abs=0.01)
-    assert recording.duration == pytest.approx(
-        SESSION_FILES * SESSION_FILE_S, abs=0.01)
+    assert recording.duration == pytest.approx(SESSION_FILES * SESSION_FILE_S, abs=0.01)
 
 
 def test_examples_are_learned_from_every_file_of_the_session(session):
@@ -1059,8 +1091,9 @@ def test_a_run_crosses_every_file_boundary(session):
             break
     assert panel._thread is None, "the sweep never finished"
 
-    found = sorted(la.t0 for la in browser.labels
-                   if la.category == panel._category_name())
+    found = sorted(
+        la.t0 for la in browser.labels if la.category == panel._category_name()
+    )
     assert found, f"nothing found: {panel.statusw.text()}"
     for index in range(SESSION_FILES):
         lo = index * SESSION_FILE_S
@@ -1068,9 +1101,11 @@ def test_a_run_crosses_every_file_boundary(session):
         here = [t for t in found if lo <= t < hi]
         wanted = [t for t in onsets if lo <= t < hi]
         assert len(here) == pytest.approx(len(wanted), abs=2), (
-            f"file {index}: {len(here)} found against {len(wanted)} present")
+            f"file {index}: {len(here)} found against {len(wanted)} present"
+        )
     assert found[-1] > (SESSION_FILES - 1) * SESSION_FILE_S, (
-        "nothing was found in the last file of the session")
+        "nothing was found in the last file of the session"
+    )
 
 
 def test_a_finished_run_survives_seeking_through_the_recording(panel):
@@ -1113,7 +1148,8 @@ def test_a_finished_run_survives_seeking_through_the_recording(panel):
         pump(0.2)
         assert browser.labels.count_in(name) == after_run, (
             f"seeking to {start} s cost "
-            f"{after_run - browser.labels.count_in(name)} detections")
+            f"{after_run - browser.labels.count_in(name)} detections"
+        )
 
     panel._committed = False
     panel._drawing = True
@@ -1163,11 +1199,13 @@ def test_a_tall_plugin_scrolls_instead_of_squeezing_itself(window):
         split.setSizes([max(total - region_h, 60), region_h])
         pump(0.4)
         assert panel.height() >= natural, (
-            f"squeezed to {panel.height()} px with {natural} px asked for")
+            f"squeezed to {panel.height()} px with {natural} px asked for"
+        )
         ranges.append(frame.verticalScrollBar().maximum())
 
     assert ranges == sorted(ranges), (
-        f"a smaller region must scroll further, got {ranges}")
+        f"a smaller region must scroll further, got {ranges}"
+    )
     assert ranges[-1] > 0, "nothing scrolls even at 120 px"
 
     act.setChecked(False)
@@ -1301,7 +1339,9 @@ def test_a_saved_run_survives_a_nudged_control_and_a_flush(panel):
     # stand in for a finished Run: results drawn with previewing off, then
     # marked as written, which is what `_run_finished` does
     panel._drawing = False
-    panel._draw([detection.Candidate(1.0, 1.2, 0.9), detection.Candidate(2.0, 2.2, 0.9)])
+    panel._draw(
+        [detection.Candidate(1.0, 1.2, 0.9), detection.Candidate(2.0, 2.2, 0.9)]
+    )
     panel._persisted = True
     panel._committed = True
     assert browser.labels.count_in(name) == 2

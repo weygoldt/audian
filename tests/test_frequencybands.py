@@ -183,7 +183,10 @@ def test_a_round_trip_is_exact(tmp_path):
     assert back.ids() == store.ids()
     for a, b in zip(store, back):
         assert (a.bid, a.category, a.note, a.channel) == (
-            b.bid, b.category, b.note, b.channel,
+            b.bid,
+            b.category,
+            b.note,
+            b.channel,
         )
         assert np.allclose(a.times, b.times) and np.allclose(a.freqs, b.freqs)
 
@@ -236,7 +239,7 @@ def test_a_csv_naming_a_band_the_geometry_lacks_is_reported(tmp_path):
 
 
 def test_a_non_finite_band_id_costs_its_row_and_not_the_geometry(tmp_path):
-    """"nan" parses as a float, and `int(nan)` raises out of `read`.
+    """ "nan" parses as a float, and `int(nan)` raises out of `read`.
 
     `read`'s guard named only OSError and csv.Error, so the exception left
     the reader and took the recording's bands with it.  The geometry is
@@ -313,8 +316,15 @@ def spectrogram_of(tones, duration=4.0, rate=200.0, n_freqs=200, noise=1.0):
 
 def test_the_tracker_finds_a_steady_tone():
     times, freqs, power = spectrogram_of([(500.0, 40.0, 0.0, 4.0)])
-    found = T.track(times, freqs, power, threshold_db=10.0, tolerance_hz=20.0,
-                    max_gap_s=0.1, min_duration_s=0.5)
+    found = T.track(
+        times,
+        freqs,
+        power,
+        threshold_db=10.0,
+        tolerance_hz=20.0,
+        max_gap_s=0.1,
+        min_duration_s=0.5,
+    )
     assert len(found) == 1
     t, f = found[0]
     assert abs(np.median(f) - 500.0) < 10.0
@@ -325,8 +335,15 @@ def test_the_tracker_separates_two_tones():
     times, freqs, power = spectrogram_of(
         [(300.0, 40.0, 0.0, 4.0), (700.0, 40.0, 0.0, 4.0)]
     )
-    found = T.track(times, freqs, power, threshold_db=10.0, tolerance_hz=20.0,
-                    max_gap_s=0.1, min_duration_s=0.5)
+    found = T.track(
+        times,
+        freqs,
+        power,
+        threshold_db=10.0,
+        tolerance_hz=20.0,
+        max_gap_s=0.1,
+        min_duration_s=0.5,
+    )
     centres = sorted(float(np.median(f)) for _t, f in found)
     assert len(found) == 2
     assert abs(centres[0] - 300.0) < 10.0 and abs(centres[1] - 700.0) < 10.0
@@ -349,8 +366,15 @@ def test_a_tone_that_stops_and_restarts_becomes_two_bands():
     times, freqs, power = spectrogram_of(
         [(500.0, 40.0, 0.0, 1.5), (500.0, 40.0, 2.5, 4.0)]
     )
-    found = T.track(times, freqs, power, threshold_db=10.0, tolerance_hz=20.0,
-                    max_gap_s=0.2, min_duration_s=0.5)
+    found = T.track(
+        times,
+        freqs,
+        power,
+        threshold_db=10.0,
+        tolerance_hz=20.0,
+        max_gap_s=0.2,
+        min_duration_s=0.5,
+    )
     assert len(found) == 2
 
 
@@ -360,16 +384,24 @@ def test_the_global_floor_keeps_the_silences_empty():
     Measured on real audio it turned 18 s of cricket song into 2484 bands.
     """
     times, freqs, power = spectrogram_of([(500.0, 40.0, 0.0, 2.0)])
-    found = T.track(times, freqs, power, threshold_db=12.0, tolerance_hz=20.0,
-                    max_gap_s=0.1, min_duration_s=0.3)
+    found = T.track(
+        times,
+        freqs,
+        power,
+        threshold_db=12.0,
+        tolerance_hz=20.0,
+        max_gap_s=0.1,
+        min_duration_s=0.3,
+    )
     assert len(found) == 1, f"the silent half produced {len(found) - 1} phantoms"
 
 
 # ------------------------------------------------- the harmonic group finder
 
 
-def harmonic_spectrogram(fundamentals, duration=8.0, rate=4000.0, nfft=4096,
-                         n_harmonics=4, noise=0.01):
+def harmonic_spectrogram(
+    fundamentals, duration=8.0, rate=4000.0, nfft=4096, n_harmonics=4, noise=0.01
+):
     """A real spectrogram of a synthetic signal, in *linear* power.
 
     A signal and then a transform of it, rather than spikes painted into an
@@ -414,14 +446,22 @@ def test_an_installation_without_thunderfish_still_finds_bands():
             return None
 
     blocker = Blocker()
-    hidden = {m: sys.modules.pop(m) for m in list(sys.modules)
-              if m.startswith("thunderfish")}
+    hidden = {
+        m: sys.modules.pop(m) for m in list(sys.modules) if m.startswith("thunderfish")
+    }
     sys.meta_path.insert(0, blocker)
     try:
         assert not T.harmonics_available()
         times, freqs, power = spectrogram_of([(500.0, 40.0, 0.0, 4.0)])
-        found = T.track(times, freqs, power, threshold_db=10.0,
-                        tolerance_hz=20.0, max_gap_s=0.1, min_duration_s=0.5)
+        found = T.track(
+            times,
+            freqs,
+            power,
+            threshold_db=10.0,
+            tolerance_hz=20.0,
+            max_gap_s=0.1,
+            min_duration_s=0.5,
+        )
         assert len(found) == 1, "the peak finder must still work"
     finally:
         sys.meta_path.remove(blocker)
@@ -437,8 +477,9 @@ def test_a_fish_with_harmonics_is_one_band_not_four():
     """
     pytest.importorskip("thunderfish")
     times, freqs, power = harmonic_spectrogram([62.0])
-    frames = T.harmonic_frames(times, freqs, power, mains_hz=0.0,
-                               min_hz=20.0, max_hz=1000.0)
+    frames = T.harmonic_frames(
+        times, freqs, power, mains_hz=0.0, min_hz=20.0, max_hz=1000.0
+    )
     assert frames, "no fundamentals found at all"
     found = np.concatenate([hz for _t, hz in frames])
     # the fundamental itself, in most frames
@@ -454,8 +495,9 @@ def test_a_fish_with_harmonics_is_one_band_not_four():
 def test_two_fish_are_two_fundamentals():
     pytest.importorskip("thunderfish")
     times, freqs, power = harmonic_spectrogram([62.0, 287.0])
-    frames = T.harmonic_frames(times, freqs, power, mains_hz=0.0,
-                               min_hz=20.0, max_hz=1000.0)
+    frames = T.harmonic_frames(
+        times, freqs, power, mains_hz=0.0, min_hz=20.0, max_hz=1000.0
+    )
     # a gap wide enough to bridge the frames where the weaker fish's third
     # harmonic dips under the floor -- which is what the panel's Max gap is
     # for, and why its default is a second rather than a hop
@@ -475,8 +517,9 @@ def test_the_fundamental_is_not_pinned_to_the_frequency_grid():
     """
     pytest.importorskip("thunderfish")
     times, freqs, power = harmonic_spectrogram([62.0])
-    frames = T.harmonic_frames(times, freqs, power, mains_hz=0.0,
-                               min_hz=20.0, max_hz=1000.0)
+    frames = T.harmonic_frames(
+        times, freqs, power, mains_hz=0.0, min_hz=20.0, max_hz=1000.0
+    )
     found = np.concatenate([hz for _t, hz in frames])
     near = found[np.abs(found - 62.0) < 3.0]
     assert near.size > 4
@@ -607,12 +650,12 @@ def test_unassigned_detections_are_counted_in_the_complaint(tmp_path):
 def test_the_importer_writes_nothing(tmp_path):
     """A wavetracker directory is an input, and this must not touch it."""
     folder = write_wavetracker(tmp_path / "run")
-    before = {p.name: (p.stat().st_mtime_ns, p.stat().st_size)
-              for p in folder.iterdir()}
+    before = {
+        p.name: (p.stat().st_mtime_ns, p.stat().st_size) for p in folder.iterdir()
+    }
     time.sleep(0.01)
     W.import_directory(folder)
-    after = {p.name: (p.stat().st_mtime_ns, p.stat().st_size)
-             for p in folder.iterdir()}
+    after = {p.name: (p.stat().st_mtime_ns, p.stat().st_size) for p in folder.iterdir()}
     assert before == after
 
 
@@ -627,9 +670,16 @@ def boxes(category, note, t0, t1, hz, step=1.0, height=3.0):
     t = t0
     while t < t1 - 1e-9:
         made.append(
-            Label(category=category, kind=KIND_SPAN, channel=None,
-                  t0=t, t1=min(t + step, t1),
-                  f0=hz - 0.5 * height, f1=hz + 0.5 * height, note=note)
+            Label(
+                category=category,
+                kind=KIND_SPAN,
+                channel=None,
+                t0=t,
+                t1=min(t + step, t1),
+                f0=hz - 0.5 * height,
+                f1=hz + 0.5 * height,
+                note=note,
+            )
         )
         t += step
     return made
@@ -644,8 +694,9 @@ def test_a_chain_of_boxes_becomes_one_band():
     """
     from audian_plugins.frequencybands import reference as R
 
-    made, complaints = R.bands_from_labels(boxes("Sternopygus", "resident",
-                                                 0.0, 120.0, 62.0))
+    made, complaints = R.bands_from_labels(
+        boxes("Sternopygus", "resident", 0.0, 120.0, 62.0)
+    )
     assert complaints == []
     assert len(made) == 1
     band = next(iter(made))
@@ -695,10 +746,19 @@ def test_a_single_long_box_becomes_a_line_not_a_dot():
     from audian.labels import KIND_SPAN, Label
     from audian_plugins.frequencybands import reference as R
 
-    made, _complaints = R.bands_from_labels([
-        Label(category="mains_hum", kind=KIND_SPAN, t0=0.0, t1=120.0,
-              f0=49.0, f1=51.0, note="harmonic 1")
-    ])
+    made, _complaints = R.bands_from_labels(
+        [
+            Label(
+                category="mains_hum",
+                kind=KIND_SPAN,
+                t0=0.0,
+                t1=120.0,
+                f0=49.0,
+                f1=51.0,
+                note="harmonic 1",
+            )
+        ]
+    )
     assert len(made) == 1
     band = next(iter(made))
     assert len(band) == 2
@@ -717,8 +777,7 @@ def test_boxes_with_silence_between_them_are_separate_events():
     from audian_plugins.frequencybands import reference as R
 
     rows = [
-        Label(category="pulse", kind=KIND_SPAN, t0=t, t1=t + 2.0,
-              f0=180.0, f1=190.0)
+        Label(category="pulse", kind=KIND_SPAN, t0=t, t1=t + 2.0, f0=180.0, f1=190.0)
         for t in (10.0, 35.0, 60.0)
     ]
     made, _complaints = R.bands_from_labels(rows)
@@ -753,8 +812,7 @@ def test_a_reference_has_its_own_file(tmp_path):
     mine.add(*steady(0.0, 10.0), category="mine")
     B.write(mine, recording)
 
-    truth, _c = R.bands_from_labels(boxes("Sternopygus", "resident",
-                                          0.0, 20.0, 62.0))
+    truth, _c = R.bands_from_labels(boxes("Sternopygus", "resident", 0.0, 20.0, 62.0))
     B.write(truth, recording, reference=True)
 
     assert B.csv_path(recording) != B.csv_path(recording, reference=True)
@@ -871,8 +929,9 @@ def test_the_displayed_filter_is_applied_before_the_transform():
     from audian_plugins.frequencybands.panel import power_of_block
 
     block = four_channel_block(hz=300.0)
-    common = dict(nfft=1024, overlap_frac=0.5, channel=0, denoisers=(),
-                  denoise_params={})
+    common = dict(
+        nfft=1024, overlap_frac=0.5, channel=0, denoisers=(), denoise_params={}
+    )
     _t, freqs, plain = power_of_block(block, 4000.0, common)
     sos = butter(4, 1000.0, "highpass", fs=4000.0, output="sos")
     _t, _f, filtered = power_of_block(block, 4000.0, {**common, "sos": sos})
@@ -892,9 +951,15 @@ def test_a_block_of_displayed_power_tracks_without_touching_the_recording():
     times, freqs, power_db = spectrogram_of([(500.0, 40.0, 0.0, 4.0)])
     linear = 10.0 ** (power_db / 10.0)
     frames = frames_of_power(
-        times, freqs, linear,
-        {"method": METHOD_PEAKS, "max_hz": 1000.0, "threshold_db": 10.0,
-         "max_peaks": 8},
+        times,
+        freqs,
+        linear,
+        {
+            "method": METHOD_PEAKS,
+            "max_hz": 1000.0,
+            "threshold_db": 10.0,
+            "max_peaks": 8,
+        },
     )
     found = T.link(frames, tolerance_hz=20.0, max_gap_s=0.1, min_duration_s=0.5)
     assert len(found) == 1
@@ -910,9 +975,7 @@ def test_the_plugin_registers_itself_by_name():
 
     plugins = Plugins()
     plugins.load_bundled()
-    entries = dict(
-        (panel_menu_path(f)[0], f) for _label, f in plugins.panel_entries()
-    )
+    entries = dict((panel_menu_path(f)[0], f) for _label, f in plugins.panel_entries())
     assert "Frequency bands" in entries
 
 
@@ -931,8 +994,12 @@ def test_the_browser_promises_the_lanes_this_plugin_draws_on():
 def test_joined_separates_polylines_with_a_break():
     from audian_plugins.frequencybands.overlay import joined
 
-    x, y = joined([(np.array([0.0, 1.0]), np.array([5.0, 5.0])),
-                   (np.array([2.0, 3.0]), np.array([7.0, 7.0]))])
+    x, y = joined(
+        [
+            (np.array([0.0, 1.0]), np.array([5.0, 5.0])),
+            (np.array([2.0, 3.0]), np.array([7.0, 7.0])),
+        ]
+    )
     assert x.size == 5 and np.isnan(x[2])
     assert not np.isnan(x[-1]), "a trailing separator poisons the bounding box"
 
@@ -1057,6 +1124,7 @@ def test_a_sweep_covers_every_file_of_a_split_recording(browser):
 
     _title, panel = audian_frequency_bands_panel(browser)
     try:
+
         class _Loader:
             file_paths = ["/one.wav", "/two.wav", "/three.wav"]
 
@@ -1150,7 +1218,9 @@ def test_a_window_too_coarse_for_the_tolerance_is_reported(browser):
     pump(0.3)
     said = []
     panel.browser = type(
-        "B", (), {"data": browser.data, "notify": lambda _s, lvl, msg: said.append((lvl, msg))}
+        "B",
+        (),
+        {"data": browser.data, "notify": lambda _s, lvl, msg: said.append((lvl, msg))},
     )()
     try:
         panel.warn_if_too_coarse({"nfft": 64, "tolerance_hz": 6.0})
@@ -1248,7 +1318,9 @@ class _NeverCancelled:
         pass
 
 
-def test_a_sweep_leaves_no_gap_in_the_frame_grid_at_a_chunk_boundary(tmp_path, monkeypatch):
+def test_a_sweep_leaves_no_gap_in_the_frame_grid_at_a_chunk_boundary(
+    tmp_path, monkeypatch
+):
     """The seam used to swallow every window straddling it.
 
     `_sweep` walked the recording in `CHUNK_S` steps with `start = stop`, so

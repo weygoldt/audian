@@ -152,8 +152,12 @@ def test_a_bundle_that_declares_no_file_frames_says_nothing_about_the_shift(
 #: from the session, because `coverage()` reads the TOML and nothing else: the
 #: reproduction from the field needs the writer's numbers, not its 1.3 GB of
 #: recordings.
-EXP3_NAMES = ("DR0000_0088.wav", "DR0000_0089.wav", "DR0000_0090.wav",
-              "DR0000_0091.wav")
+EXP3_NAMES = (
+    "DR0000_0088.wav",
+    "DR0000_0089.wav",
+    "DR0000_0090.wav",
+    "DR0000_0091.wav",
+)
 EXP3_FILE_FRAMES = (44_734_464, 44_734_464, 44_734_464, 39_605_760)
 
 

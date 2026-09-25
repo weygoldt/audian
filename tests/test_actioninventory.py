@@ -92,7 +92,6 @@ def window(app, tmp_path_factory):
     recording = directory / "rec.wav"
     soundfile.write(recording, signal, RATE)
 
-
     theme.apply(app)
     plugins = Plugins()
     plugins.load_plugins()
@@ -146,7 +145,9 @@ def test_the_action_inventory_is_what_it_was(window):
         GOLDEN.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n")
         pytest.skip(f"regenerated {GOLDEN.name} with {len(current)} actions")
 
-    assert GOLDEN.exists(), f"{GOLDEN} missing; regenerate it with AUDIAN_REGENERATE_GOLDEN=1"
+    assert GOLDEN.exists(), (
+        f"{GOLDEN} missing; regenerate it with AUDIAN_REGENERATE_GOLDEN=1"
+    )
     expected = json.loads(GOLDEN.read_text())
 
     # Report the whole difference at once.  A binding change usually moves
@@ -240,8 +241,8 @@ def test_every_action_survives_being_triggered(window):
         window.setWindowState(state_before)
         app.processEvents()
 
-    assert not failures, f"{len(failures)} of {fired} actions raised:\n  " + "\n  ".join(
-        failures
+    assert not failures, (
+        f"{len(failures)} of {fired} actions raised:\n  " + "\n  ".join(failures)
     )
     # A sweep that silently stopped finding actions would pass forever.
     assert fired >= 100, f"only {fired} actions fired; the inventory has 128"

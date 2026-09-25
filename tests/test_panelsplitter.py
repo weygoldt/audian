@@ -434,7 +434,13 @@ def test_a_real_press_drag_release_through_the_scene_moves_the_boundary(
         Qt.MouseButton.LeftButton,
     )
     send(
-        app, roomy_browser, c, QEvent.Type.MouseMove, before + 12, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton
+        app,
+        roomy_browser,
+        c,
+        QEvent.Type.MouseMove,
+        before + 12,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
     )
     send(
         app,
@@ -473,7 +479,13 @@ def test_a_lane_that_changes_under_the_drag_does_not_rescale_it(
         Qt.MouseButton.LeftButton,
     )
     send(
-        app, roomy_browser, c, QEvent.Type.MouseMove, start + 20, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton
+        app,
+        roomy_browser,
+        c,
+        QEvent.Type.MouseMove,
+        start + 20,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
     )
     assert boundary(roomy_browser, c) == pytest.approx(start + 20, abs=0.01)
 
@@ -489,7 +501,13 @@ def test_a_lane_that_changes_under_the_drag_does_not_rescale_it(
     # change left behind is on a fraction and the split rounds off it.  The
     # bug this pins moved 25 px, not 20.
     send(
-        app, roomy_browser, c, QEvent.Type.MouseMove, start + 40, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton
+        app,
+        roomy_browser,
+        c,
+        QEvent.Type.MouseMove,
+        start + 40,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
     )
     assert boundary(roomy_browser, c) == pytest.approx(moved + 20, abs=1.0)
     send(
@@ -1574,12 +1592,32 @@ def click_axis(browser, channel, ax, double, side="left"):
     """Click, or double click, the axis of one lane."""
     at = axis_centre(ax, side)
     x, y = at.x(), at.y()
-    send_at(browser, channel, QEvent.Type.MouseMove, x, y, Qt.MouseButton.NoButton, Qt.MouseButton.NoButton)
     send_at(
-        browser, channel, QEvent.Type.MouseButtonPress, x, y, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton
+        browser,
+        channel,
+        QEvent.Type.MouseMove,
+        x,
+        y,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton,
     )
     send_at(
-        browser, channel, QEvent.Type.MouseButtonRelease, x, y, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
+        browser,
+        channel,
+        QEvent.Type.MouseButtonPress,
+        x,
+        y,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+    )
+    send_at(
+        browser,
+        channel,
+        QEvent.Type.MouseButtonRelease,
+        x,
+        y,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
     )
     if double:
         # pyqtgraph turns this into an ordinary MouseClickEvent with
@@ -1662,7 +1700,9 @@ def test_only_the_left_button_resets_an_axis(browser, button):
     """Nothing held the button guard: taking it out left every test green."""
     ax = panel(browser, "trace").axs[1]
     view = ax.getViewBox()
-    which = Qt.MouseButton.RightButton if button == "right" else Qt.MouseButton.MiddleButton
+    which = (
+        Qt.MouseButton.RightButton if button == "right" else Qt.MouseButton.MiddleButton
+    )
     _t, (y0, y1) = view.viewRange()
     try:
         view.setYRange(y0 + 0.3 * (y1 - y0), y0 + 0.6 * (y1 - y0), padding=0)
@@ -1670,11 +1710,35 @@ def test_only_the_left_button_resets_an_axis(browser, button):
         _t, (z0, z1) = view.viewRange()
         at = axis_centre(ax)
         x, y = at.x(), at.y()
-        send_at(browser, 1, QEvent.Type.MouseMove, x, y, Qt.MouseButton.NoButton, Qt.MouseButton.NoButton)
+        send_at(
+            browser,
+            1,
+            QEvent.Type.MouseMove,
+            x,
+            y,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+        )
         send_at(browser, 1, QEvent.Type.MouseButtonPress, x, y, which, which)
-        send_at(browser, 1, QEvent.Type.MouseButtonRelease, x, y, which, Qt.MouseButton.NoButton)
+        send_at(
+            browser,
+            1,
+            QEvent.Type.MouseButtonRelease,
+            x,
+            y,
+            which,
+            Qt.MouseButton.NoButton,
+        )
         send_at(browser, 1, QEvent.Type.MouseButtonDblClick, x, y, which, which)
-        send_at(browser, 1, QEvent.Type.MouseButtonRelease, x, y, which, Qt.MouseButton.NoButton)
+        send_at(
+            browser,
+            1,
+            QEvent.Type.MouseButtonRelease,
+            x,
+            y,
+            which,
+            Qt.MouseButton.NoButton,
+        )
         pump(0.2)
         _t, (w0, w1) = view.viewRange()
         assert (w0, w1) == pytest.approx((z0, z1))
@@ -1704,7 +1768,15 @@ def test_a_double_click_beside_the_axis_does_not_reset(browser):
             settle()
             _t, (z0, z1) = view.viewRange()
             x = edge + dx
-            send_at(browser, 1, QEvent.Type.MouseMove, x, at.y(), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton)
+            send_at(
+                browser,
+                1,
+                QEvent.Type.MouseMove,
+                x,
+                at.y(),
+                Qt.MouseButton.NoButton,
+                Qt.MouseButton.NoButton,
+            )
             send_at(
                 browser,
                 1,
@@ -2029,7 +2101,7 @@ def test_the_way_out_is_discoverable(browser):
 
 
 def test_the_two_fit_actions_are_not_the_same_command(browser):
-    """"Fit Y" names the amplitude axis -- the tool bar button and the
+    """ "Fit Y" names the amplitude axis -- the tool bar button and the
     "Y: fixed +-1" readout both use Y that way -- so the frequency entry is
     "Fit" and not "Fit Y".
 
@@ -2531,9 +2603,7 @@ def hand_zoom(browser, ax, r0, r1):
 
 
 @pytest.mark.parametrize("how", ["double click", "v"])
-def test_a_hand_zoomed_trace_still_answers_the_gesture(
-    browser, unlock_amplitudes, how
-):
+def test_a_hand_zoomed_trace_still_answers_the_gesture(browser, unlock_amplitudes, how):
     """The reported defect, both ways into it.
 
     Measured before the fix: fitted at open to (-0.116965, 0.128933), hand

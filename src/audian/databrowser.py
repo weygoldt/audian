@@ -1043,8 +1043,7 @@ class SidePanel(QWidget):
         column.setSpacing(0)
         column.addWidget(widget, 0)
         column.addStretch(1)
-        widget.setSizePolicy(QSizePolicy.Policy.Preferred,
-                             QSizePolicy.Policy.Fixed)
+        widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         area = QScrollArea(self)
         area.setWidgetResizable(True)
         area.setFrameShape(QFrame.Shape.NoFrame)
@@ -3716,7 +3715,9 @@ class DataBrowser(QWidget):
         # one, and to nothing when there is not.
         for group in groups:
             group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            self.param_tabs.add(group, DataBrowser.PARAM_TAB_GLYPHS.get(group.title, ""))
+            self.param_tabs.add(
+                group, DataBrowser.PARAM_TAB_GLYPHS.get(group.title, "")
+            )
         self.param_groups = groups
         # No `equalize`.  It gave every group the tallest one's frame so that
         # a tab change could not change the height of a bar every lane sat
@@ -4053,7 +4054,8 @@ class DataBrowser(QWidget):
         frame = self.parambar.plugin_frame(widget)
         index = region.addTab(frame, str(title))
         region.tabBar().setTabButton(
-            index, QTabBar.ButtonPosition.RightSide,
+            index,
+            QTabBar.ButtonPosition.RightSide,
             self.parambar.close_button(
                 lambda _checked=False, name=label: self.close_plugin_panel(name)
             ),
@@ -9195,12 +9197,12 @@ class DataBrowser(QWidget):
         span = param.maximum - param.minimum
         if span <= 0:
             return 0
-        frac = (float(value) - param.minimum)/span
-        return int(round(self.DENOISE_SLIDER_STEPS*min(max(frac, 0.0), 1.0)))
+        frac = (float(value) - param.minimum) / span
+        return int(round(self.DENOISE_SLIDER_STEPS * min(max(frac, 0.0), 1.0)))
 
     def denoise_slider_value(self, param, pos: int) -> float:
         span = param.maximum - param.minimum
-        return param.minimum + span*pos/self.DENOISE_SLIDER_STEPS
+        return param.minimum + span * pos / self.DENOISE_SLIDER_STEPS
 
     def sync_denoise_rows(self) -> None:
         """Show each denoiser's parameters only while it is running.
@@ -9311,9 +9313,7 @@ class DataBrowser(QWidget):
         wanted = set(self.denoisers_enabled())
         wanted.add(key) if on else wanted.discard(key)
         with self.updating():
-            self.request_recompute(
-                self.data[self.spectrogram], denoisers=tuple(wanted)
-            )
+            self.request_recompute(self.data[self.spectrogram], denoisers=tuple(wanted))
         self.sync_denoise_rows()
 
     def set_denoise_value(self, key: str, pkey: str, value: float) -> None:
@@ -9337,9 +9337,7 @@ class DataBrowser(QWidget):
         if not self.spectrogram or self.spectrogram not in self.data:
             return
         with self.updating():
-            self.request_recompute(
-                self.data[self.spectrogram], denoise_params=pending
-            )
+            self.request_recompute(self.data[self.spectrogram], denoise_params=pending)
         self.sync_denoise_widgets()
 
     def step_denoise_param(self, key: str, pkey: str, steps: float) -> None:
@@ -9351,11 +9349,9 @@ class DataBrowser(QWidget):
         if not self.spectrogram or self.spectrogram not in self.data:
             return
         spectrogram = self.data[self.spectrogram]
-        value = self.denoise_value(key, pkey) + steps*param.step
+        value = self.denoise_value(key, pkey) + steps * param.step
         with self.updating():
-            self.request_recompute(
-                spectrogram, denoise_params={key: {pkey: value}}
-            )
+            self.request_recompute(spectrogram, denoise_params={key: {pkey: value}})
         self.sync_denoise_widgets()
         self.notify(
             "info",

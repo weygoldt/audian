@@ -69,7 +69,9 @@ def _handler(mode, context, message):
     messages.append((mode, text))
     if any(b in text for b in BENIGN):
         return
-    if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg) or any(m in text for m in FATAL_MARKERS):
+    if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg) or any(
+        m in text for m in FATAL_MARKERS
+    ):
         faults.append(text)
     elif mode == QtMsgType.QtWarningMsg:
         # warnings are reported but only fail the run when they name a fault

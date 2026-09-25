@@ -793,9 +793,7 @@ def test_a_column_is_drawn_at_the_centre_of_its_window(stack, mean_off):
     # and the frequency axis is centred too: bin 0 straddles zero rather
     # than sitting entirely above it
     assert rect.top() == pytest.approx(-0.5 * data.fresolution, abs=1e-9)
-    assert rect.height() == pytest.approx(
-        fs / 2 + data.fresolution, abs=1e-9
-    )
+    assert rect.height() == pytest.approx(fs / 2 + data.fresolution, abs=1e-9)
 
 
 def test_the_readout_says_nothing_rather_than_wrapping_off_the_left_edge(
