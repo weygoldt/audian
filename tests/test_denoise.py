@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from audian import denoise  # noqa: E402
 from audian_plugins.denoisers import audian_builtin_denoisers  # noqa: E402
 from audian_plugins.denoisers.engine import (  # noqa: E402
-    mains_comb,
     spatial_coherence,
 )
 
