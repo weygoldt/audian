@@ -28,7 +28,13 @@ from pathlib import Path
 import pytest
 from platformdirs import PlatformDirs
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Assigned, not `setdefault`: a desktop session exports its own platform, and
+# on 2026-09-25 a run from a Hyprland terminal inherited QT_QPA_PLATFORM=wayland.
+# The suite then opened real windows on the compositor, focus and full screen
+# went through the tiling WM, and the platform theme chose the standard key
+# bindings -- 13 failures across a run that is green offscreen.  Every test
+# here is written against offscreen, so it is not a default but a requirement.
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 # Qt6 spells every enum member inside its enum class -- Qt.AlignmentFlag.AlignLeft
 # rather than Qt.AlignLeft.  PySide6 still mirrors the bare names into the owning
