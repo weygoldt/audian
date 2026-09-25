@@ -87,11 +87,6 @@ def thin_bundle(directory: Path) -> Path:
     )
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
 class PanelBrowser(DataBrowser):
     """A `DataBrowser` with only its annotation half constructed.
 

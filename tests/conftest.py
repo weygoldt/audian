@@ -339,6 +339,20 @@ def _isolate_settings(tmp_path_factory):
         )
 
 
+@pytest.fixture(scope="session")
+def app():
+    """The one `QApplication`.
+
+    Session-scoped because Qt allows one per process and it outlives any
+    narrower scope anyway: nine modules each declared their own, at three
+    different scopes, all returning the same instance.  Not autouse, so the
+    modules that test pure logic still run without one.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _qt_teardown():
     """Let Qt destroy its own objects before the interpreter frees them."""

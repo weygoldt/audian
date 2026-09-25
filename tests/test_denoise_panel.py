@@ -33,7 +33,6 @@ sys.path.insert(0, str(REPO / "src"))
 from test_panelsplitter import (  # noqa: E402
     FRAMES,
     RATE,
-    app,  # noqa: F401  - the session QApplication fixture
     open_stack,
     pump,
 )

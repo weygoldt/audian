@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PySide6.QtWidgets import QScrollArea  # noqa: E402
 
-from test_panelsplitter import app, build_window, pump  # noqa: E402,F401
+from test_panelsplitter import build_window, pump  # noqa: E402
 
 from audian_plugins import eventdetection  # noqa: E402
 from audian_plugins.eventdetection import engine as detection  # noqa: E402

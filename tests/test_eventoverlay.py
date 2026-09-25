@@ -31,7 +31,6 @@ sys.path.insert(0, str(REPO / "src"))
 
 import pyqtgraph as pg  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import eventoverlay, session, theme  # noqa: E402
 from audian.layers import PointLayer  # noqa: E402
@@ -68,11 +67,6 @@ RESTING = session.LAYER_PULSES_RESTING
 PULSE_VOLLEY = session.LAYER_PULSES_VOLLEY
 UNEXPLAINED = session.LAYER_DET_UNEXPLAINED
 RUNS = session.LAYER_RUNS
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

@@ -38,7 +38,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QPainterPath  # noqa: E402
-from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget  # noqa: E402
+from PySide6.QtWidgets import QVBoxLayout, QWidget  # noqa: E402
 
 from audian import theme  # noqa: E402
 from audian.controlpanel import ControlPanel  # noqa: E402
@@ -50,11 +50,6 @@ from test_session import simple, write_bundle  # noqa: E402
 
 
 RAIL_WIDTH = 48
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 class Host(QWidget):

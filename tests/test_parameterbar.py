@@ -53,7 +53,6 @@ from audian.databrowser import (  # noqa: E402
     SidePanel,
 )
 from audian.wraprow import WrapRow, pack_row  # noqa: E402
-from test_panelsplitter import app as app  # noqa: E402,F401  -- a fixture
 from test_panelsplitter import open_stack, pump, settle  # noqa: E402
 from test_session import simple  # noqa: E402
 

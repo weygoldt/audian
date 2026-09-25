@@ -79,7 +79,6 @@ from audian.fulltraceplot import (  # noqa: E402
 )
 from audian import fulltraceplot  # noqa: E402
 from audian.labeloverlay import LABEL_NAV_Z, LABEL_Z, CategoryStrip  # noqa: E402
-from test_panelsplitter import app as app  # noqa: E402,F401  -- a fixture
 from test_panelsplitter import open_stack, panel, pump, settle  # noqa: E402
 
 #: The window every measurement quoted in this file was made at.

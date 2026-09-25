@@ -964,16 +964,6 @@ def test_decimation_bounds_the_points_drawn():
 # ----------------------------------------------------------------- the tab
 
 
-@pytest.fixture(scope="module")
-def app():
-    from PySide6.QtWidgets import QApplication
-
-    instance = QApplication.instance()
-    if instance is None:
-        instance = QApplication([])
-    return instance
-
-
 def pump(seconds):
     from PySide6.QtCore import QEvent
     from PySide6.QtWidgets import QApplication

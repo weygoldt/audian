@@ -27,7 +27,6 @@ import time
 import numpy as np
 import pytest
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication
 
 from audian.bufferedfilter import BufferedFilter
 from audian.bufferedspectrogram import BufferedSpectrogram
@@ -68,11 +67,6 @@ class FakeSource:
         self.dests = []
         rng = np.random.default_rng(3)
         self.buffer = rng.standard_normal((NFRAMES, CHANNELS))
-
-
-@pytest.fixture
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

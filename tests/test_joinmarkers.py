@@ -47,11 +47,6 @@ from test_session import pulse, trial, write_bundle  # noqa: E402
 RATE = 48000.0
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def scratch_settings(tmp_path, monkeypatch):
     """An EMPTY settings file, one per test, and the queued write drained.

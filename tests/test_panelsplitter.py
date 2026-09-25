@@ -54,14 +54,6 @@ WINDOW = (1200, 900)
 # --------------------------------------------------------------- the windows
 
 
-@pytest.fixture(scope="session")
-def app():
-    instance = QApplication.instance()
-    if instance is None:
-        instance = QApplication([])
-    return instance
-
-
 def pump(seconds):
     end = time.monotonic() + seconds
     app = QApplication.instance()

@@ -61,13 +61,6 @@ def store(tmp_path):
     audian_app.settings_path = original_path
 
 
-@pytest.fixture
-def app():
-    from PySide6.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
-
-
 # --- the theme preference --------------------------------------------------
 
 

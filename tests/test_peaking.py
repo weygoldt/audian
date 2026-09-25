@@ -37,13 +37,6 @@ from audian import theme  # noqa: E402
 from audian.panels import PeakingColorMap, peaking_colormap, resolve_colormap  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def app():
-    from PySide6.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture(autouse=True)
 def keep_the_theme():
     """The theme is process-wide; see `tests/test_settings.py`'s own copy."""
