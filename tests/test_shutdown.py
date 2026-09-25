@@ -61,7 +61,7 @@ def pump(seconds):
 
 
 @pytest.fixture
-def window(tmp_path):
+def window(app, tmp_path):
     """A window on a one-channel recording, torn down by the test itself."""
     soundfile = pytest.importorskip("soundfile")
     import audian.audian as audian_app
@@ -71,7 +71,6 @@ def window(tmp_path):
     recording = tmp_path / "rec.wav"
     soundfile.write(recording, signal, RATE)
 
-    app = QApplication.instance() or QApplication([])
     theme.apply(app)
     plugins = Plugins()
     plugins.load_plugins()

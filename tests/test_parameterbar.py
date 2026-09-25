@@ -527,6 +527,9 @@ def test_a_long_message_does_not_widen_the_window(browser):
 # ------------------------------------------------------------------ height
 
 
+# picks its browser with `request.getfixturevalue`, which the
+# conftest marker cannot see at collection
+@pytest.mark.slow
 @pytest.mark.parametrize("fixture", ["browser", "wide_browser"])
 def test_a_tab_change_never_takes_width_from_the_channel_stack(fixture, request):
     """The same claim, on the axis the panel constrains.

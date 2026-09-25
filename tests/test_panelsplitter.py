@@ -279,6 +279,9 @@ def roomy_reset(roomy_browser):
 # ------------------------------------------------------- the default layout
 
 
+# picks its browser with `request.getfixturevalue`, which the
+# conftest marker cannot see at collection
+@pytest.mark.slow
 @pytest.mark.parametrize("stack", ["browser", "roomy_browser", "wide_browser"])
 def test_a_lane_opens_with_the_spectrogram_at_the_height_it_grew_the_lane_by(
     stack, request
@@ -330,6 +333,9 @@ def test_the_grab_band_takes_no_height_from_either_panel(browser):
     ) == figure_height(browser, c)
 
 
+# picks its browser with `request.getfixturevalue`, which the
+# conftest marker cannot see at collection
+@pytest.mark.slow
 @pytest.mark.parametrize("stack", ["browser", "roomy_browser", "wide_browser"])
 def test_the_rows_of_every_lane_add_up_to_that_lane_exactly(stack, request):
     """Rows summing past the figure clip the last one, silently.
@@ -1057,6 +1063,9 @@ def test_a_split_saved_by_another_version_is_ignored(browser, monkeypatch, saved
 # ------------------------------------------------------- the empty lane
 
 
+# picks its browser with `request.getfixturevalue`, which the
+# conftest marker cannot see at collection
+@pytest.mark.slow
 @pytest.mark.parametrize("stack", ["browser", "roomy_browser", "wide_browser"])
 @pytest.mark.parametrize("traces", [True, False])
 @pytest.mark.parametrize("specs", [0, 1, 2, 3, 4])

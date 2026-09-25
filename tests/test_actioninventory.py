@@ -74,7 +74,7 @@ def pump(seconds):
 
 
 @pytest.fixture(scope="module")
-def window(tmp_path_factory):
+def window(app, tmp_path_factory):
     """The whole application on a two-channel synthetic recording.
 
     Two channels rather than one: a single-channel file takes a different
@@ -92,7 +92,6 @@ def window(tmp_path_factory):
     recording = directory / "rec.wav"
     soundfile.write(recording, signal, RATE)
 
-    app = QApplication.instance() or QApplication([])
 
     theme.apply(app)
     plugins = Plugins()

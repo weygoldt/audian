@@ -183,6 +183,12 @@ def pytest_collection_modifyitems(config, items):
     So a marker, deselected by default and asked for by name, and synthetic
     fixtures carrying the coverage the gates used to drop.
     """
+    # `fixturenames` is the transitive closure, so a test that only asks for
+    # `browser` is marked too.  Derived rather than hand-applied so that a
+    # new widget test cannot forget it.
+    for item in items:
+        if "app" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.slow)
     if config.getoption("--realdata"):
         return
     skip = pytest.mark.skip(

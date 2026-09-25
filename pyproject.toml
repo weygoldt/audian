@@ -103,6 +103,7 @@ pythonpath = "src"
 # Declared so that `--strict-markers` remains available and so that a typo in a
 # marker name is a collection error rather than a test that quietly never runs.
 markers = [
+  "slow: builds widgets on the QApplication.  Applied by conftest to every test that uses the `app` fixture; deselect with -m 'not slow'.",
   "realdata: needs recordings that are not in this repository.  Deselected by default; run with --realdata.",
 ]
 

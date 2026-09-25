@@ -1268,7 +1268,7 @@ def test_a_letter_rides_above_every_other_annotation(app, layer):
         assert item.zValue() == overlay.label_z
 
 
-def test_the_legend_icons_are_drawn_for_every_kind():
+def test_the_legend_icons_are_drawn_for_every_kind(app):
     color = theme.annotation_color("trial")
     assert not eventoverlay.legend_icon(color, True).isNull()
     assert not eventoverlay.legend_icon(color, False).isNull()
@@ -1283,7 +1283,7 @@ def _painted_rows(pixmap):
     return [y for y in range(image.height()) if image.pixelColor(x, y).alpha() > 0]
 
 
-def test_a_predicted_chip_is_as_tall_as_an_observed_one():
+def test_a_predicted_chip_is_as_tall_as_an_observed_one(app):
     """The chip is the only legend the marks have, so a short predicted line
     here would teach a stub the lane never draws -- and a per-kind y
     allocation is the one thing the drawing rule forbids."""
