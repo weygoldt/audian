@@ -1897,7 +1897,7 @@ class DataBrowser(QWidget):
         self.audio_time = 0.0
         self.audio_use_heterodyne = False
         self.audio_heterodyne_freq = 40000.0
-        self.audio_rate_fac = 1.0
+        self.audio_speed = 1.0
         self.audio_tmax = 0.0
         self.audio_markers = []  # vertical lines showing position while playing
 
@@ -1931,7 +1931,7 @@ class DataBrowser(QWidget):
         # axis-agnostic zoom gestures (see axis_under_pointer):
         self.hover_panel = None
         self.hover_channel = 0
-        self.audiofacw = None
+        self.audiospeedw = None
         self.audiosrcw = None
         self.audioleftw = None
         self.audiorightw = None
@@ -3665,18 +3665,18 @@ class DataBrowser(QWidget):
                 self.audiorightw = combo
         self.audiopairrow = group.add_row("Pair", "", self.audiopairw)
         self.set_pair_row_visible(self.audio_source == DataBrowser.AUDIO_PAIR)
-        self.audiofacw = QComboBox(self.parambar)
-        self.audiofacw.setToolTip("Audio time expansion factor")
-        self.audiofacw.addItems(
+        self.audiospeedw = QComboBox(self.parambar)
+        self.audiospeedw.setToolTip("Playback speed (x real time)")
+        self.audiospeedw.addItems(
             ["0.1", "0.2", "0.5", "1", "2", "5", "10", "20", "50", "100"]
         )
-        self.audiofacw.setEditable(False)
-        self.audiofacw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-        self.audiofacw.setCurrentText(f"{self.audio_rate_fac:g}")
-        self.audiofacw.currentTextChanged.connect(
-            lambda s: self.set_audio(rate_fac=float(s))
+        self.audiospeedw.setEditable(False)
+        self.audiospeedw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
+        self.audiospeedw.setCurrentText(f"{self.audio_speed:g}")
+        self.audiospeedw.currentTextChanged.connect(
+            lambda s: self.set_audio(speed=float(s))
         )
-        group.add_row("Speed", "", self.audiofacw)
+        group.add_row("Speed", "", self.audiospeedw)
         self.audiohetfw = pg.SpinBox(
             self.parambar,
             self.audio_heterodyne_freq,
@@ -10399,12 +10399,12 @@ class DataBrowser(QWidget):
             self.set_times(trange.r0[0] + twin * self.scroll_step, twin)
 
     def set_audio(
-        self, rate_fac=None, use_heterodyne=None, heterodyne_freq=None, dispatch=True
+        self, speed=None, use_heterodyne=None, heterodyne_freq=None, dispatch=True
     ):
-        if rate_fac is not None:
-            self.audio_rate_fac = rate_fac
+        if speed is not None:
+            self.audio_speed = speed
             if not dispatch:
-                self.audiofacw.setCurrentText(f"{self.audio_rate_fac:g}")
+                self.audiospeedw.setCurrentText(f"{self.audio_speed:g}")
         if use_heterodyne is not None:
             self.audio_use_heterodyne = use_heterodyne
         if heterodyne_freq is not None:
@@ -10413,7 +10413,7 @@ class DataBrowser(QWidget):
                 self.audiohetfw.setValue(self.audio_heterodyne_freq)
         if dispatch:
             self.sigAudioChanged.emit(
-                self.audio_rate_fac,
+                self.audio_speed,
                 self.audio_use_heterodyne,
                 self.audio_heterodyne_freq,
             )
@@ -10554,8 +10554,11 @@ class DataBrowser(QWidget):
                 nstep = 1
             playdata = sosfiltfilt(sos, playdata, 0)[::nstep]
             rate /= nstep
-        fade(playdata, rate / self.audio_rate_fac, 0.1)
-        self.audio.play(playdata, rate / self.audio_rate_fac, blocking=False)
+        # a speed multiplies the rate the samples are handed to the device
+        # at, so 2 plays twice as fast and an octave up; after heterodyning
+        # `rate` is already the decimated one
+        fade(playdata, rate * self.audio_speed, 0.1)
+        self.audio.play(playdata, rate * self.audio_speed, blocking=False)
         self.audio_time = t0
         self.audio_tmax = t1
         self.audio_timer.start(50)
@@ -10570,7 +10573,7 @@ class DataBrowser(QWidget):
         self.play_region(trange.r0[0], trange.r1[0])
 
     def mark_audio(self):
-        self.audio_time += 0.05 / self.audio_rate_fac
+        self.audio_time += 0.05 * self.audio_speed
         for amarkers in self.audio_markers:
             for vmarker in amarkers:
                 if vmarker.value() >= 0:

@@ -1107,7 +1107,7 @@ def test_a_lone_field_fills_its_row_but_never_the_window(browser):
     assert page.width() >= SidePanel.MIN_WIDTH - 2 * theme.S8
     # the lone field fills its row ...
     assert view.audiosrcw.width() > page.width() / 2
-    assert view.audiofacw.width() > page.width() / 2
+    assert view.audiospeedw.width() > page.width() / 2
     # ... and the row is the panel, not the window: the 1327 px combo box
     # is unreachable because the panel is a fraction of the window's width
     window = view.window().width()

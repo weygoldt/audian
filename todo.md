@@ -37,23 +37,16 @@ genuinely large: the plugin interface and a torch spectrogram backend.
 
 # Low hanging fruit
 
-- [ ] **Playback speed is upside down.**  The Speed combo in the parameter
-  bar (`databrowser.py`, `self.audiofacw`, tooltip "Audio time expansion
-  factor") sets `audio_rate_fac`, and playback *divides* by it:
-  `self.audio.play(playdata, rate / self.audio_rate_fac)`, with the same
-  division in `fade(...)` and in the cursor step in `mark_audio`
-  (`self.audio_time += 0.05 / self.audio_rate_fac`).  So 2 plays at half
-  speed and 0.5 at double -- a time expansion factor, which is not what a
-  control labelled "Speed" says.  Make it a multiplier: higher is faster,
-  `rate * speed` in all three places, the tooltip saying "Playback speed
-  (x real time)", and the combo offering the same values, whose meaning
-  now inverts.  Rename `audio_rate_fac` / `rate_fac` (through `set_audio`
-  and `Audian.dispatch_audio`) to `audio_speed` so the name stops meaning
-  the opposite.  Not persisted in settings and not in the manual, so
-  nothing to migrate.  The heterodyne path decimates before playing and
-  must still end up at the right pitch -- worth one test that asserts the
-  rate handed to `audio.play` for speeds 0.5, 1 and 2, with a stubbed
-  `self.audio`.
+- [x] **Playback speed is upside down.**  Fixed: the Speed combo is a
+  multiplier now -- `rate * speed` in `fade`, `audio.play` and the cursor
+  step in `mark_audio` -- so 2 plays twice as fast and an octave up.  Same
+  values on the combo (0.1 to 100); audioio decimates anything above 48 kHz
+  on its own, so the fast end plays rather than failing.  `audio_rate_fac`,
+  `rate_fac` and `audiofacw` are `audio_speed`, `speed` and `audiospeedw`.
+  `test_playback.py` asserts the rate handed to a stubbed `audio.play` at
+  0.5, 1 and 2 on both paths -- heterodyne at 100 kHz lands on 50 kHz x
+  speed after its 2x decimation -- and the cursor step; the 0.5 and 2 cases
+  go red with the division put back.
 
 - [x] For spectrograms, keep the powerspec and the colorbar off by default.
   `show_powers` was already off; only `show_cbars` had to flip.  Doing it

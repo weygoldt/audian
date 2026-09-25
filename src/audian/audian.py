@@ -5259,11 +5259,11 @@ class Audian(QMainWindow):
                 if b is not self.browser() and isinstance(b, DataBrowser):
                     b.set_audio_pair(left, right, False)
 
-    def dispatch_audio(self, rate_fac, use_heterodyne, heterodyne_freq):
+    def dispatch_audio(self, speed, use_heterodyne, heterodyne_freq):
         if self.link_audio:
             for b in self.browsers:
                 if b is not self.browser():
-                    b.set_audio(rate_fac, use_heterodyne, heterodyne_freq, False)
+                    b.set_audio(speed, use_heterodyne, heterodyne_freq, False)
 
     def next_tab(self):
         idx = self.tabs.currentIndex()

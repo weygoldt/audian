@@ -7,6 +7,9 @@ called unbound against a stand-in.
 
 from types import SimpleNamespace
 
+import numpy as np
+import pytest
+
 from audian.databrowser import DataBrowser
 from audian.timeplot import SI_UNITS, si_prefixable
 
@@ -300,3 +303,74 @@ def test_per_channel_y_applies_only_to_the_selection():
 def test_per_channel_y_honours_a_multi_selection():
     stub = _ranged(DataBrowser.y_per_channel, [2, 3, 4])
     assert DataBrowser.range_channels(stub) == [2, 3, 4]
+
+
+class _Recording(np.ndarray):
+    """A frames-by-channels array with the `rate` a data layer carries."""
+
+    def __new__(cls, rate, seconds=0.2, channels=2):
+        frames = int(rate * seconds)
+        rng = np.random.default_rng(0)
+        array = rng.standard_normal((frames, channels)).view(cls)
+        array.rate = float(rate)
+        array.channels = channels
+        return array
+
+    def __array_finalize__(self, obj):
+        self.rate = getattr(obj, "rate", None)
+        self.channels = getattr(obj, "channels", None)
+
+
+def _player(rate, speed, heterodyne=False):
+    """The attributes play_region and mark_audio read, with `audio` stubbed."""
+    played = []
+    recording = _Recording(rate)
+    stub = SimpleNamespace(
+        data={"data": recording},
+        audio_source=DataBrowser.AUDIO_SELECTED,
+        audio_channels=lambda: [0],
+        audio_use_heterodyne=heterodyne,
+        audio_heterodyne_freq=40000.0,
+        audio_speed=speed,
+        audio=SimpleNamespace(
+            play=lambda data, rate, blocking=True: played.append((len(data), rate))
+        ),
+        audio_timer=SimpleNamespace(start=lambda ms: None, stop=lambda: None),
+        audio_markers=[[] for _ in range(recording.channels)],
+        audio_time=0.0,
+        audio_tmax=0.0,
+    )
+    return stub, played
+
+
+@pytest.mark.parametrize("speed", [0.5, 1.0, 2.0])
+def test_speed_multiplies_the_playback_rate(speed):
+    """Higher is faster: 2 hands the device twice the recording's rate.
+
+    It used to divide, so the control labelled Speed was a time expansion
+    factor and 2 played at half speed.
+    """
+    stub, played = _player(20000.0, speed)
+    DataBrowser.play_region(stub, 0.0, 0.1)
+    assert played == [(2000, 20000.0 * speed)]
+
+
+@pytest.mark.parametrize("speed", [0.5, 1.0, 2.0])
+def test_heterodyne_speed_multiplies_the_decimated_rate(speed):
+    """The heterodyne path decimates first and must still land on pitch.
+
+    At 100 kHz with its 20 kHz low pass it keeps every second sample, so
+    real time is 50 kHz and a speed scales that, not the file's rate.
+    """
+    stub, played = _player(100000.0, speed, heterodyne=True)
+    DataBrowser.play_region(stub, 0.0, 0.1)
+    assert played == [(5000, 50000.0 * speed)]
+
+
+@pytest.mark.parametrize("speed", [0.5, 1.0, 2.0])
+def test_the_cursor_moves_at_the_playback_speed(speed):
+    """Each 50 ms tick advances the cursor 50 ms of *recording* times speed."""
+    stub, _ = _player(20000.0, speed)
+    stub.audio_tmax = 10.0
+    DataBrowser.mark_audio(stub)
+    assert stub.audio_time == pytest.approx(0.05 * speed)
