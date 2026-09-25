@@ -562,14 +562,15 @@ action that leaves state behind has to join them.
     twice restores the panels it changed.  `traces_before_mean` survives.
   * **Channels.**  `overlay_channels()` is `mean_channels()`'s set, so the
     two panels always describe the same electrodes.
-  * **Colours.**  `theme.CHANNEL_COLORS` / `LIGHT_CHANNEL_COLORS`: six hues
-    per theme, the most that clear `MIN_CATEGORY_SEPARATION` under every
-    vision kind (worst pair 15.29 dark, 15.05 light; best seven 14.57 and
-    13.26; `MARKER_COLORS` fails at 0.72 deutan).  They repeat on sixteen
-    channels, so the caption is a coloured legend (`OVERLAY 00 01 ...`) and
-    hovering emphasises the nearest channel's trace and names it in the
-    readout; the cross hair snaps to the nearest channel.  The rail is off
-    screen in this mode as in the mean, so it carries no colour.
+  * **Colours.**  `theme.CHANNEL_COLORS` / `LIGHT_CHANNEL_COLORS`: an OKLCH
+    ring of sixteen hues at one lightness (L 0.78 dark, 0.58 light), channel
+    c on hue 5c mod 16.  Replaced a first six-hue palette chosen for
+    colour-blind separation (worst pair 15.29) that the reader found ugly;
+    the ring trades that away knowingly (worst CVD pair 0.36) for sixteen
+    unrepeated colours, neighbours 39.3 apart under normal vision.  The
+    caption is a coloured legend (`OVERLAY 00 01 ...`), hovering emphasises
+    and names the nearest channel, and the cross hair snaps to it.  The rail
+    is off screen in this mode as in the mean, so it carries no colour.
   * **Y.**  One range fitted over every overlaid channel; per-channel means
     shared here.
   * **Cost.**  Measured (`tests/measure_overlay.py`, 16 ch, 300 s window):
@@ -578,7 +579,8 @@ action that leaves state behind has to join them.
   * **Annotations.**  Every overlaid channel's labels, coloured by category;
     a label drawn on the overlay names no channel.  Same rule as the mean.
 
-  Not done: no toolbar button (width budget; the menu carries the check).
+  Tool bar button beside the mean's, glyph `overlay`: window minimum width
+  unchanged at 695 px, tool bar size hint 1038 -> 1079 (`tests/measure_chrome.py`).
 
 # Future larger dev sessions
 

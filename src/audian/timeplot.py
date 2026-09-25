@@ -337,9 +337,10 @@ class TimePlot(RangePlot):
     def overlay_legend(self, html: bool = False) -> str:
         """The overlaid channels in display order, each in its own colour.
 
-        This is the legend: with six hues cycled over sixteen channels the
-        colour alone cannot name a channel, but the colour next to the
-        number can.  Plain text for `caption_text`, HTML for the item.
+        This is the legend: sixteen hues at one lightness are told apart
+        side by side far more easily than named from memory, and not at all
+        by a reader with a colour-vision deficiency, so the number beside
+        each colour is what names the channel.  Plain text for `caption_text`, HTML for the item.
         """
         channels = self.overlay_channels or []
         if len(channels) > MAX_LEGEND_CHANNELS:

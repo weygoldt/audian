@@ -206,6 +206,20 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
                 int(field.left() + e * frac),
                 int(y),
             )
+    elif kind == "overlay":
+        # two unrelated waveforms crossing in one box: several channels'
+        # traces drawn together.  Mirror images of one wave were tried first
+        # and closed into a chain of diamonds.  Sits beside `meanspec` on the
+        # tool bar, the pair a lane's two panels collapse into.
+        for wave in ((0.35, 0.05, 0.75, 0.25, 0.55), (0.70, 0.95, 0.40, 0.85, 0.60)):
+            path = QPainterPath()
+            for i, v in enumerate(wave):
+                point = (m + e * 0.25 * i, m + e * v)
+                if i == 0:
+                    path.moveTo(*point)
+                else:
+                    path.lineTo(*point)
+            painter.drawPath(path)
     elif kind == "power":
         # a peaked curve rising from the left
         path.moveTo(m, m + e)
@@ -2709,6 +2723,7 @@ class Audian(QMainWindow):
         self._set_glyph(self.acts.toggle_traces, "trace")
         self._set_glyph(self.acts.toggle_spectrograms, "spectrogram")
         self._set_glyph(self.acts.toggle_mean_spec, "meanspec")
+        self._set_glyph(self.acts.toggle_overlay_traces, "overlay")
         self._set_glyph(self.acts.toggle_power, "power")
         self._set_glyph(self.acts.toggle_cbars, "colorbar")
         self._set_glyph(self.acts.toggle_fulldata, "navigator")
@@ -2717,6 +2732,7 @@ class Audian(QMainWindow):
             self.acts.toggle_traces,
             self.acts.toggle_spectrograms,
             self.acts.toggle_mean_spec,
+            self.acts.toggle_overlay_traces,
             self.acts.toggle_power,
             self.acts.toggle_cbars,
             self.acts.toggle_fulldata,
@@ -5187,8 +5203,7 @@ class Audian(QMainWindow):
         # Ctrl+Shift+F2, the next modifier on the same key: it is the mean's
         # counterpart for traces.  Not Ctrl+F2 and not Alt+F2, which KDE
         # Plasma claims by default (switch to desktop 2, KRunner) before the
-        # window ever sees them.  No toolbar button: the bar is already the
-        # width budget on a 14" panel, and the menu carries the check state.
+        # window ever sees them.
         self.acts.toggle_overlay_traces = QAction("Toggle &overlay traces", self)
         self.acts.toggle_overlay_traces.setCheckable(True)
         self.acts.toggle_overlay_traces.setShortcut("Ctrl+Shift+F2")

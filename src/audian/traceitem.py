@@ -129,9 +129,9 @@ class TraceItem(VisibleChannelMirror, pg.PlotDataItem):
         if self.channel_color is not None:
             # A hairline at every zoom: sixteen of these share one view box
             # and a 2 px sample-level stroke would bury its neighbours.  The
-            # emphasised one gets the selected width instead, which is the
-            # whole of how a hue repeated on channels 0, 6 and 12 is told
-            # apart from its twins under the pointer.
+            # emphasised one gets the selected width instead, which is how
+            # the line under the pointer is picked out of sixteen without
+            # relying on its hue.
             return theme.pen(
                 self.channel_color,
                 width=theme.LW_SELECTED if self.emphasized else theme.LW_THIN,

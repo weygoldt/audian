@@ -2926,42 +2926,62 @@ def marker_color(index: int) -> str:
 
 
 #: One colour per channel, for the overlay trace panel where every channel's
-#: waveform shares one view box.  Six hues, cycled: channel ``c`` is always
-#: ``CHANNEL_COLORS[c % 6]``, so a channel keeps its colour whatever else is
-#: selected.
+#: waveform shares one view box.  Sixteen hues, one per electrode of the
+#: design-centre grid, so no two of its channels share a colour; channel ``c``
+#: is always ``CHANNEL_COLORS[c % 16]``, whatever else is selected.
 #:
-#: Six because six is the most any palette reaches while clearing
-#: :data:`MIN_CATEGORY_SEPARATION` in the worst of :data:`VISION_KINDS`.  An
-#: exhaustive search over Okabe-Ito, Paul Tol's bright, vibrant, muted and
-#: light sets and IBM's five, keeping hues >= 3:1 against ``bg.plot`` and
-#: dropping the greys that would sit on the zero line, found a worst pair of
-#: 15.29 (dark) and 15.05 (light) at six; the best seven were 14.57 and
-#: 13.26.  :data:`MARKER_COLORS` was not a candidate for this: its worst pair
-#: is 0.72 under deuteranopia.  Sixteen channels therefore repeat each hue
-#: two or three times; the caption's legend and the hover emphasis are what
-#: tell a repeated pair apart.
+#: A ring in OKLCH: sixteen hues evenly spaced from 25 degrees at one
+#: lightness and chroma (L 0.78, C 0.13 here), which is what makes them read
+#: as a set rather than as a box of crayons -- the six-hue palette this
+#: replaced was chosen for colour-blind separation alone and looked it
+#: (olive, bottle green, mustard).  Channel ``c`` takes hue ``5c mod 16``, so
+#: neighbouring channels -- neighbouring electrodes -- sit 112.5 degrees
+#: apart.  Measured with :func:`delta_e2000`: neighbours 39.3 apart, the
+#: closest pair of all 8.68, contrast >= 8.82:1 on ``bg.plot``.
 #:
-#: Ordered so that consecutive entries -- neighbouring channels, which on a
-#: grid are neighbouring electrodes -- are the most separated: worst adjacent
-#: pair 20.34 (dark) and 22.65 (light).
-#: (contrast on bg.plot)
+#: **The price is colour-vision deficiency.**  At one lightness only hue
+#: separates them, and the worst pair under :data:`VISION_KINDS` is 0.36
+#: (neighbours 2.03), against 15.29 for the palette it replaced.  Chosen
+#: knowingly, for looks; the caption's legend and the hover emphasis are
+#: what name a channel whatever colour it is seen as.
 CHANNEL_COLORS: list[str] = [
-    "#117733",  # 3.32
-    "#AA3377",  # 3.09
-    "#648FFF",  # 6.19
-    "#999933",  # 6.23
-    "#F0E442",  # 14.21
-    "#CC79A7",  # 6.14
+    "#FF958D",
+    "#8ECB77",
+    "#73BDFF",
+    "#FC93B0",
+    "#B5C159",
+    "#46C7F8",
+    "#EE95D1",
+    "#D5B549",
+    "#1ACFDF",
+    "#D99CEE",
+    "#ECA851",
+    "#30D2BE",
+    "#BDA6FF",
+    "#FB9C6C",
+    "#61D19A",
+    "#9BB1FF",
 ]
 
-#: The light theme's six, chosen by the same search against the white plot.
+#: The same ring at L 0.58 for the white plot: contrast >= 3.87:1, neighbours
+#: 37.34 apart, closest pair 8.11, worst under colour-vision deficiency 0.49.
 LIGHT_CHANNEL_COLORS: list[str] = [
-    "#117733",  # 5.66
-    "#AA4499",  # 5.26
-    "#999933",  # 3.02
-    "#648FFF",  # 3.04
-    "#332288",  # 12.17
-    "#CC79A7",  # 3.06
+    "#BB5752",
+    "#528C3A",
+    "#347EC4",
+    "#B75573",
+    "#798205",
+    "#0088B6",
+    "#AC5892",
+    "#957700",
+    "#008F9F",
+    "#995FAC",
+    "#AA6A00",
+    "#009281",
+    "#8168BE",
+    "#B75F2D",
+    "#06915F",
+    "#6173C7",
 ]
 
 _CHANNEL_TABLES: dict[str, list[str]] = {

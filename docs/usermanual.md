@@ -254,13 +254,14 @@ channels the mean does, so solo and mute choose what is overlaid, and the
 channel rail goes off screen the same way.
 
 Each channel is drawn in its own colour, and a channel keeps that colour
-whatever else is selected. There are six colours, the most any palette
-offers while staying distinguishable under every kind of colour vision
-deficiency, so on sixteen channels each colour appears two or three times.
-The caption is the legend — `OVERLAY 00 01 02 …`, each number in its
-channel's colour — and pointing at a line names the channel in the status
-bar and draws that channel's trace thicker and on top. The cross hair snaps
-to the nearest channel's trace.
+whatever else is selected: sixteen hues of equal lightness, with
+neighbouring channels far apart on the colour wheel. The caption is the
+legend — `OVERLAY 00 01 02 …`, each number in its channel's colour — and
+pointing at a line names the channel in the status bar and draws that
+channel's trace thicker and on top, which is the way to tell channels apart
+if you do not see the colours well. The cross hair snaps to the nearest
+channel's trace. The tool bar button beside the mean spectrogram's toggles
+the mode.
 
 The panel has one Y range, fitted to hold every overlaid channel. The
 per-channel Y mode means the same as the shared one here.
