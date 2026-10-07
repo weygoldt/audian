@@ -68,6 +68,15 @@ pointwise in time, because the spectrogram is transformed in chunks.  See
 `audian.denoise` for the whole contract and `audian_plugins.denoisers` for
 two written against it.
 
+Remembering preferences
+-----------------------
+
+`settings()` reads audian's preferences file and `save_setting(key, value)`
+updates one key in it, atomically; neither raises.  A plugin keeps its own
+preferences under one key of its own, as a versioned dict.  `cache_path()`
+is audian's cache directory, for files a plugin may lose (autosaves); it is
+read on every call, so the test suite's redirect of it holds for plugins too.
+
 Working off the GUI thread
 --------------------------
 
@@ -80,6 +89,7 @@ thread should own one.
 """
 
 from . import theme
+from .audian import save_setting, settings
 from .data import open_files
 from .databrowser import ParameterGroup, caption_label, narrow_combo
 from .denoise import Denoiser, Parameter
@@ -98,6 +108,16 @@ PLUGIN_BROWSER_ATTRS = (
     "spectrogram_axes",  # the lanes, for a plugin that draws in frequency
 )
 
+
+def cache_path():
+    """audian's cache directory, a `pathlib.Path` (it may not exist yet)."""
+    from pathlib import Path
+
+    from . import version
+
+    return Path(version.audian_dirs.user_cache_path)
+
+
 __all__ = [
     "KIND_POINT",
     "KIND_SPAN",
@@ -109,8 +129,11 @@ __all__ = [
     "LabelCategory",
     "Parameter",
     "ParameterGroup",
+    "cache_path",
     "caption_label",
     "narrow_combo",
     "open_files",
+    "save_setting",
+    "settings",
     "theme",
 ]

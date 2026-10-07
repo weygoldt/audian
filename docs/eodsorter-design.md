@@ -407,10 +407,22 @@ script:
 2. Automatic: `sys.executable`, if `importlib.util.find_spec("wavetracker")`
    finds it in this process (this does not import it).
 3. Automatic: the environment variable `WAVETRACKER_PYTHON`.
-4. Nothing: the run controls are disabled and the panel says how to fix it
-   ("Set the Python that has wavetracker installed, e.g.
-   `~/wrk/tools/wavetracker/.venv/bin/python`, or set WAVETRACKER_PYTHON").
-   Opening existing results and every edit still work.
+4. Automatic: the interpreter of a `wavetracker` command on PATH, read from
+   its first line (`#!/.../python`, pip's `/bin/sh` exec preamble, or
+   `#!/usr/bin/env python3`): a wavetracker installed into its own venv, or
+   with `uv tool`/`pipx`, needs no setting.
+5. Nothing: the interpreter line says so in red and how to fix it ("Choose
+   the Python of the environment wavetracker is installed in (its
+   `<venv>/bin/python`), or set WAVETRACKER_PYTHON"); **Track visible** and
+   **Track recording** then open the Run settings at that field instead of
+   running.  Opening existing results and every edit still work.
+
+Choosing the interpreter is a one-time thing: **Choose...** opens a file
+picker (picking the `wavetracker` command itself works too, it is resolved
+to its Python), the path is written to the settings at once, and the runner
+is started to check it.  The line then reads "wavetracker 0.3.0 · Python
+3.12 · cpu, cuda" in green with a check mark, or "startup: <the last line of
+the error>" in red.
 
 The candidate is confirmed by the runner's `hello` (4.4), not by trusting
 the path; the panel shows "wavetracker 0.3.0 · Python 3.12.3 · cuda" or the
@@ -912,12 +924,29 @@ button, because a stray Esc must not throw away a twenty-minute run).
   value 255 when the map's floor is dark, value 150 when it is light; hues
   within 25° of the map's bright end are shifted 40° away.  Pens are re-read
   on every redraw so a theme or colour-map switch takes effect immediately.
+* **Legibility on the ridge** (as built): every track line, snippet line and
+  dot has a dark edge in the map's floor colour, one pixel each side, also
+  at overview zoom; slot hues also avoid the chromatic hues of the map's
+  upper half (audian's default map paints ridges yellow on their flanks,
+  even though its peak is white).  "Dim spectrogram" lays the floor colour
+  at 60 % over the lane, under the tracks.
 * **Unassigned points**: 3 px dots in the map's mid-grey at 45 % alpha,
   hidden by default above 200,000 visible points (the toggle `U` overrides).
 * Ids with a reader-given label show the label in the hover box and in the
   track table; colour does not change.
 
 ### 5.8 Panel layout
+
+*As built (after the first QA pass):* the order is session header (with
+**Track visible** / **Track recording** and the progress row, so a run is
+reachable and visible whatever is folded), the snippet bar, **Edit** (toggle,
+tools, hint, Undo/Redo, brush, sticky, "Dim spectrogram", and a "Display and
+keys" disclosure for the rest), **History**, **Tracks**, **Issues** (folded)
+and **Run settings** (interpreter, fish range, device, config, advanced,
+cleanup).  Every group below the header folds; the folds are remembered, and
+Run settings folds itself after the first run.  When no spectrogram lane is
+shown, the header says "Tracks are drawn on spectrograms" with a Show button.
+The original plan follows.
 
 The panel is a narrow side tab (≥ 220 px) built from
 `ParameterGroup(title, self, caption=False, narrow=True)` groups:

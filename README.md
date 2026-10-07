@@ -77,6 +77,34 @@ examples survives noise, why the threshold is relative to the noise floor
 instead of an absolute score, and where the whole approach stops working. See
 [`engine.py`](src/audian_plugins/eventdetection/engine.py) for the numbers.
 
+## Tracking electric fish with wavetracker
+
+**Plugins → Wavetracker** runs [wavetracker](https://github.com/weygoldt/wavetracker)
+from inside audian and lets you correct what it got wrong, on the
+spectrogram you are looking at. It replaces wavetracker's `EODsorter`.
+
+- **Track visible** tracks the window in front of you in a few seconds and
+  shows the result dashed over the session, to *Accept* or *Discard*.
+  **Track recording** runs over the whole file (or split session) in the
+  background. Or open an existing wavetracker output directory.
+- **Edit tracks** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>) gives the mouse
+  six tools: Select <kbd>V</kbd>, Erase <kbd>E</kbd>, Cut <kbd>C</kbd>,
+  Merge <kbd>M</kbd>, Assign <kbd>A</kbd>, Add <kbd>F</kbd>. Brushes paint
+  their stroke as you drag, the track under the pointer is highlighted, and
+  a box beside it says what the next click will do before you make it.
+- **Undo is a history**, not one step: <kbd>Ctrl</kbd>+<kbd>Z</kbd> /
+  <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>, or click any entry to go back
+  to it. Edits are autosaved for crash recovery.
+- **Saving never destroys the tracker's output**: the original identities are
+  kept as `ident_v.tracked.npy`, the save is atomic, and the directory still
+  loads with wavetracker's `Results.load`.
+
+wavetracker itself runs in its own Python, in a separate process, so its
+torch install stays out of audian's environment and a run never freezes the
+window. Point **Run settings → Python** at that interpreter (or the
+`wavetracker` command) once; it is remembered. The design, and the legacy
+bugs it removes, are in [`docs/eodsorter-design.md`](docs/eodsorter-design.md).
+
 ## Curating tracked frequency bands
 
 A tracker finds the bands. You fix the ones it got wrong.
