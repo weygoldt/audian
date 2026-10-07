@@ -761,6 +761,10 @@ class SceneState:
     point_px: int = 3
     gap_break_s: float = 0.5
     show_ids: bool = True
+    #: ids that look like a harmonic of another id, with the label suffix
+    #: that says so (``{57.0: "×2 of 12"}``); labelled whatever `show_ids`
+    #: says, while the finding stands (design 5.13)
+    harmonic_marks: dict = field(default_factory=dict)
     #: veil the spectrogram under the tracks (drawing only, not geometry)
     dim_spec: bool = False
     hover: Optional[Hover] = None
@@ -817,6 +821,7 @@ class SceneState:
             int(self.point_px),
             round(float(self.gap_break_s), 6),
             bool(self.show_ids),
+            tuple(sorted(self.harmonic_marks.items())),
         )
 
 
@@ -1035,8 +1040,13 @@ def compute_geometry(
     if len(arows):
         ids_here = ids_in_frames(ts, arows, view, allowed, scene.hidden_ids)
         n_ids = len(ids_here)
+        marked = scene.harmonic_marks
         if scene.show_ids and n_ids <= MAX_ID_LABELS:
-            for i in ids_here:
+            label_ids = ids_here
+        else:
+            label_ids = [i for i in ids_here if float(i) in marked]
+        if len(label_ids):
+            for i in label_ids:
                 r = track_in_view(ts, i, view, pad_frames=0)
                 r = r[(ts.fund[r] >= view.y0) & (ts.fund[r] <= view.y1)]
                 if len(r) == 0:

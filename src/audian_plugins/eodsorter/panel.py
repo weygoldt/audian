@@ -87,6 +87,7 @@ from PySide6.QtWidgets import (
 from audian.pluginapi import CancelToken, ParameterGroup, narrow_combo, theme
 
 from . import geometry as G
+from . import harmonics as HM
 from . import model as M
 from . import runner as R
 from .overlay import TrackOverlay, view_of
@@ -167,7 +168,21 @@ ISSUE_KINDS = (
     ("gap", "gaps"),
     ("short", "short tracks"),
     ("crossing", "crossings"),
+    ("harmonic", "harmonics"),
 )
+
+#: a harmonic check of the ids an edit gave rows to (5.13) runs in the GUI
+#: thread when it covers at most this many rows (about 10 ms: iriri, 150,000
+#: rows in 18 ms), else in a worker thread
+HARMONIC_SYNC_ROWS = 60_000
+#: how the warning names the edit Ctrl+Z undoes, by plan kind
+GROW_VERB = {
+    "add": "add",
+    "new_id": "new id",
+    "assign": "assign",
+    "merge": "merge",
+    "replace_span": "accept",
+}
 
 
 # ---------------------------------------------------------------- settings
@@ -509,6 +524,7 @@ class WavetrackerPanel(QWidget):
     """The Tracks tab."""
 
     sigModelChanged = Signal(object)  # Change
+    _sigHarmonics = Signal(object)  # (job, findings) from the worker
 
     def __init__(self, browser, parent=None) -> None:
         super().__init__(parent)
@@ -547,6 +563,12 @@ class WavetrackerPanel(QWidget):
         self._issues: list = []
         self._issues_key = None
         self.current_issue = None
+        #: harmonic findings that involve an edited id, by harmonic id
+        #: (5.13): marked on the lanes while they stand
+        self.harmonic_findings: dict = {}
+        #: the issue the last harmonic warning made current (Enter accepts
+        #: it without moving on)
+        self._warned_issue = None
         self._goto_span = None
         self._history_len = -1
         self._loaded_for = None
@@ -556,6 +578,7 @@ class WavetrackerPanel(QWidget):
 
         self._build()
         self.controller.sigCommit.connect(self.apply_plan)
+        self._sigHarmonics.connect(self._harmonics_answer)
         self.controller.sigHint.connect(self._set_hint)
         self.controller.sigChanged.connect(self._scene_changed)
         self.controller.sigSelection.connect(self._selection_changed)
@@ -1394,6 +1417,9 @@ class WavetrackerPanel(QWidget):
         self.folder = Path(folder) if folder is not None else None
         self.current_issue = None
         self._issues_key = None
+        self.harmonic_findings = {}
+        self._warned_issue = None
+        self.scene.harmonic_marks = {}
         self._history_len = -1
         for tool in self.controller.tools.values():
             tool.deactivate()
@@ -1423,7 +1449,117 @@ class WavetrackerPanel(QWidget):
             return None
         self._after_change(change, flash=True)
         self.controller.say(plan.label)
+        self._check_harmonics(plan, change)
         return change
+
+    # ---- harmonics (5.13)
+
+    def _check_harmonics(self, plan, change) -> None:
+        """Whether an id the reader just gave rows to is a harmonic of
+        another id, or another id a harmonic of it."""
+        ts = self.ts
+        ids = ts.grown_ids(plan)
+        if not len(ids):
+            return
+        sub = ts.harmonic_subset(ids)
+        if sub is None:
+            return
+        job = (id(ts), change.revision, ids, plan.kind)
+        args = (*sub, np.asarray(ts.times), ts.frequency_bin())
+        if len(sub[0]) <= HARMONIC_SYNC_ROWS:
+            self._harmonics_found(job, HM.find_harmonics(*args, ids=ids))
+            return
+        import threading
+
+        def run() -> None:
+            try:
+                found = HM.find_harmonics(*args, ids=ids)
+            except Exception:  # noqa: BLE001 - a check must not take the window
+                return
+            if not self._closing:
+                try:
+                    self._sigHarmonics.emit((job, found))
+                except RuntimeError:  # the panel is gone
+                    pass
+
+        threading.Thread(target=run, name="wavetracker-harmonics", daemon=True).start()
+
+    def _harmonics_answer(self, payload) -> None:
+        self._harmonics_found(*payload)
+
+    def _harmonics_found(self, job, found) -> None:
+        ts_id, revision, ids, kind = job
+        ts = self.ts
+        if ts is None or id(ts) != ts_id or ts.revision != revision:
+            return  # another edit came first; its own check speaks
+        edited = {float(i) for i in ids}
+        found = [
+            x for x in found if x.harmonic_id in edited or x.fundamental_id in edited
+        ]
+        if not found:
+            return
+        for x in found:
+            self.harmonic_findings[float(x.harmonic_id)] = x
+        self._mark_harmonics()
+        first = found[0]
+        issue = M.harmonic_issue(first, edited)
+        verb = GROW_VERB.get(kind, "edit")
+        hid = M._fid(first.harmonic_id)
+        if len(found) == 1:
+            text = f"{issue.text} · Ctrl+Z undoes the {verb}"
+            short = (
+                f"id {hid} looks like the {first.ordinal()} harmonic of id "
+                f"{M._fid(first.fundamental_id)}"
+            )
+        else:
+            names = ", ".join(
+                f"{M._fid(x.harmonic_id)} ({M.harmonic_mark(x)})" for x in found[:4]
+            )
+            names += ", …" if len(found) > 4 else ""
+            text = (
+                f"{len(found)} ids look like harmonics: {names} — Enter: unassign "
+                f"id {hid} · Ctrl+Z undoes the {verb}"
+            )
+            short = f"{len(found)} ids look like harmonics: {names}"
+        self.current_issue = issue
+        self._warned_issue = issue
+        self.issuetextw.setText(text)
+        self.controller.say(text)
+        self.browser.notify("warning", f"wavetracker: {short}")
+
+    def _mark_harmonics(self) -> None:
+        marks = {
+            float(h): M.harmonic_mark(x) for h, x in self.harmonic_findings.items()
+        }
+        if marks != self.scene.harmonic_marks:
+            self.scene.harmonic_marks = marks
+            self.scene.touch_display()
+            self.schedule()
+
+    def _revalidate_harmonics(self) -> None:
+        """After any change: keep the findings that still stand (an undo of
+        the add, or unassigning the harmonic, ends one)."""
+        ts = self.ts
+        old = self.harmonic_findings
+        if ts is None or not old:
+            return
+        still = {}
+        for x in ts.harmonics(list(old)):
+            h = float(x.harmonic_id)
+            if h in old and float(x.fundamental_id) == float(old[h].fundamental_id):
+                still[h] = x
+        self.harmonic_findings = still
+        self._mark_harmonics()
+        issue = self.current_issue
+        if (
+            issue is not None
+            and issue.kind == "harmonic"
+            and issue is self._warned_issue
+            and float(issue.ids[0]) not in still
+        ):
+            self.current_issue = None
+            self._warned_issue = None
+            self.issuetextw.setText("")
 
     def _after_change(self, change, flash: bool = False) -> None:
         if change is None:
@@ -1437,6 +1573,7 @@ class WavetrackerPanel(QWidget):
             overlay.invalidate(change)
         self.controller.refresh()
         self._issues_key = None
+        self._revalidate_harmonics()
         self._refresh_all()
         self.schedule()
         if flash:
@@ -2068,9 +2205,18 @@ class WavetrackerPanel(QWidget):
         if issue.suggestion is None:
             self.controller.say("no suggestion for this issue: zoom in and decide")
             return
+        warned = issue is self._warned_issue
         if self.controller.commit_plan(lambda: issue.suggestion(ts)):
             self.current_issue = None
             self.scene.span_outline = None
+            if warned:
+                # the warning came after an edit, not from G: stay here
+                self._warned_issue = None
+                self.issuetextw.setText("")
+                self.controller.say(
+                    f"unassigned id {M._fid(issue.ids[0])} · Ctrl+Z restores it"
+                )
+                return
             self.goto_issue(+1)
 
     # ============================================================ history

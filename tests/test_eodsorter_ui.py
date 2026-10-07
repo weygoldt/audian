@@ -583,6 +583,123 @@ def test_add_stroke_appends_detections_as_a_new_track(panel, how):
     assert ts.n == n0
 
 
+def _fish_in_view(p, near):
+    """The id in view whose median frequency is closest to `near`, and its
+    detections in the middle 2 s of the view."""
+    ts = p.ts
+    v = lane(p).view()
+    ids = ids_in_view(p)
+    med = [float(np.median(ts.fund[ts.rows_of(i)])) for i in ids]
+    fid = ids[int(np.argmin(np.abs(np.array(med) - near)))]
+    rows = ts.rows_of(fid)
+    t = ts.times[ts.idx[rows]]
+    mid = 0.5 * (v.x0 + v.x1)
+    rows = rows[(t > mid - 1.0) & (t < mid + 1.0)]
+    return fid, ts.times[ts.idx[rows]], ts.fund[rows]
+
+
+def test_adding_a_harmonic_warns_enter_unassigns_it_and_undo_restores(
+    panel, monkeypatch
+):
+    """5.13: paint along twice a fish's frequency; the new id is named a
+    harmonic at once (hint, a notification, the label on the lane), Enter
+    unassigns it, Ctrl+Z brings it back."""
+    ts = panel.ts
+    told = []
+    monkeypatch.setattr(
+        panel.browser, "notify", lambda lvl, msg: told.append((lvl, msg))
+    )
+    panel.ridgew.setChecked(False)  # paint literally, along the stroke
+    panel.browser.set_ranges("f", 540.0, 1900.0)
+    pump(0.1)
+    fid, t, f = _fish_in_view(panel, 820.0)
+    panel.controller.set_tool("F")
+
+    # a different fish 4 Hz above twice f: no warning
+    n0 = ts.n
+    stroke(panel, list(zip(t, 2 * f + 4.0)))
+    assert ts.n > n0
+    assert panel.current_issue is None and panel.scene.harmonic_marks == {}
+    panel.undo()
+    assert ts.n == n0
+
+    stroke(panel, list(zip(t, 2 * f)))
+    new = float(np.unique(ts.ident[n0:])[0])
+    issue = panel.current_issue
+    assert issue is not None and issue.kind == "harmonic"
+    assert issue.ids == (new, float(fid))
+    hint = panel.hintw.text()
+    assert f"id {int(new)} looks like the 2nd harmonic of id {int(fid)}" in hint
+    assert "Enter: unassign" in hint and "Ctrl+Z undoes the add" in hint
+    assert any(lvl == "warning" and "2nd harmonic" in msg for lvl, msg in told)
+    assert panel.scene.harmonic_marks == {new: f"×2 of {int(fid)}"}
+    panel.redraw_now()
+    shown = [
+        item.textItem.toPlainText()
+        for item in panel.overlays[0].texts
+        if item.isVisible()
+    ]
+    assert any(text.endswith(f"×2 of {int(fid)}") for text in shown), shown
+
+    assert panel.key_applies("accept_issue")
+    panel.run_key("accept_issue")  # Enter
+    assert len(ts.rows_of(new)) == 0
+    assert panel.scene.harmonic_marks == {} and panel.current_issue is None
+    assert "unassigned id" in panel.hintw.text()
+    entries = committed(panel)
+
+    panel.undo()  # Ctrl+Z: the harmonic is back
+    assert len(ts.rows_of(new)) > 0
+    assert committed(panel) == entries
+    panel.undo()  # and the add itself
+    assert ts.n == n0 and panel.scene.harmonic_marks == {}
+
+
+def test_a_large_harmonic_check_runs_in_a_worker_and_still_warns(panel, monkeypatch):
+    from audian_plugins.eodsorter import panel as P
+
+    monkeypatch.setattr(P, "HARMONIC_SYNC_ROWS", 0)
+    ts = panel.ts
+    panel.ridgew.setChecked(False)
+    panel.browser.set_ranges("f", 540.0, 1900.0)
+    pump(0.1)
+    fid, t, f = _fish_in_view(panel, 760.0)
+    panel.controller.set_tool("F")
+    n0 = ts.n
+    stroke(panel, list(zip(t, 2 * f)))
+    new = float(np.unique(ts.ident[n0:])[0])
+    end = time.monotonic() + 5.0
+    while panel.current_issue is None and time.monotonic() < end:
+        pump(0.02)
+    assert panel.current_issue is not None
+    assert panel.current_issue.ids == (new, float(fid))
+    assert new in panel.scene.harmonic_marks
+
+
+def test_add_stroke_along_a_harmonic_says_so_before_it_commits(panel):
+    """5.13: a ridge-Add commits when the search answers, so the stroke
+    itself says that it runs along a harmonic; Esc drops it."""
+    panel.ridgew.setChecked(True)
+    panel.browser.set_ranges("f", 540.0, 1900.0)
+    pump(0.1)
+    fid, t, f = _fish_in_view(panel, 820.0)
+    c = panel.controller
+    c.set_brush(14)  # an earlier test may have left it wide
+    c.set_tool("F")
+    stroke(panel, list(zip(t, 2 * f + 0.5)), release=False)
+    hint = c.hint_text()
+    assert f"2× id {int(fid)}" in hint and "2nd harmonic" in hint, hint
+    assert "Esc cancels" in hint
+    c.escape()
+    assert committed(panel) == 0
+    # a stroke a brush away does not name this fish (it may well land on a
+    # multiple of another one, so that is all it can promise)
+    r_hz = lane(panel).view().df(c.brush_px)
+    stroke(panel, list(zip(t, 2 * f + 1.5 * r_hz)), release=False)
+    assert f"id {int(fid)}" not in c.hint_text()
+    c.escape()
+
+
 def test_selection_actions_new_id_merge_unassign(panel):
     ts = panel.ts
     c = panel.controller

@@ -849,11 +849,17 @@ class TrackOverlay:
     def _draw_labels(self, ts, g: G.Geometry) -> None:
         c = self.colours
         labels = getattr(ts, "labels", {}) or {}
+        marks = self.scene.harmonic_marks
         shown = 0
         for ident, t, f in g.labels:
             item = self._text(shown)
             name = labels.get(int(ident)) if isinstance(labels, dict) else None
-            item.setText(f"{int(ident)}" + (f" {name}" if name else ""))
+            mark = marks.get(float(ident))
+            item.setText(
+                f"{int(ident)}"
+                + (f" {name}" if name else "")
+                + (f" {mark}" if mark else "")
+            )
             item.setColor(theme.qcolor(c.of_id(ident)))
             item.fill = theme.brush(c.contrast, alpha=0.55)
             item.setPos(t, f)

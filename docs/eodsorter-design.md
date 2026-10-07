@@ -1210,6 +1210,7 @@ sorted by time:
 | `gap` | a gap inside a track longer than `gap_break_s` | Add tool armed, stroke hint |
 | `short` | tracks with fewer than `min_points` (default 10, panel field) points | unassign track |
 | `crossing` | two tracks within 1 frequency bin of each other at some frame | none (zoom; swap or cut is the reader's call) |
+| `harmonic` | a track that follows h × another track, 2 ≤ h ≤ 5 (5.13); one issue per harmonic id, on by default | unassign the harmonic |
 
 `G` / `Shift+G` move the view to the next / previous issue after the view
 centre (keeping the current zoom unless the issue does not fit), highlight
@@ -1247,6 +1248,99 @@ choose which kinds `G` visits.  Issues are recomputed lazily after edits
   `eodsorter.json`, not in the wavetracker arrays.
 * **Busy feedback**: the run button turns into a progress bar with stage,
   percentage, realtime factor and ETA; "Cancel" beside it.
+
+### 5.13 Harmonics tracked as fish
+
+Nothing stops a reader from annotating a harmonic: an Add along the stripe at
+2× or 3× a fish makes a new id that is no fish.  After every commit that
+gives rows to ids at the reader's request (`Plan.kind` in `GROWING_KINDS`:
+Add, ridge or literal; New id; Assign; Merge; Accept snippet, which checks
+every accepted id), those ids are checked against every id they share frames
+with, both ways round: the edited id as the harmonic of an existing fish,
+and an existing id as the harmonic of the edited one.
+
+**The rule** (`harmonics.py`, numpy only) is wavetracker's own
+(`wavetracker/comodulation.py`, `score_pairs` / `classify`, whose constants
+`HarmonicRule` mirrors without importing pandas; a test pins them).  On the
+frames two ids have in common, `h = round(f_hi / f_lo)`, 2 ≤ h ≤ 5, and
+`offset = median(f_hi − h·f_lo)`.  A harmonic needs
+
+* at least 5 common frames (a blip is not judged);
+* `|offset| ≤ 0.1 · bin · √(1 + h²)`, where bin is the session's frequency
+  resolution (`freq_resolution`, else rate / nfft) and √(1 + h²) is how the
+  error of `f_hi − h·f_lo` grows with h: 0.16, 0.23, 0.30 Hz for h = 2, 3, 4
+  on iriri (bin 0.73 Hz), close to wavetracker's fixed 0.25 Hz.  No
+  frequency in hertz is fixed anywhere;
+* at least 70 % of the common frames within `0.3 · bin · √(1 + h²)` on
+  their own, so a track that only crosses h·f is not a harmonic;
+* when the overlap is at least wavetracker's `min_overlap` (10 s), also fast
+  co-modulation: each trace minus its running median over 30 s, correlated,
+  ≥ 0.5.  Interference lines (exact multiples, but flat) and fish that
+  drift together with temperature fail it.  Shorter overlaps (hand strokes
+  are often a few seconds) are judged by the offset alone.
+
+**Measured on iriri** (take.wav, 48 kHz, 2 electrodes, about 40 fish 3–7 Hz
+apart; wavetracker's identities retracked from its detections, 409,551 rows,
+6,470 ids):
+
+* *Agreement with `wavetracker harmonics`* (26 harmonic ids, all with
+  ≥ 10 s overlap): the sweep finds 25, 24 with the same fundamental, and
+  the 25th with another fundamental that wavetracker also scores as
+  harmonic (fundamentals at 442.5 and 443.1 Hz).  The one missed, 959
+  over 446 (wavetracker: r = 0.64), has a residual MAD of 0.47 Hz: 7 of
+  its ten 3 s windows sit 0.5–7 Hz off 3·f.  On ≥ 10 s overlaps the sweep finds nothing wavetracker
+  does not.  It additionally finds 244 harmonic fragments shorter than 10 s
+  (median 2.1 s; h = 3: 155, 4: 69, 5: 20), which wavetracker never
+  scores; none is at h = 2, which wavetracker's harmonic groups absorb.
+* *Short tracks* (each a 3 s window of a tracked fish relabelled as a new
+  id, offset rule only): 89 % of windows on wavetracker's harmonics are
+  flagged (87 % at 2 s, 91 % at 5 s; of the 25 misses at 3 s, 12 have
+  fewer than 5 common frames and 12 an offset just over the tolerance),
+  against 1.3 % of windows of distinct fish that run within 1–3 Hz of h·f
+  (1236 windows; 0.6 % at 2 s, 1.5 % at 5 s) and 0.3–2.3 % of random
+  windows of long fish tracks.  Halving the tolerance (0.05) cost 6–9 % of
+  the harmonics and saved under 1 %; `min_frames` = 8 cost 8–15 %; the
+  frame tolerance (0.2–0.5) and `min_match` (0.5–0.85) hardly matter.
+* *Ridge-Add on the audio* (3 s strokes, ±1.5 Hz band): along wavetracker's
+  harmonic stripes 190 of 200 strokes are flagged (the ten misses sit
+  0.4–1.3 Hz off h·f, mostly at h = 4; stripes of the interference lines,
+  whose fundamentals the session had unassigned, left out); along tracked
+  fundamentals with their own rows removed, 10 of 233 (4.3 %) are flagged,
+  3 of them pairs that wavetracker scores as near-exact multiples
+  (|offset| ≤ 0.25 Hz) but rejects for lack of fast co-modulation; along
+  the untracked 2nd harmonic stripe of a fish, 77 % when the ridge lies
+  within 0.3 Hz of 2·f.
+
+**Feedback.**  A finding is said at once and never blocks anything: the
+hint line and a `warning` notification ("id 57 looks like the 2nd harmonic of
+id 12 (offset +0.08 Hz over 4.2 s) — Enter: unassign id 57 · Ctrl+Z undoes
+the add"), the harmonic's id label on the lanes gets "×2 of 12" (labelled
+even when id labels are off or too many tracks are visible), and the finding
+becomes the current issue, so `Enter` unassigns the harmonic
+(`plan_delete_ids`) without moving the view and `Ctrl+Z` brings it back.
+Several findings at once (a snippet) are listed in one line.  Findings are
+re-checked after every change and dropped when they no longer stand (undo of
+the add, the harmonic unassigned).  The check runs on a copy of the rows in
+the edited ids' frames (`TrackSet.harmonic_subset`): in the GUI thread up
+to 60,000 rows (≤ 10 ms; a 7-minute fish on iriri, 150,000 rows, takes
+18 ms), else in a worker thread whose answer is dropped if the model moved on.
+
+**Before a ridge-Add commits.**  A ridge search commits when it answers, so
+the preview is the stroke: on every pointer move the inner half of the
+brush, per frame, is tested against h·f and f/h of every track in those
+frames (`band_harmonics`), and the hint (and the label box beside the
+pointer) leads with "this runs along 3× id 11: it would look like its 3rd
+harmonic (Esc cancels)" while painting and while the search runs.
+
+**The sweep** (`kind = "harmonic"` in 5.11) checks every pair in the session,
+vectorised: detections sorted once by `frame · scale + f`; for each h, the
+detections within the frame tolerance of h·f in the same frame are found by
+one binary search plus a few gathers; matches are grouped by (id_lo, id_hi,
+h) with their count and median offset, and only pairs with ≥ 5 matches
+within the offset tolerance are judged exactly as above.  One finding per
+harmonic id, preferring a fundamental that is not itself a harmonic.
+Cached per model revision.  409,551 rows and 6,470 ids (iriri) take 0.10 s;
+a synthetic 405,000 rows and 6,030 ids 0.14 s.
 
 ---------------------------------------------------------------------------
 
@@ -1405,7 +1499,12 @@ class TrackSet:
     def rows_of(self, id: float) -> np.ndarray: ...
     def rows_in_frames(self, k0: int, k1: int) -> np.ndarray: ...
     def stats(self, ids=None) -> np.ndarray: ...      # structured, fields in 3.8
-    def issues(self, kinds=("join", "gap", "short", "crossing"), **params) -> list["Issue"]: ...
+    def issues(self, kinds=("join", "gap", "short", "crossing", "harmonic"), **params) -> list["Issue"]: ...
+    # harmonics (5.13; the rule lives in harmonics.py, numpy only)
+    def grown_ids(self, plan) -> np.ndarray: ...        # ids a GROWING_KINDS plan gives rows to
+    def harmonics(self, ids=None, rule=None) -> list["Harmonic"]: ...  # None: the sweep, cached
+    def harmonic_subset(self, ids) -> tuple | None: ...  # (fund, idx, ident) copies for a worker
+    def band_harmonics(self, frames, lo, hi, exclude=()) -> list["BandHit"]: ...  # Add preview
     def check_invariant(self, ids=None) -> None: ...  # raises AssertionError naming id and frame
 
     # plans (pure; raise EditRejected)

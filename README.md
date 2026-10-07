@@ -107,6 +107,8 @@ spectrogram you are looking at. It replaces wavetracker's `EODsorter`.
   region becomes its detections, frames without one stay empty. Hold
   <kbd>Ctrl</kbd> while painting (or untick *Track ridge in brush*) to paint
   literally.
+- **Harmonics are flagged**: an edit that makes a track at 2–5× another
+  fish says so and labels it "×2 of 12"; <kbd>Enter</kbd> unassigns it.
 - **Undo is a history**, not one step: <kbd>Ctrl</kbd>+<kbd>Z</kbd> /
   <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>, or click any entry to go back
   to it. Edits are autosaved for crash recovery.

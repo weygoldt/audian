@@ -1084,6 +1084,8 @@ class AddTool(BrushTool):
         self._pending = None
         self._pending_source = None
         self._literal_now = False
+        #: the stroke runs along a harmonic of an existing id (5.13)
+        self._band_hit = None
 
     def ridge_mode(self) -> bool:
         """Whether the stroke in progress (or the next) tracks the ridge:
@@ -1093,7 +1095,34 @@ class AddTool(BrushTool):
         s = self._stroke
         return not (self._literal_now or (s is not None and s.mods.ctrl))
 
+    def harmonic_note(self) -> str:
+        """What the hint says first when the stroke runs along a harmonic of
+        an existing track (empty otherwise)."""
+        b = self._band_hit
+        if b is None:
+            return ""
+        from .harmonics import ordinal
+
+        if b.as_harmonic:
+            return (
+                f"this runs along {b.h}× id {id_text(b.id)}: it would look like "
+                f"its {ordinal(b.h)} harmonic (Esc cancels)"
+            )
+        return (
+            f"id {id_text(b.id)} runs at {b.h}× this: it would look like the "
+            f"{ordinal(b.h)} harmonic of what you add (Esc cancels)"
+        )
+
     def hint(self, scene, hover) -> str:
+        base = self._hint(scene, hover)
+        if self.active or self._pending is not None:
+            note = self.harmonic_note()
+            if note:
+                # first, so the label box does not cut it off
+                return f"{note} · {base}"
+        return base
+
+    def _hint(self, scene, hover) -> str:
         source = self.ctl.add_source.name
         if self._pending is not None:
             if self._pending_source is self.ctl.ridge_source:
@@ -1134,6 +1163,7 @@ class AddTool(BrushTool):
         if self._pending is not None:
             self._cancel_pending()  # a new stroke supersedes the search
         self._literal_now = Mods.of(mods).ctrl
+        self._band_hit = None
         super().press(lane, pos, mods)
 
     def started(self) -> None:
@@ -1155,11 +1185,47 @@ class AddTool(BrushTool):
         f = stroke.view.y1 - pts[:, 1] / stroke.view.sy
         return t, f
 
+    def _check_band(self, stroke, target) -> None:
+        """Does the brushed band run along a multiple (or a fraction) of an
+        existing track?  The stroke centre plus or minus half the brush
+        radius, per frame; cheap enough for every pointer move."""
+        ts = self.ts
+        self._band_hit = None
+        t, f = self._stroke_data(stroke)
+        if not len(t):
+            return
+        order = np.argsort(t, kind="stable")
+        t, f = t[order], f[order]
+        k0, k1 = G.frame_window(ts.times, float(t[0]), float(t[-1]))
+        frames = np.arange(k0, k1, dtype=np.int64)
+        if not len(frames):
+            return
+        tk = ts.times[frames]
+        centre = (
+            np.interp(tk, t, f)
+            if len(t) > 1 and t[-1] > t[0]
+            else np.full(len(frames), float(f[0]))
+        )
+        # the inner half of the brush: the ridge search pulls towards the
+        # stroke's centre (ridge.CENTRE_DB), so that is where it will be
+        r_hz = 0.5 * stroke.view.df(self.ctl.brush_px)
+        hits = ts.band_harmonics(
+            frames,
+            centre - r_hz,
+            centre + r_hz,
+            exclude=() if target is None else (target,),
+        )
+        self._band_hit = hits[0] if hits else None
+
     def _sample(self) -> None:
         stroke = self._stroke
         ts = self.ts
         marks = self.scene.marks
         target = self._target
+        try:
+            self._check_band(stroke, target)
+        except Exception:  # noqa: BLE001 - a preview note must not break the stroke
+            self._band_hit = None
         if self.ridge_mode():
             # the stroke is a region, drawn by the surface; no dots until
             # the ridge is found
@@ -1284,6 +1350,7 @@ class AddTool(BrushTool):
         pending, source = self._pending, self._pending_source
         self._pending = None
         self._pending_source = None
+        self._band_hit = None
         self.scene.marks = G.Marks(outline_id=self.scene.marks.outline_id)
         self.scene.touch()
         if pending is None:
@@ -1320,6 +1387,7 @@ class AddTool(BrushTool):
         source = self._pending_source
         self._pending = None
         self._pending_source = None
+        self._band_hit = None
         if source is not None:
             source.cancel()
         self.scene.marks = G.Marks()

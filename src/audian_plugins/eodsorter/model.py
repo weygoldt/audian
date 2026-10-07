@@ -38,6 +38,7 @@ from typing import Callable
 
 import numpy as np
 
+from . import harmonics as HM
 from .model_io import (
     AUTOSAVE_FILE,
     IDENT_FILE,
@@ -72,6 +73,10 @@ __all__ = [
     "Command",
     "EditRejected",
     "FrameGrid",
+    "GROWING_KINDS",
+    "harmonic_issue",
+    "harmonic_mark",
+    "harmonic_text",
     "History",
     "Issue",
     "Plan",
@@ -402,6 +407,12 @@ class Plan:
     revision: int  # the model revision the plan was made at
     meta: tuple | None = None  # (((key, id), old, new), ...) for label/note edits
     next_id: int | None = None  # next_id needed after this plan
+    kind: str = ""  # the plan_* method, e.g. "add", "merge"
+
+
+#: plans that give rows to ids at the reader's request: what the harmonic
+#: check looks at after a commit (design 5.13)
+GROWING_KINDS = ("add", "new_id", "assign", "merge", "replace_span")
 
 
 @dataclass(frozen=True)
@@ -543,6 +554,42 @@ class Issue:
     ids: tuple[float, ...]
     text: str
     suggestion: Callable[[TrackSet], Plan] | None
+
+
+def harmonic_text(x: HM.Harmonic, edited=()) -> str:
+    """One line for a harmonic finding: what it is, how sure, what Enter
+    does.  `edited`: ids the reader just gave rows to, named first."""
+    hid, fid = _fid(x.harmonic_id), _fid(x.fundamental_id)
+    how = f"offset {x.offset_hz:+.2f} Hz"
+    if x.freq_corr is not None:
+        how += f", co-modulated r = {x.freq_corr:.2f}"
+    how += f" over {x.overlap_s:.1f} s"
+    if x.fundamental_id in edited and x.harmonic_id not in edited:
+        return (
+            f"id {hid} looks like the {x.ordinal()} harmonic of id {fid}, "
+            f"which you just edited ({how}) — Enter: unassign id {hid}"
+        )
+    return (
+        f"id {hid} looks like the {x.ordinal()} harmonic of id {fid} ({how}) "
+        f"— Enter: unassign id {hid}"
+    )
+
+
+def harmonic_mark(x: HM.Harmonic) -> str:
+    """The suffix of a harmonic's id label on the lanes: "×2 of 12"."""
+    return f"×{x.h} of {_fid(x.fundamental_id)}"
+
+
+def harmonic_issue(x: HM.Harmonic, edited=()) -> Issue:
+    hid = float(x.harmonic_id)
+    return Issue(
+        "harmonic",
+        float(x.t0),
+        float(x.f),
+        (hid, float(x.fundamental_id)),
+        harmonic_text(x, edited),
+        lambda ts, hid=hid: ts.plan_delete_ids([hid]),
+    )
 
 
 STATS_DTYPE = np.dtype(
@@ -893,6 +940,11 @@ class TrackSet:
             return float(np.median(np.diff(self._times)))
         return 1.0
 
+    def frequency_bin(self) -> float:
+        """The session's frequency resolution [Hz]: the frame spectrum's bin
+        (``freq_resolution`` in wavetracker.json, else rate / nfft)."""
+        return self._freq_bin()
+
     def _freq_bin(self) -> float:
         if "freq_resolution" in self.meta:
             return float(self.meta["freq_resolution"])
@@ -903,7 +955,7 @@ class TrackSet:
     # -------------------------------------------------------------- issues
 
     def issues(
-        self, kinds=("join", "gap", "short", "crossing"), **params
+        self, kinds=("join", "gap", "short", "crossing", "harmonic"), **params
     ) -> list[Issue]:
         """Places a reader should look at, sorted by time (design 5.11).
         Params: max_dt, freq_tolerance (default: session config),
@@ -994,6 +1046,10 @@ class TrackSet:
                 )
         if "crossing" in kinds and len(st):
             out.extend(self._crossings(float(params.get("bin_hz", self._freq_bin()))))
+        if "harmonic" in kinds and len(st) > 1:
+            bin_hz = params.get("bin_hz")
+            found = self.harmonics(bin_hz=None if bin_hz is None else float(bin_hz))
+            out.extend(harmonic_issue(x) for x in found)
         out.sort(key=lambda x: (x.t, x.kind))
         return out
 
@@ -1039,6 +1095,106 @@ class TrackSet:
                 )
             )
         return out
+
+    # ------------------------------------------------------------ harmonics
+
+    def grown_ids(self, plan: Plan) -> np.ndarray:
+        """Ids a plan of the reader's (`GROWING_KINDS`) gives rows to: the
+        ids the harmonic check looks at after it is applied (design 5.13).
+        Empty for every other plan."""
+        if plan.kind not in GROWING_KINDS:
+            return np.zeros(0)
+        parts = [np.asarray(plan.new, dtype=np.float64)]
+        if plan.append is not None:
+            parts.append(np.asarray(plan.append.ident, dtype=np.float64))
+        ids = np.unique(np.concatenate(parts))
+        return ids[np.isfinite(ids)]
+
+    def harmonics(
+        self, ids=None, rule: HM.HarmonicRule | None = None, bin_hz=None
+    ) -> list[HM.Harmonic]:
+        """Ids that look like a harmonic of another id (`harmonics.py`).
+
+        ``ids=None``: the whole session, cached per revision (the issue
+        sweep).  Otherwise every pair one of `ids` takes part in, either
+        way round: what a commit that gave rows to `ids` is checked
+        for."""
+        rule = rule or HM.HarmonicRule()
+        bin_hz = float(bin_hz) if bin_hz is not None else self._freq_bin()
+        n = self._n
+        if ids is None:
+            key = (self.revision, rule, bin_hz)
+            cached = getattr(self, "_harmonics_cache", None)
+            if cached is not None and cached[0] == key:
+                return list(cached[1])
+            out = HM.find_harmonics(
+                self._fund[:n],
+                self._idx[:n],
+                self._ident[:n],
+                self._times,
+                bin_hz,
+                rule=rule,
+                rows_of=self.rows_of,
+            )
+            self._harmonics_cache = (key, out)
+            return list(out)
+        sub = self.harmonic_subset(ids)
+        if sub is None:
+            return []
+        return HM.find_harmonics(*sub, self._times, bin_hz, ids=ids, rule=rule)
+
+    def harmonic_subset(self, ids):
+        """``(fund, idx, ident)`` copies of every assigned row in the frames
+        `ids` occupy (None if they have no rows): all a check of `ids`
+        needs, since two ids can only have frames in common there.  Copies,
+        so a worker thread can check them while the model changes."""
+        ids = np.atleast_1d(np.asarray(ids, dtype=np.float64))
+        ids = ids[np.isfinite(ids)]
+        q = self._rows_of_ids([i for i in ids if len(self.rows_of(i))])
+        if not len(q):
+            return None
+        frames = np.unique(self._idx[q])
+        a = np.searchsorted(self._bf_k, frames, "left")
+        b = np.searchsorted(self._bf_k, frames, "right")
+        cnt = b - a
+        pos = np.repeat(a - (np.cumsum(cnt) - cnt), cnt) + np.arange(int(cnt.sum()))
+        rows = self._by_frame[pos]
+        rows = rows[~np.isnan(self._ident[rows])]
+        return self._fund[rows], self._idx[rows], self._ident[rows]
+
+    def band_harmonics(self, frames, lo, hi, exclude=()) -> list[HM.BandHit]:
+        """Existing ids whose multiple (or fraction) runs inside a brushed
+        band: the Add stroke's harmonic preview (`harmonics.band_harmonics`)."""
+        frames = np.asarray(frames, dtype=np.int64)
+        if not len(frames):
+            return []
+        rows = self.rows_in_frames(int(frames.min()), int(frames.max()) + 1)
+        return HM.band_harmonics(
+            frames, lo, hi, self._fund, self._idx, self._ident, rows, exclude=exclude
+        )
+
+    def check_track(
+        self, frames, freqs, exclude=(), rule: HM.HarmonicRule | None = None
+    ) -> list[HM.Harmonic]:
+        """A track not in the session yet (an Add preview) against the
+        session; the candidate is named id NaN in the findings."""
+        frames = np.asarray(frames, dtype=np.int64)
+        if not len(frames):
+            return []
+        n = self._n
+        k0, k1 = int(frames.min()), int(frames.max()) + 1
+        return HM.check_track(
+            frames,
+            freqs,
+            self._fund[:n],
+            self._idx[:n],
+            self._ident[:n],
+            self._times,
+            self._freq_bin(),
+            self.rows_in_frames(k0, k1),
+            rule or HM.HarmonicRule(),
+            exclude=exclude,
+        )
 
     # ---------------------------------------------------------- plan helpers
 
@@ -1093,6 +1249,7 @@ class TrackSet:
         meta=None,
         next_id=None,
         nothing="nothing would change",
+        kind="",
     ) -> Plan:
         rows = np.asarray(rows, dtype=np.int64)
         new = np.broadcast_to(np.asarray(new, dtype=np.float64), rows.shape)
@@ -1119,6 +1276,7 @@ class TrackSet:
             revision=self.revision,
             meta=meta,
             next_id=next_id,
+            kind=kind,
         )
 
     def _make_append(self, fund, idx, ident, tracked, sign, cplx) -> Append:
@@ -1180,6 +1338,7 @@ class TrackSet:
             rows,
             np.nan,
             nothing="nothing to unassign: the selected points are unassigned",
+            kind="unassign",
         )
 
     def plan_delete_ids(self, ids) -> Plan:
@@ -1195,7 +1354,7 @@ class TrackSet:
             else f"Delete {len(ids)} ids ({', '.join(_fid(i) for i in ids[:5])}"
             + (", …)" if len(ids) > 5 else ")")
         )
-        return self._plan(label, rows, np.nan)
+        return self._plan(label, rows, np.nan, kind="delete_ids")
 
     def plan_new_id(self, rows) -> Plan:
         sel = self._rows_arg(rows)
@@ -1208,7 +1367,14 @@ class TrackSet:
         label = f"New id {fresh} from {len(win)} point{'s' if len(win) != 1 else ''}"
         if nd:
             label += f" ({nd} conflict{'s' if nd != 1 else ''} kept their id)"
-        return self._plan(label, win, float(fresh), dropped=sel[lose], created=(fresh,))
+        return self._plan(
+            label,
+            win,
+            float(fresh),
+            dropped=sel[lose],
+            created=(fresh,),
+            kind="new_id",
+        )
 
     def plan_assign(self, rows, target: float) -> Plan:
         sel = self._rows_arg(rows)
@@ -1249,6 +1415,7 @@ class TrackSet:
             new,
             dropped=np.concatenate([displaced, losers]),
             nothing=f"the selected points already belong to {_fid(target)}",
+            kind="assign",
         )
 
     def plan_merge(self, ids, into: float) -> Plan:
@@ -1276,7 +1443,7 @@ class TrackSet:
         label += (", …" if len(others) > 5 else "") + f" into {_fid(into)}"
         if nc:
             label += f" ({nc} conflict{'s' if nc != 1 else ''} unassigned)"
-        return self._plan(label, rows, new, dropped=rows[lose])
+        return self._plan(label, rows, new, dropped=rows[lose], kind="merge")
 
     def plan_cut(self, id: float, t: float, new_part: str = "after") -> Plan:
         if new_part not in ("after", "before"):
@@ -1299,6 +1466,7 @@ class TrackSet:
             part,
             float(fresh),
             created=(fresh,),
+            kind="cut",
         )
 
     def plan_swap_after(self, a: float, b: float, t: float) -> Plan:
@@ -1315,7 +1483,7 @@ class TrackSet:
         rows = np.concatenate([ra, rb])
         new = np.concatenate([np.full(len(ra), b), np.full(len(rb), a)])
         return self._plan(
-            f"Swap {_fid(a)} and {_fid(b)} after {fmt_time(t)}", rows, new
+            f"Swap {_fid(a)} and {_fid(b)} after {fmt_time(t)}", rows, new, kind="swap"
         )
 
     def plan_add(
@@ -1377,7 +1545,9 @@ class TrackSet:
         if skipped:
             label += f" ({skipped} skipped)"
         created = () if target is not None else (int(tid),)
-        return self._plan(label, _EMPTY, np.nan, append=app, created=created)
+        return self._plan(
+            label, _EMPTY, np.nan, append=app, created=created, kind="add"
+        )
 
     def plan_replace_span(self, snippet: Snippet, stitch: bool = True) -> Plan:
         k0, k1 = int(snippet.k0), int(snippet.k1)
@@ -1503,6 +1673,7 @@ class TrackSet:
             created=created,
             meta=meta,
             nothing="the snippet has no detections and the span has no tracks",
+            kind="replace_span",
         )
 
     def _edge_matches(self, tracks, s_f, s_k, w0, w1, near, tol, left):
