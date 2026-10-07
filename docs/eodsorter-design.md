@@ -809,7 +809,7 @@ checked and the hint line names it.
 | **Cut** | `C` | cut the hovered track at the cursor's time; the part after the cut gets a new id (Shift+click: the part before) | draw a straight cut line; every track it crosses is cut where it crosses | on click / release |
 | **Merge** | `M` | first click sets the **anchor** track (outlined); each further click on another track merges it into the anchor; the anchor stays, so a fragmented track is joined by clicking its pieces left to right | brush: every track the stroke touches is merged into the anchor (or into the first track touched, which becomes the anchor) | on each click / on release |
 | **Assign** | `A` | with points selected: assign them to the clicked track (the selection is cleared). With nothing selected: the clicked track becomes the "assign target" and the next brush stroke assigns to it | brush: points under the stroke are assigned to the target track | on click / release |
-| **Add** | `F` | — | paint along a gap where the detector missed the fish: one detection per frame under the stroke; frequency from the spectrogram peak inside the brush (or the stroke centre, 5.5). If the stroke starts or ends on a track, the new points extend that track; otherwise they become a new id | on release |
+| **Add** | `F` | — | brush over a gap where the detector missed the fish. *Track ridge in brush* (default): the stroke marks a region and the best continuous ridge of the raw spectrogram inside it becomes the detections, frames without a ridge stay empty; `Ctrl`+drag, or the option off: one detection per frame under the stroke, frequency from "Add from" (5.5). If the stroke starts or ends on a track, the new points extend that track; otherwise they become a new id | on release (ridge: when the search answers) |
 
 Actions that do not need a gesture work on the current selection:
 
@@ -824,6 +824,23 @@ Actions that do not need a gesture work on the current selection:
 All of these are also in a right-click context menu on a lane in edit mode
 (which also offers "Rename track…", "Zoom to track", "Select track") and in
 the track table's context menu.
+
+*As built:* plain Select exists for these actions, and keys alone hid them.
+So while the selection is non-empty a **selection strip** sits in the Edit
+group under the tool row and hint: "3 tracks · 214 points" and the buttons
+Unassign `Del`, Unassign tracks `⇧Del`, New id `N`, Merge `⇧M`, Swap `⇧X`,
+Zoom `⇧Z` and Clear `Esc`.  Each button's tooltip says what it does and its
+key; a button that does not apply is disabled and its tooltip says why
+("swap needs exactly two selected tracks").  The strip's Swap cannot know
+where the pointer was on the lane, so it swaps after the two tracks'
+closest approach and says when in its tooltip; `Shift+X` and the lane menu
+swap after the pointer.  The lane's right-click menu (edit mode only: the
+`ToolSurface` accepts the right button only while armed, so audian's own
+lane menu is untouched outside it) lists the same actions under a
+"Selection: …" header, with the same reasons as tooltips; with nothing
+selected it offers the hovered track's actions instead, including
+"Unassign track N".  Strip and menu are built from one list,
+`ToolController.selection_actions`.
 
 ### 5.4 Live feedback, tool by tool
 
@@ -920,6 +937,76 @@ In this order:
 
 The panel's Add options show which source is in use.
 
+**Ridge tracking (as built, the default).**  The list above made Add in a
+snippet session (no fine spectrogram, often no warm runner) literal painting
+along the stroke centre.  With *Track ridge in brush* on (Edit group,
+persisted as `ridge_add`), a stroke only marks a region (`ridge.py`,
+`ridgeadd.py`):
+
+1. *Bands.*  For every session frame the brush footprint covers, the band
+   is the footprint's frequency extent in that frame: the stroke swept by
+   the brush circle, converted per frame from screen pixels to seconds and
+   Hz (`brush_bands`).  Frames within one brush radius of the stroke's ends
+   are covered too.
+2. *Spectrum.*  On release a worker thread (`RidgeSource`, one `QThread`
+   for the panel's life) reads the stroke's samples, all of the session's
+   electrodes (`session_channels`, else every channel), through audian's
+   `open_files` -- never `browser.data` -- and computes the power on the
+   **session's own frames**: same frame starts (`grid.s0 + k*step`, or
+   `t_k*rate - nfft/2` without a grid), same nfft (the grid's, else the
+   results' `config.spectrogram.nfft`, else wavetracker's default read from
+   `wavetracker.config`, which does not import torch), and wavetracker's
+   window and PSD scaling.  No smaller nfft is used for short strokes: the
+   session's nfft *is* its frequency resolution, and a shorter window would
+   blur neighbours 3 Hz apart.  Power is **summed over electrodes**, as
+   wavetracker's own peak search does; on the iriri take (20 neighbour
+   pairs 3-7 Hz apart, 10 s strokes) the sum put 1549 frames on the right
+   fish and 188 on the neighbour against 1532 and 189 for the maximum over
+   electrodes, and the sum's noise statistics are known, which the floor
+   below needs.
+3. *Ridge.*  Viterbi over the band's bins: reward = dB power minus
+   `centre_db`·u² (u = distance from the band's centre in half-widths,
+   6 dB at the edge: the reader painted along *their* fish), transition
+   cost = `jump_db`·(Δf / (max_slope·Δt))² with `jump_db` = 12 dB, and
+   |Δf| ≤ max_slope·Δt as a hard limit.  `max_slope` defaults to
+   `tracking.freq_tolerance / frame step` -- what the tracker itself links
+   between consecutive frames -- from the session's config, else
+   wavetracker's default; nothing is a fixed frequency.  A frame the
+   reachable path cannot enter (the stroke jumped faster than that) starts
+   a new segment.
+4. *Gate.*  A frame gets a detection only if the path's bin is a spectral
+   peak and its power exceeds the noise floor: the median power of the
+   band (widened to at least 64 bins) times the factor by which the loudest
+   of the band's bins in a noise-only frame would exceed the median with
+   probability 1 % (power summed over c electrodes is Gamma(c): 7.3 dB for
+   two electrodes and an 8-bin band).  "Median + k·MAD" was tried first and
+   failed in dense recordings: the window is full of other fish, the MAD
+   balloons, and a clearly visible fish 13 dB above the median failed in
+   two frames out of three.  Frames that fail stay empty -- a gap is a gap.
+5. *Refine and commit.*  Each frequency is refined with a parabola on the
+   dB values of the peak bin and its neighbours; `sign_v` and `cplx_v` of
+   the new rows are the electrodes' power and complex spectrum at that bin.
+   The rows go through `plan_add` with the same target rule as before
+   (sticky to the track the stroke starts or ends on, else a new id), one
+   history entry, undoable.
+
+While the search runs the band centres are drawn as pulsing dots and the
+hint says so; Esc or a new stroke cancels it (a superseded answer is
+dropped).  If no frame passes, nothing is added and the hint says "no ridge
+found in the brushed region (nothing above the noise floor) · Ctrl+drag
+paints literally" -- it never silently falls back.  **`Ctrl`+drag** paints
+literally for one stroke (the "Add from" source): Alt was taken by the
+brush-size wheel and is what many Linux window managers use to drag
+windows, Shift extends audian's channel selection on clicks, and Ctrl has
+no meaning for Add.  Measured on the iriri take (48 kHz, 2 electrodes,
+nfft 32768, 153 frames): a 10 s stroke answers in 0.16-0.19 s (read
+< 0.02 s, spectrum 0.15 s, Viterbi < 0.01 s).  Brushing 0.5 Hz off along
+two fish 3.8 Hz apart that the snippet run had missed, the ridge put 79 of
+85 and 68 of 70 points within 0.5 Hz of the whole-recording run's tracks of
+the brushed fish (median error 0.16 and 0.08 Hz) and none on the
+neighbour, leaving the faint frames empty; literal painting added a point
+in all 147 frames with a median error of 0.35-0.49 Hz.
+
 ### 5.6 Esc and cancel
 
 Esc unwinds one level per press:
@@ -960,8 +1047,9 @@ button, because a stray Esc must not throw away a twenty-minute run).
 *As built (after the first QA pass):* the order is session header (with
 **Track visible** / **Track recording** and the progress row, so a run is
 reachable and visible whatever is folded), the snippet bar, **Edit** (toggle,
-tools, hint, Undo/Redo, brush, sticky, "Dim spectrogram", and a "Display and
-keys" disclosure for the rest), **History**, **Tracks**, **Issues** (folded)
+tools, hint, the selection strip while something is selected (5.3), Undo/Redo,
+brush, sticky, "Dim spectrogram", "Track ridge in brush" (5.5), and a
+"Display and keys" disclosure for the rest), **History**, **Tracks**, **Issues** (folded)
 and **Run settings** (the wavetracker line, fish range, device, config,
 advanced, cleanup).  Every group below the header folds; the folds are remembered, and
 Run settings folds itself after the first run.  When no spectrogram lane is
@@ -1051,6 +1139,7 @@ not the legacy sorter's application-wide arrow filter (B24).
 | `G` / `Shift+G` | next / previous issue (5.11) | Toggle grid / free |
 | `Enter` | accept the suggestion of the current issue | free |
 | `[` / `]` | brush smaller / larger | free |
+| `Ctrl`+drag (Add) | paint literally instead of tracking the ridge (5.5) | — (a modifier, not a key) |
 | `Tab` | cycle among overlapping tracks under the pointer | focus traversal (only over a lane) |
 | `Esc` | the cancel ladder (5.6) | free |
 

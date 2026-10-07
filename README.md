@@ -98,6 +98,14 @@ spectrogram you are looking at. It replaces wavetracker's `EODsorter`.
   Merge <kbd>M</kbd>, Assign <kbd>A</kbd>, Add <kbd>F</kbd>. Brushes paint
   their stroke as you drag, the track under the pointer is highlighted, and
   a box beside it says what the next click will do before you make it.
+- **Act on a selection** from the strip that appears under the tools while
+  something is selected (Unassign, Unassign tracks, New id, Merge, Swap,
+  Zoom, Clear; each also a key), or right-click the lane in edit mode.
+- **Add tracks the ridge**: brush over a fish the tracker missed and the
+  strongest continuous ridge of the raw spectrogram inside the brushed
+  region becomes its detections, frames without one stay empty. Hold
+  <kbd>Ctrl</kbd> while painting (or untick *Track ridge in brush*) to paint
+  literally.
 - **Undo is a history**, not one step: <kbd>Ctrl</kbd>+<kbd>Z</kbd> /
   <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>, or click any entry to go back
   to it. Edits are autosaved for crash recovery.

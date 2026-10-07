@@ -1844,11 +1844,14 @@ class TrackSet:
     def _append_rows(self, app: Append) -> None:
         m, n = len(app), self._n
         if self._c is None:
+            # as long as the other buffers: after an undo back to an empty
+            # session they keep their capacity, and `_reserve` grows none
+            cap = len(self._fund)
             self._c = int(app.sign.shape[1])
-            self._sign = np.empty((n, self._c), dtype=app.sign.dtype)
+            self._sign = np.empty((cap, self._c), dtype=app.sign.dtype)
             self._has_cplx = app.cplx is not None
             if self._has_cplx:
-                self._cplx = np.empty((n, self._c), dtype=app.cplx.dtype)
+                self._cplx = np.empty((cap, self._c), dtype=app.cplx.dtype)
         self._reserve(n + m)
         s = slice(n, n + m)
         self._fund[s] = app.fund

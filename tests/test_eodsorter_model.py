@@ -873,6 +873,11 @@ def test_snippet_creates_a_session_from_nothing(tmp_path):
     assert back.grid == g and back.n == 10
     ts.undo()
     assert ts.n == 0 and ts.n_channels is None
+    # and rows can be added again: the electrode buffers are sized to the
+    # capacity the other buffers kept (an Add after undoing the accept failed)
+    sign = np.ones((10, 4), np.float32)
+    ts.apply(ts.plan_add(np.arange(40, 50), np.full(10, 601.0), sign=sign))
+    assert ts.n == 10 and ts.n_channels == 4 and (ts.sign == 1).all()
 
 
 # --------------------------------------------------------------------------
