@@ -281,6 +281,19 @@ def orphan_thread(thread, worker=None) -> None:
     thread.quit()
 
 
+def cleanup_refusal(message) -> Optional[str]:
+    """wavetracker cleanup's own refusal (a ValueError naming ``cleanup:``)
+    as a sentence for the reader, or None for any other error."""
+    lines = [x.strip() for x in str(message).strip().splitlines() if x.strip()]
+    for line in reversed(lines):
+        head, _, rest = line.partition(": ")
+        if head == "ValueError" and rest.startswith("cleanup:"):
+            rest = rest[len("cleanup:") :].strip()
+            rest = rest.replace("--stride/--freq-tol", "stride / freq tolerance")
+            return f"Clean up found nothing to keep: {rest}"
+    return None
+
+
 def rebase_ident(result, base, current):
     """An asynchronous whole-session result (cleanup) onto edits made while
     it ran: `result` was computed from `base`; rows whose identity changed
@@ -806,7 +819,8 @@ class WavetrackerPanel(QWidget):
 
         self.cleanupw = QPushButton("Clean up…", self)
         self.cleanupw.setToolTip(
-            "wavetracker's cleanup for a few persistent fish (whole recordings only)"
+            "wavetracker's cleanup: join the tracks of a number of persistent "
+            "fish and drop the rest (defaults fitted to the tracks' span)"
         )
         self.cleanupw.clicked.connect(self.clean_up)
         group.add_span_row(self.cleanupw)
@@ -821,9 +835,15 @@ class WavetrackerPanel(QWidget):
         self.joinw = QCheckBox("Join to tracks at the edges", self)
         self.joinw.setChecked(True)
         self.snippetw.add_span_row(self.joinw)
-        self.acceptw = QPushButton("Accept", self)
+        self.acceptw = QPushButton("Accept  (Enter)", self)
         self.acceptw.setToolTip(
-            "Replace the session's tracks in this span with the snippet's"
+            "Replace the session's tracks in this span with the snippet's; "
+            "until then its tracks are only shown, not editable"
+        )
+        # the one thing to do next while a snippet is pending: say so
+        self.acceptw.setStyleSheet(
+            "QPushButton { background: %s; color: %s; font-weight: bold; }"
+            % (theme.token("primary"), theme.token("on.primary"))
         )
         self.acceptw.clicked.connect(self.accept_snippet)
         self.discardw = QPushButton("Discard", self)
@@ -1724,7 +1744,9 @@ class WavetrackerPanel(QWidget):
 
     def key_applies(self, name: str) -> bool:
         if name == "accept_issue":
-            return self.current_issue is not None
+            # Enter accepts a pending snippet first, else the issue's
+            # suggestion
+            return self.scene.snippet is not None or self.current_issue is not None
         return True
 
     def run_key(self, name: str) -> None:
@@ -1750,7 +1772,11 @@ class WavetrackerPanel(QWidget):
                 "zoom_selection": self.zoom_selection,
                 "next_issue": lambda: self.goto_issue(+1),
                 "previous_issue": lambda: self.goto_issue(-1),
-                "accept_issue": self.accept_issue,
+                "accept_issue": (
+                    self.accept_snippet
+                    if self.scene.snippet is not None
+                    else self.accept_issue
+                ),
                 "brush_smaller": lambda: c.brush_scale(0.8),
                 "brush_larger": lambda: c.brush_scale(1.25),
                 "cycle": c.cycle_hover,
@@ -2479,11 +2505,19 @@ class WavetrackerPanel(QWidget):
             return
         self._job = None
         self._refresh_buttons()
-        if current["kind"] == "snippet":
+        if current["kind"] in ("snippet", "cleanup"):
             self._remove_tmp(current.get("tmp"))
         if kind == "cancelled":
             self.browser.notify("info", "wavetracker: cancelled")
             return
+        if current["kind"] == "cleanup" and kind == "exception":
+            # cleanup refusing the data (its ValueError) is an answer, not a
+            # crash: say it in words, on the hint line too
+            text = cleanup_refusal(message)
+            if text is not None:
+                self.controller.say(text)
+                self.browser.notify("warning", text)
+                return
         self.browser.notify("error", f"wavetracker ({kind}): {message}")
 
     def cancel_job(self, quiet: bool = False) -> None:
@@ -2777,7 +2811,8 @@ class WavetrackerPanel(QWidget):
         t1 = float(times[min(snippet.k1 - 1, len(times) - 1)])
         self.snippettextw.setText(
             f"Snippet {M.fmt_time(t0)}–{M.fmt_time(t1)} · {n_ids} tracks · "
-            f"{len(snippet.fund):,} points"
+            f"{len(snippet.fund):,} points — not editable until accepted: "
+            "Accept (Enter) or Discard"
         )
         if self.ts is None and grid is not None:
             # the snippet creates the session when accepted; draw it on an
@@ -2821,26 +2856,34 @@ class WavetrackerPanel(QWidget):
         ts = self.ts
         if ts is None or ts.n == 0:
             return
+        setup = M.cleanup_setup(ts)
+        if setup.reason is not None:
+            self.controller.reject(f"Clean up: {setup.reason}")
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle("Clean up")
         form = QFormLayout(dialog)
         note = QLabel(
-            "wavetracker's cleanup keeps a known small number of persistent "
-            "fish. It works in windows of minutes: on a short snippet or on "
-            "dense field data it does not make sense."
+            "wavetracker's cleanup joins the tracks of a fixed number of "
+            "persistent fish, window by window, and drops the rest. The "
+            f"tracks here span {M.fmt_time(setup.span_s)}; the defaults are "
+            "fitted to that, and fish defaults to how many ids are tracked "
+            "at once. On dense field data it may find nothing to keep: then "
+            "correct the tracklets by hand."
         )
         note.setWordWrap(True)
         form.addRow(note)
         nfish = QSpinBox(dialog)
         nfish.setRange(1, 1000)
-        nfish.setValue(2)
+        nfish.setValue(max(1, setup.n_fish))
+        nfish.setToolTip("How many fish to keep (default: ids tracked at once)")
         form.addRow("fish", nfish)
         fields = {}
         for key, value, step in (
-            ("stride_minutes", 10.0, 1.0),
-            ("overlap_frac", 0.2, 0.05),
+            ("stride_minutes", setup.stride_minutes, 1.0),
+            ("overlap_frac", M.CLEANUP_OVERLAP, 0.05),
             ("freq_tolerance", 2.5, 0.5),
-            ("time_tolerance_minutes", 5.0, 1.0),
+            ("time_tolerance_minutes", setup.time_tolerance_minutes, 1.0),
             ("density_threshold", 0.1, 0.05),
         ):
             w = QDoubleSpinBox(dialog)
@@ -2865,11 +2908,9 @@ class WavetrackerPanel(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         tmp = R.make_tmpdir()
-        np.save(Path(tmp) / "fund_v.npy", np.asarray(ts.fund))
-        np.save(Path(tmp) / "idx_v.npy", np.asarray(ts.idx))
-        np.save(Path(tmp) / "ident_v.npy", np.asarray(ts.ident))
-        np.save(Path(tmp) / "sign_v.npy", np.asarray(ts.sign))
-        np.save(Path(tmp) / "times.npy", np.asarray(ts.times))
+        # cut to the frames with detections: see M.CleanupSetup
+        for name, array in setup.arrays(ts).items():
+            np.save(Path(tmp) / f"{name}.npy", array)
         job = R.cleanup_job(
             tmp,
             nfish.value(),

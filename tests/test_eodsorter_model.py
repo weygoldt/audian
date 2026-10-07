@@ -1246,3 +1246,102 @@ def test_add_skips_frames_without_a_frequency():
     assert ts.n == 35 and sorted(ts.idx[-2:]) == [60, 62]
     with pytest.raises(EditRejected):
         ts.plan_add([70, 71], [np.nan, np.nan])
+
+
+# --------------------------------------------------------------------------
+# cleanup fitted to the session (4.5)
+
+
+def _snippet_session(n_frames=7000, k0=2000, m=220, n_fish=5, seed=0):
+    """A whole recording's grid (n_frames at 0.1365 s) with tracks only in
+    frames [k0, k0 + m): what accepting one short snippet leaves."""
+    rate, nfft, step = 48000.0, 65536, 6553
+    grid = FrameGrid(rate, nfft, step, 0, n_frames)
+    rng = np.random.default_rng(seed)
+    frames = np.arange(k0, k0 + m)
+    fund, idx, ident = [], [], []
+    for i in range(n_fish):
+        keep = frames[rng.random(m) > 0.1]
+        fund.append(600 + 40 * i + rng.normal(0, 0.2, len(keep)))
+        idx.append(keep)
+        ident.append(np.full(len(keep), float(i)))
+    fund, idx, ident = map(np.concatenate, (fund, idx, ident))
+    o = np.argsort(idx, kind="stable")
+    sign = rng.random((len(o), 2)).astype(np.float32)
+    return TrackSet.from_arrays(
+        fund[o], idx[o], ident[o], sign, grid.times(), grid=grid
+    )
+
+
+def test_cleanup_setup_cuts_to_the_tracks_and_fits_the_stride():
+    from audian_plugins.eodsorter.model import cleanup_setup
+
+    ts = _snippet_session()
+    s = cleanup_setup(ts)
+    assert s.reason is None
+    assert (s.k0, s.k1) == (2000, 2220)
+    span = ts.times[2219] - ts.times[2000]
+    assert s.span_s == pytest.approx(span)
+    assert s.stride_minutes == pytest.approx(span / 60)
+    assert s.time_tolerance_minutes == pytest.approx(span / 120)
+    assert s.n_fish == 5, "the fish tracked at once, not a fixed 2"
+    a = s.arrays(ts)
+    assert a["idx_v"].min() == 0 and a["idx_v"].max() == 219
+    assert len(a["times"]) == 220 and a["times"][0] == 0.0
+    assert np.array_equal(a["ident_v"], ts.ident, equal_nan=True)
+
+
+def test_cleanup_setup_keeps_wavetrackers_defaults_on_a_long_session():
+    from audian_plugins.eodsorter.model import cleanup_setup
+
+    ts = _snippet_session(n_frames=7000, k0=0, m=7000, n_fish=3)
+    s = cleanup_setup(ts)
+    assert s.stride_minutes == 10.0 and s.time_tolerance_minutes == 5.0
+    assert s.n_fish == 3
+
+
+def test_cleanup_setup_refuses_what_cleanup_cannot_window():
+    from audian_plugins.eodsorter.model import cleanup_setup
+
+    ts = _snippet_session(m=3)
+    assert "too short" in cleanup_setup(ts).reason
+    empty = TrackSet.from_arrays(
+        [600.0], [5], [NAN], np.ones((1, 2), np.float32), np.arange(10) * 0.1
+    )
+    assert cleanup_setup(empty).reason == "no detection has an id"
+
+
+def test_cleanup_runs_on_a_snippet_session_only_when_cut(tmp_path):
+    """The 2026-10-07 refusal: wavetracker's cleanup on a 30 s snippet in a
+    whole recording's grid keeps nothing; cut and fitted, it runs."""
+    cleanup = pytest.importorskip("wavetracker.postprocessing.cleanup")
+    from audian_plugins.eodsorter.model import cleanup_setup
+
+    ts = _snippet_session()
+    cleanup.show_results = False
+
+    def run(folder, arrays, **params):
+        folder.mkdir()
+        for name, a in arrays.items():
+            np.save(folder / f"{name}.npy", a)
+        cleanup.main(str(folder), n_fish=5, **params)
+        return np.load(folder / "ident_v_cleaned_n5.npy")
+
+    whole = {
+        "fund_v": ts.fund,
+        "idx_v": ts.idx,
+        "ident_v": ts.ident,
+        "sign_v": ts.sign,
+        "times": ts.times,
+    }
+    with pytest.raises(ValueError, match="frequency-density selection"):
+        run(tmp_path / "whole", whole)
+    s = cleanup_setup(ts)
+    ident = run(
+        tmp_path / "cut",
+        s.arrays(ts),
+        stride_minutes=s.stride_minutes,
+        time_tolerance_minutes=s.time_tolerance_minutes,
+    )
+    assert len(ident) == ts.n
+    assert len(np.unique(ident[np.isfinite(ident)])) == 5

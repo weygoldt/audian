@@ -68,6 +68,7 @@ __all__ = [
     "Append",
     "Autosave",
     "Change",
+    "CleanupSetup",
     "Command",
     "EditRejected",
     "FrameGrid",
@@ -77,6 +78,7 @@ __all__ = [
     "ResultsError",
     "Snippet",
     "TrackSet",
+    "cleanup_setup",
     "discard_autosave",
     "finish_interrupted_save",
     "ident_variants",
@@ -214,6 +216,90 @@ class FrameGrid:
         if len(times) and np.max(np.abs(grid.times() - times)) > 1e-6:
             return None
         return grid
+
+
+# --------------------------------------------------------------------------
+# wavetracker's cleanup, fitted to the session
+
+
+#: wavetracker cleanup's own defaults (cleanup_config_default.cfg), used as
+#: they are on a session long enough for them.
+CLEANUP_STRIDE_MIN = 10.0
+CLEANUP_TIME_TOLERANCE_MIN = 5.0
+CLEANUP_OVERLAP = 0.2
+
+
+@dataclass
+class CleanupSetup:
+    """What `cleanup` should run on for this session, and its defaults.
+
+    wavetracker's cleanup walks windows of `stride` from time 0 and keeps
+    the ids whose frequency density in a window beats a threshold scaled by
+    the number of frames in the first window.  A session built from a short
+    snippet keeps the whole recording's frame grid, so with the default
+    10-minute stride the threshold counts minutes of frames the snippet
+    never had, and every id fails ("no identity passed the
+    frequency-density selection").  Hence: the input is cut to the frames
+    that hold detections (`k0`, `k1`, times from 0), and the stride is at
+    most that span.
+    """
+
+    k0: int
+    k1: int  # exclusive
+    span_s: float
+    n_fish: int
+    stride_minutes: float
+    time_tolerance_minutes: float
+    #: why cleanup cannot run here, or None
+    reason: str | None = None
+
+    def arrays(self, ts) -> dict:
+        """The five arrays cleanup reads, cut to frames [k0, k1)."""
+        times = np.asarray(ts.times, dtype=np.float64)[self.k0 : self.k1]
+        return {
+            "fund_v": np.asarray(ts.fund),
+            "idx_v": np.asarray(ts.idx) - self.k0,
+            "ident_v": np.asarray(ts.ident),
+            "sign_v": np.asarray(ts.sign),
+            "times": times - (times[0] if len(times) else 0.0),
+        }
+
+
+def typical_concurrent_ids(idx, ident) -> int:
+    """The median number of ids with a detection in a frame, over the
+    frames that have any: how many fish the tracker sees at once."""
+    idx = np.asarray(idx)
+    ident = np.asarray(ident, dtype=np.float64)
+    m = np.isfinite(ident)
+    if not m.any():
+        return 0
+    pairs = np.unique(np.stack([idx[m].astype(np.float64), ident[m]], axis=1), axis=0)
+    _, per_frame = np.unique(pairs[:, 0], return_counts=True)
+    return max(1, int(round(float(np.median(per_frame)))))
+
+
+def cleanup_setup(ts) -> CleanupSetup:
+    """Fit wavetracker's cleanup to `ts` (see `CleanupSetup`)."""
+    n = ts.n
+    idx = np.asarray(ts.idx)
+    times = np.asarray(ts.times, dtype=np.float64)
+    if n == 0 or not len(times):
+        return CleanupSetup(0, 0, 0.0, 0, 0.0, 0.0, "there are no detections")
+    k0, k1 = int(idx.min()), int(idx.max()) + 1
+    span = float(times[k1 - 1] - times[k0])
+    stride_s = min(CLEANUP_STRIDE_MIN * 60.0, span)
+    tol_s = min(CLEANUP_TIME_TOLERANCE_MIN * 60.0, stride_s / 2)
+    n_fish = typical_concurrent_ids(idx, ts.ident)
+    reason = None
+    step = int(stride_s * (1 - CLEANUP_OVERLAP))
+    if n_fish == 0:
+        reason = "no detection has an id"
+    elif step < 1:  # cleanup would step its windows by 0 s
+        reason = (
+            f"the tracks span {span:.1f} s: too short for cleanup's windows "
+            "(run it on a longer stretch)"
+        )
+    return CleanupSetup(k0, k1, span, n_fish, stride_s / 60.0, tol_s / 60.0, reason)
 
 
 # --------------------------------------------------------------------------

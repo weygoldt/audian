@@ -929,6 +929,98 @@ def test_snippet_flow_with_a_fake_runner(panel):
     panel.ts.check_invariant()
 
 
+def _pending_snippet(panel):
+    """A provisional snippet over the view's frames, not accepted."""
+    from audian_plugins.eodsorter.model import Snippet
+
+    v = lane(panel).view()
+    grid = panel.ts.grid
+    k0, k1 = grid.frame_range(v.x0, v.x1)
+    frames = np.arange(k0, k1)
+    snippet = Snippet(
+        k0=k0,
+        k1=k1,
+        fund=np.full(len(frames), 940.0),
+        idx=frames,
+        ident=np.zeros(len(frames)),
+        sign=np.ones((len(frames), 2), np.float32),
+        cplx=None,
+        meta={},
+    )
+    panel.show_snippet(snippet, grid)
+    panel.redraw_now()
+    return snippet
+
+
+def test_a_pending_snippet_says_how_to_edit_it_and_enter_accepts(panel):
+    """2026-10-07: tracks of an unaccepted snippet looked editable, and
+    hovering or clicking them did nothing at all."""
+    from audian_plugins.eodsorter.tools import SNIPPET_PENDING
+
+    snippet = _pending_snippet(panel)
+    c = panel.controller
+    t = float(panel.ts.times[(snippet.k0 + snippet.k1) // 2])
+    hover(panel, t, 940.0)
+    assert c.scene.hover is None, "the provisional layer is not the session"
+    assert c.label_lines()[-1] == SNIPPET_PENDING
+    assert c.hint_text() == SNIPPET_PENDING
+    # a gesture there edits nothing and says why
+    c.click(lane(panel), px(lane(panel), t, 940.0), None)
+    stroke(panel, [(t - 0.5, 939.0), (t + 0.5, 941.0)])
+    assert committed(panel) == 0 and len(c.scene.selection) == 0
+    assert c.hint_text() == SNIPPET_PENDING
+    # Enter accepts, before any issue suggestion
+    assert panel.key_applies("accept_issue")
+    panel.run_key("accept_issue")
+    assert panel.scene.snippet is None and committed(panel) == 1
+    hover(panel, t, 940.0)
+    assert c.scene.hover is not None, "accepted, its track is editable"
+    assert c.hint_text() != SNIPPET_PENDING
+    assert "Enter" in panel.acceptw.text()
+
+
+def test_cleanup_refusal_is_a_sentence_not_an_exception(panel):
+    from audian_plugins.eodsorter.panel import cleanup_refusal
+
+    message = (
+        "ValueError: cleanup: no identity passed the frequency-density "
+        "selection, so there is nothing to clean up. Check --stride/--freq-tol."
+    )
+    text = cleanup_refusal(message)
+    assert text.startswith("Clean up found nothing to keep: no identity passed")
+    assert "--stride" not in text
+    assert cleanup_refusal("ValueError: something else") is None
+    seen = []
+    panel.browser.notify = lambda level, msg: seen.append((level, msg))
+    try:
+        panel._job = {"kind": "cleanup", "id": "j9", "tmp": None}
+        panel._job_error("j9", "exception", message)
+    finally:
+        del panel.browser.notify
+    assert seen == [("warning", text)]
+    assert panel.controller.hint_text() == text
+
+
+def test_cleanup_dialog_defaults_are_fitted_to_the_session(panel, monkeypatch):
+    from PySide6.QtWidgets import QDialog, QDoubleSpinBox, QSpinBox
+
+    from audian_plugins.eodsorter import model as M
+
+    setup = M.cleanup_setup(panel.ts)
+    seen = {}
+
+    def fake_exec(dialog):
+        seen["fish"] = dialog.findChildren(QSpinBox)[0].value()
+        seen["stride"] = dialog.findChildren(QDoubleSpinBox)[0].value()
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", fake_exec)
+    panel.clean_up()
+    assert seen["fish"] == setup.n_fish == 5
+    assert seen["stride"] == pytest.approx(setup.stride_minutes, abs=0.01)
+    assert setup.stride_minutes < 1.0, "20 s of tracks, not a 10-minute stride"
+
+
 # ---------------------------------------------------------- unsaved (8.4)
 
 

@@ -512,7 +512,16 @@ wavetracker to try again on just that.
    opacity.  A bar in the panel says "Snippet 12:00.0–12:45.3 · 8 tracks ·
    1,203 points" with **Accept** and **Discard**.  Running another snippet
    replaces an unaccepted one.  Edit tools act on the session, not the
-   provisional layer.
+   provisional layer.  Because the layer looks like tracks but is not one
+   (a reader who never pressed Accept found nothing selectable, on
+   2026-10-07), a pending snippet is never a silent dead end: over its span
+   the hover box and the hint line say "Snippet pending — press Enter (or
+   Accept) to edit these tracks", a click or drag there does nothing but
+   repeat that, **Enter** accepts while a snippet is pending (before the
+   issue suggestion it otherwise accepts), and the Accept button is drawn
+   in the primary colour.  Accepting stays explicit: an edit gesture never
+   accepts implicitly, since accepting replaces the session's tracks in the
+   span.
 9. **Accept** is one undoable command, `plan_replace_span(snippet,
    stitch=True)`:
    * every assigned session row with frame in `[k0, k1)` is unassigned (not
@@ -639,13 +648,24 @@ a 200-line ring buffer that is attached to any error report.  The
 
 ### 4.5 Cleanup ("Clean up…")
 
-Offered only for a whole-recording session (cleanup works in windows of
-minutes and assumes a few persistent fish; on a snippet it is meaningless,
-and the dialog says so).  The dialog asks for `n_fish` and the cleanup
-parameters (defaults from `cleanup_config_default.cfg`, 4.4) and a memory
-limit (default half of physical RAM).  The panel writes the *current*
-`fund_v`, `idx_v`, `ident_v` (with the reader's edits), `sign_v` and `times`
-into a temporary directory, runs the one-shot runner, reads
+Cleanup walks windows of `stride` from time 0 and keeps the ids whose
+frequency density beats a threshold scaled by the number of frames in the
+first window.  A session built from a snippet keeps the whole recording's
+frame grid, so with the default 10-minute stride the threshold counted
+minutes of frames the snippet never had and every id failed: "no identity
+passed the frequency-density selection" (2026-10-07, a 30 s window of the
+Iriri recording).  `cleanup_setup(ts)` therefore fits the run to the
+session: the arrays are cut to the frames that hold detections (times from
+0), `stride` is the config's 10 min or the tracks' span if shorter, the time
+tolerance is 5 min or half the stride, and `n_fish` defaults to the median
+number of ids with a detection in a frame (how many fish the tracker sees
+at once), not a fixed 2.  The dialog says what the defaults were fitted to;
+it also asks for the remaining parameters and a memory limit (default half
+of physical RAM, an `RLIMIT_AS` in the runner).  If cleanup still refuses
+the data (its `ValueError` beginning `cleanup:`), the panel shows that
+sentence as a warning and on the hint line, not as an exception.  The panel
+writes the *current* `fund_v`, `idx_v`, `ident_v` (with the reader's edits),
+`sign_v` and `times` into a temporary directory, runs the one-shot runner, reads
 `ident_v_cleaned_n{N}.npy`, and shows a summary ("kept 2 ids, 31,200 points
 reassigned, 4,102 unassigned") with **Apply** and **Cancel**.  Apply is
 `plan_apply_ident`, one undoable command.

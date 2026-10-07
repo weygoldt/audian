@@ -80,6 +80,11 @@ STROKE_FADE_MS = 150
 #: Above the view box's own children (its child group, the rubber band).
 SURFACE_Z = 1_000_000
 
+#: What the hover box and hint line say over a snippet that is not accepted
+#: yet: its tracks are a provisional layer, not part of the session, so no
+#: tool can pick them (4.3, step 8).
+SNIPPET_PENDING = "Snippet pending — press Enter (or Accept) to edit these tracks"
+
 
 # ----------------------------------------------------------------- helpers
 
@@ -1388,7 +1393,24 @@ class ToolController(QObject):
         now = time.monotonic()
         if self._said and now - self._said_at < 4.0:
             return self._said
+        if self.over_pending_snippet():
+            return SNIPPET_PENDING
         return self.tool.hint(self.scene, self.scene.hover)
+
+    def over_pending_snippet(self) -> bool:
+        """Whether the pointer is over the span of a snippet that is not
+        accepted yet (and over no track of the session)."""
+        snippet = self.scene.snippet
+        ts = self.ts
+        t = self.cursor_t
+        if snippet is None or ts is None or t is None or self.scene.hover is not None:
+            return False
+        times = ts.times
+        if not len(times):
+            return False
+        k0 = min(max(int(snippet.k0), 0), len(times) - 1)
+        k1 = min(max(int(snippet.k1) - 1, 0), len(times) - 1)
+        return bool(times[k0] <= t <= times[k1])
 
     def _emit_hint(self) -> None:
         text = self.hint_text()
@@ -1535,6 +1557,8 @@ class ToolController(QObject):
         self.mods = Mods.of(mods)
         self._said = ""
         self.flush()
+        if self._pending_blocks():
+            return
         self._guard(self.tool.press, lane, pos, mods)
 
     def move(self, lane, pos, mods) -> None:
@@ -1553,8 +1577,20 @@ class ToolController(QObject):
         self._pointer = (lane, _xy(pos), self.mods)
         self._said = ""
         self.flush()
+        if self._pending_blocks():
+            return
         self._guard(self.tool.click, lane, pos, mods, double)
         self._said_keep()
+
+    def _pending_blocks(self) -> bool:
+        """A gesture over a pending snippet's span edits nothing (accepting
+        replaces the session's tracks there); say so instead of doing
+        nothing silently.  Accepting stays an explicit step (Enter)."""
+        if not self.over_pending_snippet():
+            return False
+        self.say(SNIPPET_PENDING)
+        self.changed()
+        return True
 
     def _said_keep(self) -> None:
         self.changed()
@@ -2187,7 +2223,7 @@ KEY_HELP = (
     ("I", "show only selected tracks", "free"),
     ("Shift+Z", "zoom to selection", "free"),
     ("G / Shift+G", "next / previous issue", "Toggle grid"),
-    ("Enter", "accept the issue's suggestion", "free"),
+    ("Enter", "accept the pending snippet, else the issue's suggestion", "free"),
     ("[ / ]", "brush smaller / larger (or Alt+wheel)", "free"),
     ("Tab", "next of overlapping tracks (over a lane)", "focus traversal"),
     ("Esc", "cancel gesture → anchor → selection → Select", "free"),
