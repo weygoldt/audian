@@ -1165,6 +1165,32 @@ def test_issues_g_visits_joins_and_enter_merges(panel):
     assert len(panel.ts.rows_of(b)) == 0 or len(panel.ts.rows_of(a)) == 0
 
 
+def test_g_moves_the_window_onto_an_issue_in_time_and_frequency(panel):
+    for kind, w in panel.issuekindw.items():
+        w.setChecked(kind == "join")
+    issues = panel.issues()
+    assert issues
+    fs = np.array([i.f for i in issues])
+    # zoomed in on a small corner with no issue in it: 1 s wide, 40 Hz high,
+    # 300 Hz above every issue
+    f0 = float(fs.max()) + 300.0
+    panel.zoom_to((0.05, 0.05 + 1.0 / 1.2, f0, f0 + 40.0 / 1.2))
+    pump(0.2)
+    x0, x1, y0, y1 = panel.view_range()
+    panel.goto_issue(+1)
+    pump(0.2)
+    issue = panel.current_issue
+    u0, u1, v0, v1 = panel.view_range()
+    assert u0 <= issue.t <= u1, "the window moved to the issue in time"
+    assert v0 <= issue.f <= v1, "and in frequency"
+    assert abs((u1 - u0) - (x1 - x0)) < 1e-3 * (x1 - x0), "the zoom is kept"
+    assert abs((v1 - v0) - (y1 - y0)) < 1e-3 * (y1 - y0)
+    # an issue already well inside the band does not move the band
+    panel.centre_on(issue.t, 0.5 * (v0 + v1))
+    pump(0.1)
+    assert panel.view_range()[2:] == (v0, v1)
+
+
 def test_isolate_shows_only_the_selected_tracks(panel):
     a = ids_in_view(panel)[0]
     panel.controller.select_ids([a])

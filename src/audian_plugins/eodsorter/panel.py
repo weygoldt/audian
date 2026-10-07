@@ -1950,6 +1950,42 @@ class WavetrackerPanel(QWidget):
             if abs(y0 - f0) > 1e-6 or abs(y1 - f1) > 1e-6:
                 vb.setYRange(f0, f1, padding=0)
 
+    def centre_on(self, t: float, f: float, view=None) -> None:
+        """Move the visible window onto ``(t, f)`` without changing the zoom.
+
+        Time is always centred.  Frequency moves only when `f` is not well
+        inside the visible band (the middle 80 %), so stepping through issues
+        of one fish does not jitter the view up and down.
+        """
+        view = view if view is not None else self.view_range()
+        if view is None:
+            return
+        x0, x1, y0, y1 = view
+        width = x1 - x0
+        t0 = max(0.0, t - 0.5 * width)
+        b = self.browser
+        try:
+            b.set_times(t0, width)
+        except Exception:  # noqa: BLE001 - internal API, fall back per lane
+            for overlay in self.overlays:
+                overlay.ax.getViewBox().setXRange(t0, t0 + width, padding=0)
+        height = y1 - y0
+        if not (np.isfinite(f) and height > 0):
+            return
+        if y0 + 0.1 * height <= f <= y1 - 0.1 * height:
+            return
+        f0 = max(0.0, f - 0.5 * height)
+        f1 = f0 + height
+        try:
+            b.set_ranges("f", f0, f1)
+        except Exception:  # noqa: BLE001
+            pass
+        for overlay in self.overlays:
+            vb = overlay.ax.getViewBox()
+            (v0, v1) = vb.viewRange()[1]
+            if abs(v0 - f0) > 1e-6 or abs(v1 - f1) > 1e-6:
+                vb.setYRange(f0, f1, padding=0)
+
     # ============================================================ issues
 
     def _issues_changed(self, *args) -> None:
@@ -2004,11 +2040,7 @@ class WavetrackerPanel(QWidget):
         issue = issues[k]
         self.current_issue = issue
         if view is not None:
-            width = view[1] - view[0]
-            try:
-                self.browser.set_times(max(0.0, issue.t - 0.5 * width), width)
-            except Exception:  # noqa: BLE001
-                pass
+            self.centre_on(issue.t, issue.f, view)
         df = 10.0
         ts = self.ts
         dt = 2 * float(np.median(np.diff(ts.times[:100]))) if len(ts.times) > 1 else 1.0
