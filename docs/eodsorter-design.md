@@ -134,7 +134,8 @@ answered in sections 5 and 6.
 
 1. **Package** `src/audian_plugins/eodsorter/`, panel factory
    `audian_wavetracker_panel`, menu **Plugins → Wavetracker**, side-panel tab
-   titled **Tracks**.  `frequencybands` stays where it is and is not touched.
+   titled **Tracks**.  `frequencybands` stayed where it was at first; it has
+   since been removed (2026-10-07), and this plugin replaces it.
 2. **wavetracker runs out of process, from the same environment.**
    wavetracker is a regular dependency of claudian (a git source in
    `[tool.uv.sources]`, never its PyQt5 `gui` extra), so `uv sync` installs
@@ -1839,8 +1840,6 @@ must be clean.  Before each commit:
 
 ### 10.1 Out of scope for the first version
 
-* Removing or migrating `frequencybands` (a later decision; the two coexist
-  under different menu entries and file names).
 * Moving detections in frequency (editing `fund_v` values).  Detections are
   measurements; a wrong one is unassigned and, if needed, replaced by an
   added one.

@@ -1,9 +1,9 @@
 """Publish a file all at once, or not at all.
 
-Three places in audian write a file the reader cannot afford to lose half
-of: their labels, their preferences -- which hold the label vocabulary, so
-they are not only preferences -- and the bands plugin's two sidecars.  All
-three had written to a temporary neighbour and `os.replace`d it, which is
+Places in audian write files the reader cannot afford to lose half of:
+their labels and their preferences -- which hold the label vocabulary, so
+they are not only preferences.  They, and the removed frequency-bands
+plugin, had written to a temporary neighbour and `os.replace`d it, which is
 the right shape and was implemented three times with three different levels
 of care.
 
@@ -12,7 +12,7 @@ randomness.  That is safe against a crash and not against a second
 *process*: two audian instances open on one recording, or one instance and
 a script, interleave so that A truncates the temporary while B is mid-write,
 and B's `os.replace` then publishes A's partial content under the real name
--- with both reporting success.  `frequencybands.bands` already got this
+-- with both reporting success.  The bands plugin's copy already got this
 right; this is that implementation, with the durability the other two had
 and it did not.
 
@@ -21,12 +21,6 @@ tabs in one window share a pid and therefore still share a temporary name --
 they cannot collide anyway, because each save runs to completion inside one
 event-loop callback on one thread, but nothing here would save them if that
 stopped being true.
-
-Not imported by `frequencybands.bands` yet, which is where it came from.
-That module is one of only four in the tree that import without dragging in
-PySide6, and reaching into `audian` would end that, because
-`audian/__init__` imports the main window.  When that is fixed the third
-copy goes.
 
 `os.replace` is atomic within a filesystem and raises across one, so the
 temporary is always a neighbour of its target: a recording on a mounted

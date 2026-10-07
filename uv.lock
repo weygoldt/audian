@@ -44,14 +44,8 @@ dependencies = [
     { name = "wavetracker" },
 ]
 
-[package.optional-dependencies]
-bands = [
-    { name = "thunderfish" },
-]
-
 [package.dev-dependencies]
 dev = [
-    { name = "audian", extra = ["bands"] },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -70,15 +64,12 @@ requires-dist = [
     { name = "scipy" },
     { name = "sounddevice" },
     { name = "soundfile" },
-    { name = "thunderfish", marker = "extra == 'bands'" },
     { name = "thunderlab", specifier = ">=1.6.0" },
     { name = "wavetracker", git = "https://github.com/weygoldt/wavetracker" },
 ]
-provides-extras = ["bands"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "audian", extras = ["bands"] },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -1800,24 +1791,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b7/4d/08c89e34946fce2aec4fbb45c9016efd5f4d7f24af8e5d93296e935631d8/threadpoolctl-3.6.0.tar.gz", hash = "sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e", size = 21274, upload-time = "2025-03-13T13:49:23.031Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb", size = 18638, upload-time = "2025-03-13T13:49:21.846Z" },
-]
-
-[[package]]
-name = "thunderfish"
-version = "2.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "matplotlib" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "scikit-learn" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "thunderlab" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/89/73/b4d695fb0a159addeecdfec9c628522a86a4f9394a9120194143637c53bf/thunderfish-2.1.0.tar.gz", hash = "sha256:8fc2cf1d8c4e93e9703f238f773d42c12f4f601c4ae4ccb678a59e5aff39607a", size = 233061, upload-time = "2025-02-16T22:00:20.548Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/08/6d/68ba65462f0c5940dbaec17c799b07730b175a40cb4dfdbb00448bb4c489/thunderfish-2.1.0-py3-none-any.whl", hash = "sha256:ba6d94cd0b6cc2a9831ae6e584205e7aca393cce49719c06aa40ca9e950509fd", size = 223015, upload-time = "2025-02-16T22:00:17.171Z" },
 ]
 
 [[package]]

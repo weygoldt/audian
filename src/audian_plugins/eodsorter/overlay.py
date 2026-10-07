@@ -9,7 +9,7 @@ About thirty items, whatever the number of tracks
 -------------------------------------------------
 
 All tracks sharing a colour slot are one NaN-joined `LineItem`
-(NaN-joined, as `frequencybands.overlay` does), so a lane holds ten curves
+(NaN-joined), so a lane holds ten curves
 for the tracks, ten dot layers for their points, one for unassigned
 detections, two items for the selection, two for the hovered track, a small
 fixed pool for previews and a pool of id labels -- created once, hidden when
@@ -55,7 +55,7 @@ from audian.pluginapi import theme
 from . import geometry as G
 
 #: Above the spectrogram and the event marks (15), level with the
-#: frequencybands layers; the editable labels (25) sit above the tracks.
+#: the old band plugin's layers; the editable labels (25) sit above the tracks.
 UNASSIGNED_Z = 19
 TRACK_Z = 20
 POINT_Z = 20.5

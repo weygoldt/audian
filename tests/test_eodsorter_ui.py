@@ -1,6 +1,6 @@
 """The wavetracker plugin's Qt half: panel, overlays, tools, keys.
 
-One real `Audian` window for the module (as `test_frequencybands.py` does),
+One real `Audian` window for the module,
 on a two-channel synthetic recording, with a wavetracker-format results
 directory written by numpy (no wavetracker needed).  Each test opens the
 Tracks tab, loads a fresh copy of the results and closes the tab again.
