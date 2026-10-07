@@ -98,6 +98,7 @@ spectrogram you are looking at. It replaces wavetracker's `EODsorter`.
   Merge <kbd>M</kbd>, Assign <kbd>A</kbd>, Add <kbd>F</kbd>. Brushes paint
   their stroke as you drag, the track under the pointer is highlighted, and
   a box beside it says what the next click will do before you make it.
+  The middle mouse button grabs the spectrogram and moves it.
 - **Act on a selection** from the strip that appears under the tools while
   something is selected (Unassign, Unassign tracks, New id, Merge, Swap,
   Zoom, Clear; each also a key), or right-click the lane in edit mode.

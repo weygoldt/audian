@@ -770,10 +770,12 @@ No `nogil=True` change is needed: tracking runs in its own process.
   or click, with no Return step.  Confirmation dialogs exist only for things
   that are not a single gesture: accepting a snippet, applying cleanup,
   reverting to the tracker's output, replacing a session with a new run.
-* **Navigation stays audian's.**  Middle-drag (rubber band, per audian's
-  region mode), right-drag (scale), Ctrl+wheel (time zoom), Shift+wheel
-  (frequency zoom), plain wheel (scroll the channel stack), and every
-  navigation key keep working in edit mode.  Only the left button belongs to
+* **Navigation stays at hand.**  In edit mode a middle-drag grabs the
+  spectrogram and moves it, in time and frequency, the way audian's Pan mode
+  does (audian's own middle-drag is a zoom box in its Zoom mode, which left
+  edit mode without a way to drag the view).  Right-drag (scale), Ctrl+wheel
+  (time zoom), Shift+wheel (frequency zoom), plain wheel (scroll the channel
+  stack) and every navigation key keep working.  The left button belongs to
   the tool, and only while edit mode is on.
 * **Esc always gets you out**, one level at a time (5.6).
 * **Never surprise.**  The hint line always says what the next click does;
@@ -1165,7 +1167,9 @@ child items.
 * `hoverEvent(ev)`: when armed, `ev.acceptDrags(Qt.MouseButton.LeftButton)`
   and `ev.acceptClicks(Qt.MouseButton.LeftButton)`, which pre-claims the
   left button for this item and nothing else (the mechanism
-  `labeloverlay.py:31-80` measured).  Middle and right drags therefore still
+  `labeloverlay.py:31-80` measured), plus `acceptDrags(MiddleButton)`:
+  a middle-drag pans the view (`ToolSurface.pan`, `translateBy` in data
+  coordinates and the signals audian's Pan mode emits).  Right drags still
   reach the view box.  The hover also updates the pointer state the
   `KeyRouter` reads and runs the hover query.
 * `mouseDragEvent(ev)`: `ev.ignore()` unless armed and the button is left;
@@ -1799,8 +1803,8 @@ in `tmp_path` (no wavetracker needed):
   model changes as specified, the history gains one entry, the preview
   during the gesture equals the committed plan;
 * one real drag with `QTest`/`pg` mouse events on a `ToolSurface` reaches
-  the tool (the Qt event path works), and a middle-drag still reaches the
-  view box;
+  the tool (the Qt event path works), and a middle-drag pans the view (no
+  zoom box, no edit, same zoom);
 * `KeyRouter`: with edit mode on and the pointer over a lane, `Ctrl+Z`
   undoes and audian's Pan zoom does not toggle; with edit mode off, it
   toggles Pan zoom; with focus in a `QLineEdit`, `V` types a "v";

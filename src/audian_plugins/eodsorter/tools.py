@@ -19,10 +19,11 @@ Design sections 5.3-5.6, 5.9 and 5.10.  Three layers:
 
 `ToolSurface`
     One per lane: an invisible `pg.GraphicsObject` child of the lane's view
-    box that pre-claims the *left* button while edit mode is on (so middle-
-    and right-drags still reach the view box), forwards pointer events to the
-    controller, and draws the screen-space feedback -- the brush ring, the
-    stroke as it is painted, the cut line and the hover label box.
+    box that pre-claims the *left* button while edit mode is on (right-drags
+    still reach the view box), pans the view on a middle-drag, forwards
+    pointer events to the controller, and draws the screen-space feedback --
+    the brush ring, the stroke as it is painted, the cut line and the hover
+    label box.
 
 `KeyRouter`
     An application event filter that claims the plugin's keys only in edit
@@ -2175,7 +2176,11 @@ class ToolSurface(pg.GraphicsObject):
         self.setVisible(self.armed)
         self.setAcceptHoverEvents(self.armed)
         self.setAcceptedMouseButtons(
-            (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
+            (
+                Qt.MouseButton.LeftButton
+                | Qt.MouseButton.MiddleButton
+                | Qt.MouseButton.RightButton
+            )
             if self.armed
             else Qt.MouseButton.NoButton
         )
@@ -2233,11 +2238,16 @@ class ToolSurface(pg.GraphicsObject):
             self.ctl.leave(self)
             return
         ev.acceptDrags(Qt.MouseButton.LeftButton)
+        ev.acceptDrags(Qt.MouseButton.MiddleButton)
         ev.acceptClicks(Qt.MouseButton.LeftButton)
         ev.acceptClicks(Qt.MouseButton.RightButton)
         self.ctl.hover_at(self, ev.pos(), ev.modifiers())
 
     def mouseDragEvent(self, ev):  # noqa: N802
+        if self.armed and ev.button() == Qt.MouseButton.MiddleButton:
+            ev.accept()
+            self.pan(ev.lastScenePos(), ev.scenePos(), ev.isStart(), ev.isFinish())
+            return
         if not self.armed or ev.button() != Qt.MouseButton.LeftButton:
             ev.ignore()
             return
@@ -2278,6 +2288,39 @@ class ToolSurface(pg.GraphicsObject):
             ev.accept()
             return
         ev.ignore()
+
+    def pan(self, last, now, start: bool = False, finish: bool = False) -> None:
+        """Grab the spectrogram and move it (middle-drag in edit mode).
+
+        audian's view box turns a middle-drag into a zoom box in its Zoom
+        mode, and the tools own the left button, so edit mode had no way to
+        drag the view.  This moves it the way audian's own Pan mode does:
+        `translateBy` in data coordinates, then the signals that make the
+        browser follow (linked time axes, loading the data under the view).
+        """
+        vb = self.vb
+        if start:
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.ring.setVisible(False)
+            self.ring_under.setVisible(False)
+        if last is not None and now is not None and last != now:
+            a = vb.mapSceneToView(last)
+            b = vb.mapSceneToView(now)
+            enabled = vb.state["mouseEnabled"]
+            x = float(a.x() - b.x()) if enabled[0] else None
+            y = float(a.y() - b.y()) if enabled[1] else None
+            if x is not None or y is not None:
+                vb._resetTarget()
+                vb.translateBy(x=x, y=y)
+                vb.sigRangeChangedManually.emit(enabled)
+                zoomed = getattr(vb, "sigUserZoomed", None)
+                if zoomed is not None:
+                    zoomed.emit(x is not None, y is not None)
+        if finish:
+            add_region = getattr(vb, "add_region", None)
+            if add_region is not None:
+                add_region(vb.viewRect())
+            self.tool_changed()
 
     # ---- feedback, called by the controller and the tools
 
@@ -2495,6 +2538,7 @@ KEY_HELP = (
     ("G / Shift+G", "next / previous issue", "Toggle grid"),
     ("Enter", "accept the pending snippet, else the issue's suggestion", "free"),
     ("[ / ]", "brush smaller / larger (or Alt+wheel)", "free"),
+    ("Middle-drag", "grab and move the spectrogram", "zoom box"),
     ("Ctrl+drag", "Add: paint literally instead of tracking the ridge", "—"),
     ("Tab", "next of overlapping tracks (over a lane)", "focus traversal"),
     ("Esc", "cancel gesture → anchor → selection → Select", "free"),

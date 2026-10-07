@@ -867,8 +867,9 @@ class WavetrackerPanel(QWidget):
         self.editw.setFont(font)
         self.editw.setToolTip(
             "Edit mode (Ctrl+Shift+E): the left mouse button on the "
-            "spectrogram belongs to the active tool. Middle-drag, right-drag "
-            "and the wheel still pan and zoom."
+            "spectrogram belongs to the active tool. Middle-drag grabs and "
+            "moves the spectrogram; Ctrl+wheel and Shift+wheel zoom time and "
+            "frequency; right-click opens the actions menu."
         )
         self.editw.toggled.connect(self.set_edit_mode)
         group.add_span_row(self.editw)

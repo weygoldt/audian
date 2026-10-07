@@ -760,7 +760,7 @@ def test_no_window_actions_are_added(world, tmp_path):
 # ------------------------------------------------------- real mouse events
 
 
-def test_a_real_left_drag_reaches_the_tool_and_middle_drag_the_view_box(panel):
+def test_a_real_left_drag_reaches_the_tool_and_middle_drag_pans(panel):
     from PySide6.QtCore import QPoint, Qt
     from PySide6.QtTest import QTest
 
@@ -795,9 +795,13 @@ def test_a_real_left_drag_reaches_the_tool_and_middle_drag_the_view_box(panel):
     )
     pump(0.1)
     assert committed(panel) == 1, "the Qt drag path reached the erase tool"
-    hits = []
-    vb.sigSelectedRegion.connect(lambda *a: hits.append(a))
-    vb.sigRangeChangedManually.connect(lambda *a: hits.append(a))
+    (x0, x1), (y0, y1) = vb.viewRange()
+    regions = []
+
+    def region(*args):
+        regions.append(args)
+
+    vb.sigSelectedRegion.connect(region)
     vb.rbScaleBox.hide()
     try:
         QTest.mousePress(
@@ -815,11 +819,15 @@ def test_a_real_left_drag_reaches_the_tool_and_middle_drag_the_view_box(panel):
         pump(0.1)
         shown = vb.rbScaleBox.isVisible()
     finally:
-        vb.sigSelectedRegion.disconnect()
-        vb.sigRangeChangedManually.disconnect()
+        vb.sigSelectedRegion.disconnect(region)
         vb.rbScaleBox.hide()
     assert committed(panel) == 1, "a middle drag is not a tool gesture"
-    assert hits or shown, "the middle drag reached audian's view box"
+    assert not regions and not shown, "a middle drag pans; it draws no zoom box"
+    (u0, u1), (v0, v1) = vb.viewRange()
+    # dragged right and down: the view moves back in time and up in frequency
+    assert u0 < x0 and u1 < x1
+    assert abs((u1 - u0) - (x1 - x0)) < 1e-6 * (x1 - x0), "panning keeps the zoom"
+    assert v0 > y0 and v1 > y1
 
 
 # ------------------------------------------------------------ snippets
