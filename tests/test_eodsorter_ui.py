@@ -556,18 +556,25 @@ def test_assign_brush_onto_a_target(panel):
     ts.check_invariant()
 
 
-def test_add_stroke_appends_detections_as_a_new_track(panel):
+@pytest.mark.parametrize("how", ["ridge off", "ctrl"])
+def test_add_stroke_appends_detections_as_a_new_track(panel, how):
+    """Literal painting: with "Track ridge in brush" off, or for one
+    Ctrl+stroke with it on."""
+    from audian_plugins.eodsorter.tools import Mods
+
     ts = panel.ts
     n0 = ts.n
+    panel.ridgew.setChecked(how == "ctrl")
+    mods = Mods(ctrl=True) if how == "ctrl" else None
     panel.controller.set_tool("F")
     v = lane(panel).view()
     f = 700.0  # nothing there
     t0 = v.x0 + 1.0
-    stroke(panel, [(t0, f), (t0 + 0.4, f + 1), (t0 + 0.8, f)], release=False)
+    stroke(panel, [(t0, f), (t0 + 0.4, f + 1), (t0 + 0.8, f)], mods, release=False)
     marks = panel.scene.marks
     assert len(marks.add_t) > 10, "candidate dots while painting"
     assert not marks.add_skip.any()
-    lane(panel).ctl.release(lane(panel), px(lane(panel), t0 + 0.8, f), None)
+    lane(panel).ctl.release(lane(panel), px(lane(panel), t0 + 0.8, f), mods)
     assert ts.n > n0
     new = ts.ident[n0:]
     assert len(np.unique(new)) == 1
@@ -1515,3 +1522,260 @@ def test_hidden_spectrograms_are_pointed_out(panel, world):
     finally:
         browser.set_panels(traces=0, specs=1)
         pump(0.3)
+
+
+# ------------------------------------------------- the selection strip
+
+
+def test_the_selection_strip_follows_the_selection_and_runs_its_actions(panel):
+    ts = panel.ts
+    c = panel.controller
+    strip = panel.stripw
+    ids = ids_in_view(panel)
+    # two fish side by side (consecutive ids are fragments of one fish)
+    a, b = next(
+        (i, j)
+        for i in ids
+        for j in ids
+        if i != j and len(np.intersect1d(ts.idx[ts.rows_of(i)], ts.idx[ts.rows_of(j)]))
+    )
+    assert strip.isHidden(), "no selection, no strip"
+    c.select_ids([a])
+    assert not strip.isHidden()
+    n = len(ts.rows_of(a))
+    assert panel.stripsumw.text() == f"1 track · {n:,} points"
+    btn = panel.stripbtns
+    assert not btn["merge"].isEnabled() and "two or more" in btn["merge"].toolTip()
+    assert not btn["swap"].isEnabled() and "exactly two" in btn["swap"].toolTip()
+    assert btn["unassign"].isEnabled() and "(Del)" in btn["unassign"].toolTip()
+    c.select_ids([a, b])
+    assert panel.stripsumw.text().startswith("2 tracks · ")
+    assert btn["swap"].isEnabled() and "closest approach" in btn["swap"].toolTip()
+    assert f"into {int(a)}" in btn["merge"].toolTip()
+    btn["merge"].click()
+    assert committed(panel) == 1 and len(ts.rows_of(b)) == 0
+    assert panel.stripsumw.text().startswith("1 track · "), "the merged track"
+    panel.undo()
+    assert len(ts.rows_of(b)) > 0
+    c.select_ids([a, b])
+    rows_a = ts.rows_of(a).copy()
+    btn["swap"].click()
+    assert committed(panel) == 1
+    t_swap = c.closest_approach()
+    swapped = rows_a[ts.times[ts.idx[rows_a]] >= t_swap]
+    assert (ts.ident[swapped] == b).all()
+    panel.undo()
+    c.select_ids([a])
+    btn["unassign"].click()
+    assert np.isnan(ts.ident[rows_a]).all()
+    assert strip.isHidden(), "the selection went with the points"
+    panel.undo()
+    c.select_ids([a])
+    btn["new_id"].click()
+    assert committed(panel) == 1 and len(ts.rows_of(a)) == 0
+    panel.undo()
+    c.select_ids([a])
+    btn["clear"].click()
+    assert strip.isHidden() and len(panel.scene.selection) == 0
+
+
+def test_the_select_hint_points_at_the_strip(panel):
+    panel.controller.set_tool("V")
+    panel.controller.leave(lane(panel))
+    panel.controller.changed()
+    assert "act on it below or with Del/N/⇧M" in panel.hintw.text()
+
+
+def test_lane_menu_acts_on_the_hovered_track_when_nothing_is_selected(panel):
+    ts = panel.ts
+    a = ids_in_view(panel)[0]
+    t, f, _ = point_of(panel, a)
+    panel.controller.set_selection([])
+    menu = panel.controller.context_menu(lane(panel), px(lane(panel), t, f), None)
+    acts = {act.text(): act for act in menu.actions() if act.text()}
+    assert not any(text.startswith("Merge selected") for text in acts)
+    acts[f"Unassign track {int(a)}"].trigger()
+    assert committed(panel) == 1 and len(ts.rows_of(a)) == 0
+    # with a selection: the selection's actions, with reasons when disabled
+    b = ids_in_view(panel)[0]
+    panel.controller.select_ids([b])
+    tb, fb, _ = point_of(panel, b)
+    menu = panel.controller.context_menu(lane(panel), px(lane(panel), tb, fb), None)
+    acts = {act.text().split("\t")[0]: act for act in menu.actions() if act.text()}
+    assert acts["Selection: " + panel.controller.selection_summary()]
+    assert "Clear selection" in acts
+    assert not acts["Swap selected after the pointer"].isEnabled()
+    assert "exactly two" in acts["Swap selected after the pointer"].toolTip()
+
+
+def test_right_click_is_the_plugins_only_in_edit_mode(panel):
+    surface = lane(panel)
+    assert surface.acceptedMouseButtons() & Qt_right()
+    panel.set_edit_mode(False)
+    assert not surface.acceptedMouseButtons() & Qt_right()
+    assert not surface.isVisible()
+
+
+def Qt_right():  # noqa: N802 - reads as the flag it is
+    from PySide6.QtCore import Qt
+
+    return Qt.MouseButton.RightButton
+
+
+# ------------------------------------------------------- add by ridge
+
+
+def wait_ridge(p, seconds=10.0):
+    end = time.monotonic() + seconds
+    while p.ridge_source.busy and time.monotonic() < end:
+        pump(0.02)
+    pump(0.05)
+    assert not p.ridge_source.busy, "the ridge search did not answer"
+
+
+def test_ridge_add_restores_an_erased_stretch_of_a_track(panel):
+    """Erase 2 s of a fish, then brush roughly along the gap from the
+    track's end: the ridge puts the points back where the fish is, as one
+    edit that extends the same id, and undo removes them."""
+    ts = panel.ts
+    c = panel.controller
+    panel.ridgew.setChecked(True)
+    v = lane(panel).view()
+    mid = 0.5 * (v.x0 + v.x1)
+
+    def spans(i):
+        t = ts.times[ts.idx[ts.rows_of(i)]]
+        return t.min() < mid - 1.5 and t.max() > mid + 1.5
+
+    a = [i for i in ids_in_view(panel) if spans(i)][0]
+    rows = ts.rows_of(a)
+    t = ts.times[ts.idx[rows]]
+    gap = rows[(t > mid - 1.0) & (t < mid + 1.0)]
+    truth = dict(zip(ts.idx[gap].tolist(), ts.fund[gap].tolist()))
+    c.set_selection(gap)
+    c.unassign_selected()
+    assert committed(panel) == 1
+    before = rows[t <= mid - 1.0][-1]
+    after = rows[t >= mid + 1.0][0]
+    t0, f0 = float(ts.times[ts.idx[before]]), float(ts.fund[before])
+    t1, f1 = float(ts.times[ts.idx[after]]), float(ts.fund[after])
+    c.set_tool("F")
+    assert "ridge" in c.tool.hint(panel.scene, None)
+    n0 = ts.n
+    # a sloppy stroke: straight from end to start, 1 Hz off
+    pts = [
+        (t0 + (t1 - t0) * s, f0 + (f1 - f0) * s + 1.0) for s in np.linspace(0, 1, 12)
+    ]
+    stroke(panel, pts)
+    assert panel.scene.marks.add_pending, "the region is shown pending"
+    wait_ridge(panel)
+    assert committed(panel) == 2, panel.hintw.text()
+    new = np.arange(n0, ts.n)
+    assert (ts.ident[new] == a).all(), "extends the track the stroke started on"
+    k = ts.idx[new]
+    hits = [
+        abs(ts.fund[r] - truth[int(kk)]) for r, kk in zip(new, k) if int(kk) in truth
+    ]
+    assert len(hits) >= 0.8 * len(truth)
+    assert np.max(hits) < 1.0
+    assert np.isfinite(ts.sign[new]).all(), "electrode power from the spectrum"
+    info = panel.ridge_source.last_info
+    assert info["total"] < 2.0
+    panel.undo()
+    assert ts.n == n0
+
+
+def test_ridge_add_without_a_ridge_says_so_and_adds_nothing(panel):
+    panel.ridgew.setChecked(True)
+    panel.controller.set_tool("F")
+    v = lane(panel).view()
+    f = 700.0  # between the fish: noise only
+    t0 = v.x0 + 1.0
+    stroke(panel, [(t0, f), (t0 + 1.0, f)])
+    wait_ridge(panel)
+    assert committed(panel) == 0
+    assert "no ridge found" in panel.hintw.text()
+    assert "Ctrl+drag" in panel.hintw.text()
+
+
+def test_esc_and_a_new_stroke_cancel_a_ridge_search(panel):
+    ts = panel.ts
+    panel.ridgew.setChecked(True)
+    c = panel.controller
+    c.set_tool("F")
+    a = ids_in_view(panel)[0]
+    t, f, _ = point_of(panel, a)
+    n0 = ts.n
+    stroke(panel, [(t, f + 1), (t + 1.0, f + 1)])
+    assert panel.ridge_source.busy
+    assert c.escape() == "gesture"
+    assert not panel.ridge_source.busy and not panel.scene.marks.add_pending
+    pump(1.0)
+    assert ts.n == n0 and committed(panel) == 0
+    # a second stroke supersedes the first search: one answer, one edit
+    stroke(panel, [(t, f + 1), (t + 1.0, f + 1)])
+    stroke(panel, [(t + 2.0, f + 1), (t + 3.0, f + 1)])
+    wait_ridge(panel)
+    assert committed(panel) <= 1
+
+
+def test_ridge_option_is_remembered(panel):
+    panel.ridgew.setChecked(False)
+    assert panel.prefs["ridge_add"] is False and not panel.controller.ridge
+    panel.ridgew.setChecked(True)
+    assert panel.prefs["ridge_add"] is True and panel.controller.ridge
+
+
+def test_ridge_source_follows_a_chirp_past_a_louder_neighbour(app, tmp_path):
+    """The worker on a recording of its own: a chirp rising 600 -> 610 Hz
+    and a constant tone at 616 Hz, three times louder; a brush along the
+    chirp finds the chirp in every frame, never the tone."""
+    soundfile = pytest.importorskip("soundfile")
+    from audian_plugins.eodsorter import model as M
+    from audian_plugins.eodsorter.ridgeadd import RidgeSource
+
+    rate, dur, nfft = 8000, 8.0, 4096
+    tt = np.arange(int(rate * dur)) / rate
+    chirp = 600.0 + 10.0 * tt / dur
+    sig = 0.05 * np.sin(2 * np.pi * np.cumsum(chirp) / rate)
+    tone = 0.15 * np.sin(2 * np.pi * 616.0 * tt)
+    noise = 0.005 * np.random.default_rng(3).standard_normal((len(tt), 2))
+    audio = np.stack([sig + tone, 0.7 * sig + tone], axis=1) + noise
+    wav = tmp_path / "chirp.wav"
+    soundfile.write(wav, audio.astype(np.float32), rate)
+    grid = M.FrameGrid.for_recording(rate, len(tt), nfft, 0.9)
+    ts = M.TrackSet.empty(grid)
+
+    class Host:
+        def __init__(self):
+            self.ts = ts
+
+        def recording_paths(self):
+            return [str(wav)]
+
+        def _n_recording_channels(self):
+            return 2
+
+    src = RidgeSource(Host())
+    try:
+        times = ts.times
+        frames = np.flatnonzero((times > 1.0) & (times < 7.0))
+        centre = 600.0 + 10.0 * times[frames] / dur
+        answers = []
+        src.request(
+            frames, centre - 4.0, centre + 4.0, lambda *a, **k: answers.append((a, k))
+        )
+        end = time.monotonic() + 10
+        while not answers and time.monotonic() < end:
+            pump(0.02)
+        (freqs, sign, cplx), kw = answers[0]
+        assert not kw.get("error")
+        # the chirp ends 7 Hz (3.6 bins) below the louder tone, whose main
+        # lobe then swallows it in the last few frames: those stay empty
+        kept = np.isfinite(freqs)
+        assert kept.mean() > 0.9
+        assert np.abs(freqs[kept] - centre[kept]).max() < 0.5
+        assert sign.shape == (len(frames), 2)
+        assert src.last_info["total"] < 1.0
+    finally:
+        src.shutdown()

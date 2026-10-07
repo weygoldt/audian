@@ -90,6 +90,7 @@ from . import geometry as G
 from . import model as M
 from . import runner as R
 from .overlay import TrackOverlay, view_of
+from .ridgeadd import RidgeSource
 from .tools import (
     BRUSH_MAX,
     BRUSH_MIN,
@@ -112,6 +113,7 @@ DEFAULT_PREFS = {
     "device": "auto",
     "brush_px": 14,
     "sticky_brush": True,
+    "ridge_add": True,
     "show_unassigned": True,
     "point_px": 3,
     "gap_break_s": 0.5,
@@ -510,6 +512,9 @@ class WavetrackerPanel(QWidget):
         self.controller = ToolController(self.scene, host=self, parent=self)
         self.controller.brush_px = int(self.prefs["brush_px"])
         self.controller.sticky = bool(self.prefs["sticky_brush"])
+        self.controller.ridge = bool(self.prefs["ridge_add"])
+        self.ridge_source = RidgeSource(self, parent=self)
+        self.controller.ridge_source = self.ridge_source
         self.overlays: list = []
         self.surfaces: list = []
         self._attached_axes: list = []
@@ -877,6 +882,7 @@ class WavetrackerPanel(QWidget):
         self.hintw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
         theme.tint(self.hintw, "fg")
         group.add_span_row(self.hintw)
+        self._build_selection_strip(group)
 
         self.undow = QPushButton("↶ Undo", self)
         self.undow.clicked.connect(self.undo)
@@ -907,6 +913,17 @@ class WavetrackerPanel(QWidget):
         )
         self.dimspecw.toggled.connect(self._dim_spec_toggled)
         group.add_span_row(self._row(self.stickyw, self.dimspecw))
+        self.ridgew = QCheckBox("Track ridge in brush", self)
+        self.ridgew.setChecked(self.controller.ridge)
+        self.ridgew.setToolTip(
+            "Add (F): the stroke marks a region and the strongest continuous "
+            "ridge of the raw spectrogram inside it becomes the detections; "
+            "frames without a ridge above the noise stay empty. Off: one "
+            "point per frame from 'Add from'. Ctrl+drag paints literally "
+            "for one stroke."
+        )
+        self.ridgew.toggled.connect(self._ridge_changed)
+        group.add_span_row(self.ridgew)
 
         self.optbtnw = QToolButton(self)
         self.optbtnw.setText("Display and keys")
@@ -982,6 +999,103 @@ class WavetrackerPanel(QWidget):
         group.add_span_row(self.optw)
         # the old name, for the tests and the Keys disclosure
         self.keysbtnw = self.optbtnw
+
+    def _build_selection_strip(self, group) -> None:
+        """What can be done with the selection, shown while there is one
+        (5.8): the same actions as the keys and the lane's right-click."""
+        self.stripw = QWidget(self)
+        theme.frame(self.stripw)
+        lay = QVBoxLayout(self.stripw)
+        lay.setContentsMargins(theme.S4, theme.S2, theme.S4, theme.S4)
+        lay.setSpacing(theme.S2)
+        self.stripsumw = QLabel("", self.stripw)
+        self.stripsumw.setFont(theme.font_ui(theme.SIZE_SMALL_PT, bold=True))
+        theme.tint(self.stripsumw, "fg")
+        lay.addWidget(self.stripsumw)
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(2)
+        grid.setVerticalSpacing(2)
+        self.stripbtns = {}
+        names = (
+            "unassign",
+            "unassign_tracks",
+            "new_id",
+            "merge",
+            "swap",
+            "zoom",
+            "clear",
+        )
+        keys = {
+            "unassign": "Del",
+            "unassign_tracks": "⇧Del",
+            "new_id": "N",
+            "merge": "⇧M",
+            "swap": "⇧X",
+            "zoom": "⇧Z",
+            "clear": "Esc",
+        }
+        labels = {
+            "unassign": "Unassign",
+            "unassign_tracks": "Unassign tracks",
+            "new_id": "New id",
+            "merge": "Merge",
+            "swap": "Swap",
+            "zoom": "Zoom",
+            "clear": "Clear",
+        }
+        font = theme.font_ui(theme.SIZE_SMALL_PT)
+        for i, name in enumerate(names):
+            b = QToolButton(self.stripw)
+            b.setText(f"{labels[name]}  {keys[name]}")
+            b.setFont(font)
+            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            b.setMinimumWidth(20)
+            b.clicked.connect(lambda _c=False, n=name: self._strip_action(n))
+            # the long one gets a row of its own; the rest go two by two
+            if name == "unassign_tracks":
+                grid.addWidget(b, 0, 1)
+            else:
+                pos = {
+                    "unassign": (0, 0),
+                    "new_id": (1, 0),
+                    "merge": (1, 1),
+                    "swap": (2, 0),
+                    "zoom": (2, 1),
+                    "clear": (3, 0),
+                }[name]
+                grid.addWidget(b, *pos)
+            self.stripbtns[name] = b
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        lay.addLayout(grid)
+        self.stripw.hide()
+        group.add_span_row(self.stripw)
+
+    def _strip_action(self, name: str) -> None:
+        for n, _label, _key, run, why, _tip in self.controller.selection_actions(
+            for_strip=True
+        ):
+            if n == name:
+                if why:
+                    self.controller.reject(why)
+                else:
+                    run()
+                break
+        self._refresh_strip()
+
+    def _refresh_strip(self) -> None:
+        c = self.controller
+        if not len(self.scene.selection) or self.ts is None:
+            self.stripw.hide()
+            return
+        self.stripsumw.setText(c.selection_summary())
+        for name, _label, _key, _run, why, tip in c.selection_actions(for_strip=True):
+            b = self.stripbtns[name]
+            b.setEnabled(not why)
+            b.setToolTip(why if why else tip)
+        self.stripw.show()
 
     def _build_tracks(self, box) -> None:
         group = self._section(box, "Tracks")
@@ -1113,6 +1227,7 @@ class WavetrackerPanel(QWidget):
         self._table_timer.stop()
         save_prefs(self.prefs)
         self.cancel_job(quiet=True)
+        self.ridge_source.shutdown()
         for client in (self.runner, self.cleaner):
             if client is not None:
                 try:
@@ -1361,6 +1476,7 @@ class WavetrackerPanel(QWidget):
 
     def _refresh_all(self) -> None:
         self._update_nospec()
+        self._refresh_strip()
         self._refresh_header()
         self._refresh_table()
         self._refresh_history()
@@ -1547,6 +1663,7 @@ class WavetrackerPanel(QWidget):
 
     def _selection_changed(self, rows) -> None:
         self._sync_table_selection()
+        self._refresh_strip()
         if self.scene.isolate:
             self.scene.touch_display()
             self.schedule()
@@ -1642,6 +1759,12 @@ class WavetrackerPanel(QWidget):
         self.brushvalw.setText(f"{r} px")
         self.prefs["brush_px"] = int(r)
         self._prefs_timer.start()
+
+    def _ridge_changed(self, on: bool) -> None:
+        self.controller.ridge = bool(on)
+        self.prefs["ridge_add"] = bool(on)
+        self._prefs_timer.start()
+        self.controller.changed()
 
     def _sticky_changed(self, on: bool) -> None:
         self.controller.sticky = bool(on)

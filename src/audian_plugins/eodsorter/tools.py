@@ -367,7 +367,15 @@ class SelectTool(BrushTool):
             )
         if hover is not None:
             return f"click: select {id_text(hover.id)} · Ctrl+click: toggle · double-click: zoom"
-        return "drag: brush-select (Shift adds, Ctrl removes) · click empty: clear"
+        if len(scene.selection):
+            return (
+                "act on the selection below, with Del/N/⇧M or right-click · "
+                "drag: brush-select (Shift adds, Ctrl removes) · click empty: clear"
+            )
+        return (
+            "click a track or brush points to select them (Shift adds, Ctrl "
+            "removes), then act on it below or with Del/N/⇧M"
+        )
 
     def _mode(self) -> str:
         s = self._stroke
@@ -1068,25 +1076,59 @@ class AddTool(BrushTool):
         self._freqs = np.zeros(0)
         self._target = None
         self._pending = None
+        self._pending_source = None
+        self._literal_now = False
+
+    def ridge_mode(self) -> bool:
+        """Whether the stroke in progress (or the next) tracks the ridge:
+        the option is on and Ctrl is not held (5.5)."""
+        if not self.ctl.ridge:
+            return False
+        s = self._stroke
+        return not (self._literal_now or (s is not None and s.mods.ctrl))
 
     def hint(self, scene, hover) -> str:
         source = self.ctl.add_source.name
         if self._pending is not None:
+            if self._pending_source is self.ctl.ridge_source:
+                return "tracking the ridge in the brushed region… (Esc cancels)"
             return "finding the peak frequencies…"
+        ridge = self.ridge_mode()
         if self.active:
-            n = len(self._frames)
-            skip = int(np.asarray(self.scene.marks.add_skip).sum())
             to = (
                 f"extend {id_text(self._target)}"
                 if self._target is not None
                 else "a new track"
             )
+            if ridge:
+                return (
+                    f"release: track the ridge under the brush as {to} "
+                    "· hold Ctrl to paint literally"
+                )
+            n = len(self._frames)
+            skip = int(np.asarray(self.scene.marks.add_skip).sum())
             return f"release: add {plural(n - skip, 'point')} as {to} · frequency from {source}"
+        if ridge:
+            if hover is not None:
+                return (
+                    f"brush from {id_text(hover.id)} along the gap: its ridge "
+                    "extends it · Ctrl+drag paints literally"
+                )
+            return (
+                "brush over a missed fish: the strongest continuous ridge in "
+                "the brushed region is added · Ctrl+drag paints literally"
+            )
         if hover is not None:
             return (
                 f"drag from {id_text(hover.id)} along the gap to extend it · {source}"
             )
         return f"paint along a missed track to add detections · frequency from {source}"
+
+    def press(self, lane, pos, mods) -> None:
+        if self._pending is not None:
+            self._cancel_pending()  # a new stroke supersedes the search
+        self._literal_now = Mods.of(mods).ctrl
+        super().press(lane, pos, mods)
 
     def started(self) -> None:
         stroke = self._stroke
@@ -1095,16 +1137,37 @@ class AddTool(BrushTool):
         self._sample()
 
     def move(self, lane, pos, mods) -> None:
+        if self._stroke is not None and Mods.of(mods).ctrl:
+            self._literal_now = True
         super().move(lane, pos, mods)
         if self._stroke is not None:
             self._sample()
 
-    def _sample(self) -> None:
-        stroke = self._stroke
-        ts = self.ts
+    def _stroke_data(self, stroke):
         pts = np.asarray(stroke.points, dtype=np.float64)
         t = stroke.view.x0 + pts[:, 0] / stroke.view.sx
         f = stroke.view.y1 - pts[:, 1] / stroke.view.sy
+        return t, f
+
+    def _sample(self) -> None:
+        stroke = self._stroke
+        ts = self.ts
+        marks = self.scene.marks
+        target = self._target
+        if self.ridge_mode():
+            # the stroke is a region, drawn by the surface; no dots until
+            # the ridge is found
+            self._frames = np.zeros(0, np.int64)
+            self._freqs = np.zeros(0)
+            marks.add_t = np.zeros(0)
+            marks.add_f = np.zeros(0)
+            marks.add_skip = np.zeros(0, bool)
+            marks.add_pending = False
+            if target is not None:
+                marks.outline_id = target
+            self.scene.touch()
+            return
+        t, f = self._stroke_data(stroke)
         order = np.argsort(t, kind="stable")
         t, f = t[order], f[order]
         k0, k1 = G.frame_window(ts.times, float(t[0]), float(t[-1]))
@@ -1121,10 +1184,8 @@ class AddTool(BrushTool):
             r_hz = stroke.view.df(self.ctl.brush_px)
             self._frames = frames
             self._freqs = self.ctl.add_source.preview(frames, centre, r_hz)
-        marks = self.scene.marks
         marks.add_t = ts.times[self._frames] if len(self._frames) else np.zeros(0)
         marks.add_f = self._freqs
-        target = self._target
         if target is not None:
             marks.add_skip = np.isin(self._frames, ts.idx[ts.rows_of(target)])
             marks.add_colour = ("id", target)
@@ -1135,14 +1196,24 @@ class AddTool(BrushTool):
         marks.add_pending = False
         self.scene.touch()
 
+    def release(self, lane, pos, mods) -> None:
+        if self._stroke is not None and Mods.of(mods).ctrl:
+            self._literal_now = True
+        super().release(lane, pos, mods)
+
     def finish(self, rows, stroke) -> None:
-        ts = self.ts
-        frames, centre = self._frames, self._freqs
+        ridge = self.ctl.ridge and not (self._literal_now or stroke.mods.ctrl)
+        self._literal_now = False
         target = self._target
         if target is None:
             hover = self.scene.hover
             if hover is not None and self.ctl.hover_lane is stroke.lane:
                 target = float(hover.id)
+        if ridge:
+            self._finish_ridge(stroke, target)
+            return
+        ts = self.ts
+        frames, centre = self._frames, self._freqs
         if len(frames) == 0:
             self.ctl.say("the stroke spans no frame")
             return
@@ -1156,9 +1227,14 @@ class AddTool(BrushTool):
             return
         # asynchronous (the runner's peaks): keep the dots, pulsing, until
         # the answer arrives; the edit commits then
+        self._wait(source, frames, centre, target)
+        source.request(frames, centre, r_hz, self._answer)
+
+    def _wait(self, source, frames, centre, target) -> None:
+        ts = self.ts
         marks = self.scene.marks
         marks.add_t = ts.times[frames]
-        marks.add_f = centre
+        marks.add_f = np.asarray(centre, dtype=np.float64)
         marks.add_pending = True
         marks.add_colour = ("id", target if target is not None else float(ts.next_id))
         marks.add_skip = (
@@ -1166,44 +1242,94 @@ class AddTool(BrushTool):
             if target is not None
             else np.zeros(len(frames), dtype=bool)
         )
+        if target is not None:
+            marks.outline_id = target
         self._pending = (frames, target, ts)
+        self._pending_source = source
         self.scene.touch()
 
-        def done(freqs, sign, cplx, error=""):
-            pending = self._pending
-            self._pending = None
-            self.scene.marks = G.Marks(outline_id=self.scene.marks.outline_id)
-            self.scene.touch()
-            if pending is None:
-                return
-            if error:
-                self.ctl.reject(f"peak search failed: {error}")
-                return
-            p_frames, p_target, session = pending
-            if self.ts is not session:
-                self.ctl.reject(
-                    "other results were opened; the added points were dropped"
-                )
-                return
-            self.ctl.commit_plan(
-                lambda: self.ts.plan_add(
-                    p_frames, freqs, target=p_target, sign=sign, cplx=cplx
-                )
-            )
+    def _finish_ridge(self, stroke, target) -> None:
+        from . import ridge as RG
 
-        source.request(frames, centre, r_hz, done)
+        ts = self.ts
+        source = self.ctl.ridge_source
+        why = "it needs the recording" if source is None else source.available()
+        if why:
+            self.ctl.reject(
+                f"cannot track the ridge: {why} · Ctrl+drag paints literally"
+            )
+            return
+        t, f = self._stroke_data(stroke)
+        r_t = stroke.view.dt(self.ctl.brush_px)
+        r_f = stroke.view.df(self.ctl.brush_px)
+        k0, k1 = G.frame_window(ts.times, float(t.min() - r_t), float(t.max() + r_t))
+        frames = np.arange(k0, k1, dtype=np.int64)
+        lo, hi = RG.brush_bands(ts.times[frames], t, f, r_t, r_f)
+        ok = np.isfinite(lo) & np.isfinite(hi)
+        frames, lo, hi = frames[ok], lo[ok], hi[ok]
+        if not len(frames):
+            self.ctl.say("the stroke spans no frame")
+            return
+        self._wait(source, frames, 0.5 * (lo + hi), target)
+        self.ctl.changed()
+        source.request(frames, lo, hi, self._answer)
+
+    def _answer(self, freqs, sign, cplx, error="") -> None:
+        pending, source = self._pending, self._pending_source
+        self._pending = None
+        self._pending_source = None
+        self.scene.marks = G.Marks(outline_id=self.scene.marks.outline_id)
+        self.scene.touch()
+        if pending is None:
+            return
+        ridge = source is not None and source is self.ctl.ridge_source
+        if error:
+            what = "ridge search" if ridge else "peak search"
+            self.ctl.reject(f"{what} failed: {error}")
+            return
+        p_frames, p_target, session = pending
+        if self.ts is not session:
+            self.ctl.reject("other results were opened; the added points were dropped")
+            return
+        freqs = None if freqs is None else np.asarray(freqs, dtype=np.float64)
+        if ridge and (freqs is None or not np.isfinite(freqs).any()):
+            self.ctl.reject(
+                "no ridge found in the brushed region (nothing above the noise "
+                "floor) · Ctrl+drag paints literally"
+            )
+            return
+        if ridge:
+            keep = np.isfinite(freqs)
+            p_frames, freqs = p_frames[keep], freqs[keep]
+            sign = None if sign is None else np.asarray(sign)[keep]
+            cplx = None if cplx is None else np.asarray(cplx)[keep]
+        self.ctl.commit_plan(
+            lambda: self.ts.plan_add(
+                p_frames, freqs, target=p_target, sign=sign, cplx=cplx
+            )
+        )
+        self.ctl.changed()
+
+    def _cancel_pending(self) -> None:
+        source = self._pending_source
+        self._pending = None
+        self._pending_source = None
+        if source is not None:
+            source.cancel()
+        self.scene.marks = G.Marks()
+        self.scene.touch()
 
     def cancel(self) -> bool:
         if self._pending is not None:
-            self._pending = None
-            self.ctl.add_source.cancel()
-            self.scene.marks = G.Marks()
-            self.scene.touch()
+            self._cancel_pending()
             self.ctl.changed()
             return True
         return super().cancel()
 
     def click(self, lane, pos, mods, double=False) -> None:
+        if self.ridge_mode():
+            self.ctl.say("brush along a missed fish to track its ridge there")
+            return
         self.ctl.say("drag along a gap to add detections there")
 
 
@@ -1311,6 +1437,10 @@ class ToolController(QObject):
         self.brush_px = BRUSH_DEFAULT
         self.sticky = True
         self.add_source = CentreSource()
+        #: Add tracks the ridge in the brushed region (5.5); Ctrl paints literally
+        self.ridge = True
+        #: what finds it (`ridgeadd.RidgeSource`), set by the panel
+        self.ridge_source = None
         self.last_reject = ""
         self.selection_order: list = []
         self._pointer = None  # (lane, (x, y), mods)
@@ -1673,18 +1803,141 @@ class ToolController(QObject):
         if self.commit_plan(lambda: ts.plan_merge(ids, into=into)):
             self.select_ids([into])
 
-    def swap_after_cursor(self) -> None:
+    def swap_after_cursor(self, t: Optional[float] = None) -> None:
         ts = self.ts
-        ids = [i for i in self.selection_order if ts is not None and len(ts.rows_of(i))]
+        ids = self.swap_ids()
         if len(ids) != 2:
             self.reject("swap needs exactly two selected tracks")
             return
-        t = self.cursor_t
+        t = self.cursor_t if t is None else t
         if t is None:
             self.reject("point at the crossing to swap after")
             return
         a, b = ids
         self.commit_plan(lambda: ts.plan_swap_after(a, b, t))
+
+    def swap_ids(self) -> list:
+        ts = self.ts
+        if ts is None:
+            return []
+        return [i for i in self.selection_order if len(ts.rows_of(i))]
+
+    def closest_approach(self) -> Optional[float]:
+        """Where the two selected tracks come closest in frequency: the
+        time a swap from the selection strip happens after (the strip's
+        button cannot know where the pointer was on the lane)."""
+        ts = self.ts
+        ids = self.swap_ids()
+        if ts is None or len(ids) != 2:
+            return None
+        ra, rb = ts.rows_of(ids[0]), ts.rows_of(ids[1])
+        common, ia, ib = np.intersect1d(ts.idx[ra], ts.idx[rb], return_indices=True)
+        if not len(common):
+            return None
+        gap = np.abs(ts.fund[ra[ia]] - ts.fund[rb[ib]])
+        k = int(common[int(np.argmin(gap))])
+        return float(ts.times[k])
+
+    def selection_summary(self) -> str:
+        """ "3 tracks · 214 points" (unassigned points counted apart)."""
+        ts = self.ts
+        sel = self.scene.selection
+        if ts is None or not len(sel):
+            return ""
+        n_ids = len(self.scene.selected_ids())
+        n_un = int(np.isnan(ts.ident[sel]).sum())
+        text = f"{plural(n_ids, 'track')} · {plural(len(sel), 'point')}"
+        if n_un:
+            text += f" ({n_un:,} unassigned)"
+        return text
+
+    def selection_actions(self, for_strip: bool = False) -> list:
+        """The actions on the selection, for the panel's strip and the lane
+        menu: ``(name, label, key, run, reason, tip)``; `reason` is empty
+        when the action applies, else why not (shown as the tooltip)."""
+        sel = self.scene.selection
+        n = len(sel)
+        ids = self.scene.selected_ids()
+        n_ids = len(ids)
+        none = "nothing is selected"
+        swap = self.swap_ids()
+        if for_strip:
+            t_swap = self.closest_approach()
+            swap_tip = (
+                f"Swap the two tracks' identities after their closest approach "
+                f"at {fmt_time(t_swap)} (Shift+X over the lane swaps after the "
+                "pointer)"
+                if t_swap is not None
+                else ""
+            )
+            swap_run = lambda: self.swap_after_cursor(t_swap)  # noqa: E731
+            swap_why = (
+                "swap needs exactly two selected tracks"
+                if len(swap) != 2
+                else ("the two tracks never share a frame" if t_swap is None else "")
+            )
+        else:
+            swap_tip = "Swap the two tracks' identities after the pointer (Shift+X)"
+            swap_run = self.swap_after_cursor
+            swap_why = (
+                "swap needs exactly two selected tracks" if len(swap) != 2 else ""
+            )
+        merge_into = id_text(swap[0]) if swap else ""
+        return [
+            (
+                "unassign",
+                "Unassign",
+                "Del",
+                self.unassign_selected,
+                "" if n else none,
+                f"Unassign the {plural(n, 'selected point')}: they leave their "
+                "tracks and become unassigned detections (Del)",
+            ),
+            (
+                "unassign_tracks",
+                "Unassign tracks",
+                "Shift+Del",
+                self.delete_selected_tracks,
+                "" if n_ids else "the selection holds no assigned points",
+                f"Unassign every point of the {plural(n_ids, 'selected track')}, "
+                "also the points outside the selection (Shift+Del)",
+            ),
+            (
+                "new_id",
+                "New id",
+                "N",
+                self.new_id_from_selection,
+                "" if n else none,
+                "Split the selected points off into one new track (N)",
+            ),
+            (
+                "merge",
+                "Merge",
+                "Shift+M",
+                self.merge_selected,
+                "" if len(swap) >= 2 else "merge needs two or more selected tracks",
+                f"Merge the selected tracks into {merge_into}, the one picked "
+                "first; where two have a point in one frame, the one nearer the "
+                "track's local median stays (Shift+M)",
+            ),
+            ("swap", "Swap", "Shift+X", swap_run, swap_why, swap_tip),
+            (
+                "zoom",
+                "Zoom",
+                "Shift+Z",
+                self.zoom_selection,
+                "" if n else none,
+                "Zoom to the selection (Shift+Z)",
+            ),
+            (
+                "clear",
+                "Clear",
+                "Esc",
+                lambda: self.set_selection([]),
+                "" if n else none,
+                "Clear the selection (Esc)",
+            ),
+        ]
 
     def zoom_selection(self) -> None:
         ids = self.scene.selected_ids().tolist()
@@ -1734,12 +1987,19 @@ class ToolController(QObject):
     # ---- context menu
 
     def context_menu(self, lane, pos, screen_pos) -> Optional[QMenu]:
-        """The edit menu on a lane (5.3); returns it after `exec`."""
+        """The edit menu on a lane (5.3); returns it after `exec`.
+
+        Only offered in edit mode (the surface takes the right click only
+        while armed), so audian's own lane menu is untouched outside it.
+        With a selection it lists the selection's actions; with nothing
+        selected, the hovered track's."""
         self.hover_at(lane, pos)
         self.flush()
         hover = self.scene.hover
         host = self.host
         menu = QMenu()
+        menu.setToolTipsVisible(True)
+        has_sel = bool(len(self.scene.selection))
         if hover is not None:
             ident = hover.id
             menu.addAction(
@@ -1754,23 +2014,33 @@ class ToolController(QObject):
                 lambda: self.commit_plan(lambda: self.ts.plan_cut(ident, t)),
             )
             act.setEnabled(t is not None)
+            if not has_sel:
+                act = menu.addAction(
+                    f"Unassign track {id_text(ident)}",
+                    lambda: self.commit_plan(lambda: self.ts.plan_delete_ids([ident])),
+                )
+                act.setToolTip(f"Unassign every point of {id_text(ident)}")
             menu.addSeparator()
-        has_sel = bool(len(self.scene.selection))
-        n_ids = len(self.scene.selected_ids())
-        for text, fn, ok in (
-            ("Unassign selected points\tDel", self.unassign_selected, has_sel),
-            (
-                "Unassign selected tracks\tShift+Del",
-                self.delete_selected_tracks,
-                n_ids > 0,
-            ),
-            ("New id from selection\tN", self.new_id_from_selection, has_sel),
-            ("Merge selected tracks\tShift+M", self.merge_selected, n_ids >= 2),
-            ("Swap selected after cursor\tShift+X", self.swap_after_cursor, n_ids == 2),
-            ("Zoom to selection\tShift+Z", self.zoom_selection, has_sel),
-        ):
-            act = menu.addAction(text, fn)
-            act.setEnabled(ok)
+        if has_sel or hover is None:
+            head = menu.addAction(
+                f"Selection: {self.selection_summary()}"
+                if has_sel
+                else "Nothing selected (V: click or brush)"
+            )
+            head.setEnabled(False)
+            for _name, label, key, run, why, tip in self.selection_actions():
+                text = {
+                    "Unassign": "Unassign selected points",
+                    "Unassign tracks": "Unassign selected tracks",
+                    "New id": "New id from selection",
+                    "Merge": "Merge selected tracks",
+                    "Swap": "Swap selected after the pointer",
+                    "Zoom": "Zoom to selection",
+                    "Clear": "Clear selection",
+                }.get(label, label)
+                act = menu.addAction(f"{text}\t{key}", run)
+                act.setEnabled(not why)
+                act.setToolTip(why or tip)
         if screen_pos is not None:
             point = (
                 screen_pos.toPoint() if hasattr(screen_pos, "toPoint") else screen_pos
@@ -2189,6 +2459,7 @@ KEY_HELP = (
     ("G / Shift+G", "next / previous issue", "Toggle grid"),
     ("Enter", "accept the issue's suggestion", "free"),
     ("[ / ]", "brush smaller / larger (or Alt+wheel)", "free"),
+    ("Ctrl+drag", "Add: paint literally instead of tracking the ridge", "—"),
     ("Tab", "next of overlapping tracks (over a lane)", "focus traversal"),
     ("Esc", "cancel gesture → anchor → selection → Select", "free"),
 )
