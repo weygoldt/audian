@@ -584,8 +584,10 @@ def test_the_panel_gives_its_height_back_to_the_stack(wide_browser):
     settle()
     pump(0.3)
     viewport = view.stack_area.viewport()
-    # the bar was 168 px tall, measured, and this is where it went
-    assert viewport.height() >= 483 + 168, viewport.height()
+    # the bar was 168 px tall, measured, and this is where it went; 483 was
+    # measured with one UI font, and the window's toolbar and status line
+    # are a few px taller or shorter with another (647 with Ubuntu's Inter)
+    assert viewport.height() >= 483 + 168 - 6, viewport.height()
     # and the lanes it bought are lanes the reader no longer scrolls to
     assert view.stack_area.verticalScrollBar().maximum() < 196
 
