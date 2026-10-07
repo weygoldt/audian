@@ -276,6 +276,17 @@ def test_cleanup_oneshot(rec):
         assert res["type"] == "result", msgs
         assert res["ident_path"] == str(folder / "ident_v_cleaned_n2.npy")
         assert res["n_ids"] == 1
+        steps = [
+            (m["done"], m["total"], m["text"])
+            for m in msgs
+            if m["type"] == "progress" and m["total"] > 0
+        ]
+        assert steps == [
+            (0, 1000, "window 1/1"),
+            (250, 1000, "window 1/1"),
+            (600, 1000, "joining overlapping tracks"),
+            (1000, 1000, "done"),
+        ]
         assert p.p.wait(10) == 0  # one-shot: exits after the job
     finally:
         if p.p.poll() is None:

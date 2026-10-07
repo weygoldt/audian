@@ -417,10 +417,27 @@ class Runner:
                 pass  # not Linux, or not allowed: run without a limit
         send({"type": "progress", "id": job, "stage": "cleanup", "done": 0,
               "total": -1, "text": "cleaning up identities"})  # fmt: skip
+        import inspect
+
         from wavetracker.postprocessing import cleanup
 
         cleanup.show_results = False
-        cleanup.main(folder, n_fish=n_fish, **params)
+        kwargs = dict(params)
+        if "progress" in inspect.signature(cleanup.main).parameters:
+            # wavetracker >= f8adc2c reports (step, fraction of the run);
+            # older ones leave the bar busy, as before
+            last = [-1]
+
+            def progress(stage, fraction):
+                permille = int(1000 * fraction)
+                if permille != last[0]:
+                    last[0] = permille
+                    send({"type": "progress", "id": job, "stage": "cleanup",
+                          "done": permille, "total": 1000,
+                          "text": stage})  # fmt: skip
+
+            kwargs["progress"] = progress
+        cleanup.main(folder, n_fish=n_fish, **kwargs)
         plt = sys.modules.get("matplotlib.pyplot")
         if plt is not None:  # cleanup creates figures it never closes
             try:

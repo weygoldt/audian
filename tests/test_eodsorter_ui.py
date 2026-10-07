@@ -2022,3 +2022,28 @@ def test_ridge_source_follows_a_chirp_past_a_louder_neighbour(app, tmp_path):
         assert src.last_info["total"] < 1.0
     finally:
         src.shutdown()
+
+
+def test_clean_up_sits_under_the_track_buttons_and_shows_progress(panel):
+    """Clean up is the step after tracking: right under Track visible /
+    Track recording, above the edit tools; a cleanup job fills the bar."""
+    pump(0.1)
+    top = panel.trackvisw.mapTo(panel, panel.trackvisw.rect().topLeft()).y()
+    clean = panel.cleanupw.mapTo(panel, panel.cleanupw.rect().topLeft()).y()
+    edit = panel.editw.mapTo(panel, panel.editw.rect().topLeft()).y()
+    assert top < clean < edit
+    panel._job = {"kind": "cleanup", "id": "c1"}
+    panel._job_started = time.monotonic() - 10.0
+    panel.jobroww.show()
+    panel._job_progress("c1", "cleanup", 400, 1000, "joining overlapping tracks")
+    assert panel.progressw.maximum() == 1000 and panel.progressw.value() == 400
+    text = panel.progressw.text()  # as drawn, fitted to the bar
+    assert text.startswith("40%") and "left" in text
+    assert "joining overlapping tracks" in panel.progressw.toolTip()
+    width = panel.progressw.fontMetrics().horizontalAdvance(text)
+    assert width < panel.progressw.width(), "the text fits on one line"
+    shot = os.environ.get("EODSORTER_SHOT")
+    if shot:
+        panel.grab().save(shot)
+    panel._job = None
+    panel.jobroww.hide()

@@ -662,7 +662,11 @@ tolerance is 5 min or half the stride, and `n_fish` defaults to the median
 number of ids with a detection in a frame (how many fish the tracker sees
 at once), not a fixed 2.  The dialog says what the defaults were fitted to;
 it also asks for the remaining parameters and a memory limit (default half
-of physical RAM, an `RLIMIT_AS` in the runner).  If cleanup still refuses
+of physical RAM, an `RLIMIT_AS` in the runner).  The run has a real progress
+bar: wavetracker's `cleanup.main(..., progress=)` (since `f8adc2c`) reports
+the step ("window 2/3", "joining overlapping tracks", …) and the fraction of
+the whole run from its pair loops, which the runner forwards as per-mille
+progress; an older wavetracker without it leaves the bar busy.  If cleanup still refuses
 the data (its `ValueError` beginning `cleanup:`), the panel shows that
 sentence as a warning and on the hint line, not as an exception.  The panel
 writes the *current* `fund_v`, `idx_v`, `ident_v` (with the reader's edits),
@@ -1072,8 +1076,10 @@ The panel is a narrow side tab (≥ 220 px) built from
    band for your species", the same warning the CLI prints); device; config
    file (optional YAML); an "Advanced" disclosure with nfft, overlap,
    thresholds, block duration, tracking `freq_tolerance`/`max_dt`, stitching
-   on/off.  Buttons **Track visible**, **Track recording**, **Clean up…**.
-   A progress bar with stage text and **Cancel** while a job runs.
+   on/off.  The buttons **Track visible**, **Track recording** and, right
+   under them, **Clean up…** (usually the first step after tracking) sit in
+   the session header so they are always in reach, with a progress bar with
+   stage text, ETA and **Cancel** while a job runs.
 3. **Snippet bar** (only while a provisional snippet exists): summary,
    **Accept**, **Discard**, "Join to tracks at the edges".
 4. **Edit**: the **Edit tracks** toggle; the tool row (V E C M A F); brush

@@ -5,10 +5,11 @@ bottom:
 
 1. **Session**: the results directory, the unsaved marker, Save and a menu
    (Open results…, Save as…, Revert to tracker output…, Show in file
-   manager).
-2. **Run**: which Python runs wavetracker, the fish frequency range, device,
-   config file and an Advanced disclosure; Track visible / Track recording /
-   Clean up…, with a progress bar and Cancel while a job runs.
+   manager); Track visible / Track recording, then Clean up… (the step after
+   tracking), with a progress bar and Cancel while a job runs.
+2. **Run settings** (folded after the first run): the wavetracker status
+   line, the fish frequency range, device, config file and an Advanced
+   disclosure.
 3. **Snippet** (only while a provisional snippet is shown): Accept, Discard.
 4. **Edit**: the Edit tracks toggle, the tool row, the hint line, the brush
    and display options, the Keys list.
@@ -730,6 +731,15 @@ class WavetrackerPanel(QWidget):
         self.trackrecw.setToolTip("Run wavetracker on the whole recording")
         self.trackrecw.clicked.connect(self.track_recording)
         group.add_span_row(self._row(self.trackvisw, self.trackrecw))
+        # the step after tracking, so it sits right under it
+        self.cleanupw = QPushButton("Clean up…", self)
+        self.cleanupw.setToolTip(
+            "wavetracker's cleanup, usually the first thing after tracking: "
+            "join the tracks of a number of persistent fish and drop the rest "
+            "(defaults fitted to the tracks' span)"
+        )
+        self.cleanupw.clicked.connect(self.clean_up)
+        group.add_span_row(self.cleanupw)
 
         self.progressw = QProgressBar(self)
         self.progressw.setRange(0, 100)
@@ -845,13 +855,6 @@ class WavetrackerPanel(QWidget):
         self.advw.hide()
         group.add_span_row(self.advw)
 
-        self.cleanupw = QPushButton("Clean up…", self)
-        self.cleanupw.setToolTip(
-            "wavetracker's cleanup: join the tracks of a number of persistent "
-            "fish and drop the rest (defaults fitted to the tracks' span)"
-        )
-        self.cleanupw.clicked.connect(self.clean_up)
-        group.add_span_row(self.cleanupw)
         self._sync_thresholds()
         self._range_changed()
 
@@ -2796,10 +2799,22 @@ class WavetrackerPanel(QWidget):
         elapsed = time.monotonic() - self._job_started
         if frac > 0.02:
             remaining = elapsed * (1 - frac) / frac
-            eta = f" · ETA {int(remaining // 60)}:{int(remaining % 60):02d}"
-        self.progressw.setFormat(
-            f"{stage} {100 * frac:.0f}%" + (f" · {text}" if text else "") + eta
-        )
+            eta = f"{int(remaining // 60)}:{int(remaining % 60):02d} left"
+        # the panel is narrow: percentage first, then what is running (the
+        # step, else the stage), then the time left; whatever does not fit
+        # is elided from the step, and the tooltip has it all
+        what = text or stage
+        full = " · ".join(x for x in (f"{100 * frac:.0f}%", what, eta) if x)
+        self.progressw.setToolTip(f"{stage}: {full}")
+        fixed = " · ".join(x for x in (f"{100 * frac:.0f}%", "", eta) if x)
+        metrics = self.progressw.fontMetrics()
+        room = self.progressw.width() - metrics.horizontalAdvance(fixed + " · ") - 12
+        if what and room > metrics.horizontalAdvance("…") * 3:
+            what = metrics.elidedText(what, Qt.TextElideMode.ElideRight, room)
+            line = " · ".join(x for x in (f"{100 * frac:.0f}%", what, eta) if x)
+        else:
+            line = " · ".join(x for x in (f"{100 * frac:.0f}%", eta) if x)
+        self.progressw.setFormat(line)  # only %p, %v, %m are placeholders
 
     def _job_error(self, job, kind, message) -> None:
         current = self._job
