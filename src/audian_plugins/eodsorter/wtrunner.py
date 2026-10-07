@@ -1,8 +1,11 @@
-"""Run wavetracker jobs for audian, in the interpreter that has wavetracker.
+"""Run wavetracker jobs for audian, in a child process of audian's interpreter.
 
 This file is executed, never imported by the plugin::
 
-    <python with wavetracker> -u wtrunner.py [--oneshot] [--idle SECONDS]
+    <sys.executable> -u wtrunner.py [--oneshot] [--idle SECONDS]
+
+wavetracker is a dependency of audian, so the interpreter running audian has
+it; this runs out of process only because wavetracker holds the GIL.
 
 It imports the standard library, numpy and wavetracker only -- not audian,
 not Qt -- and runs on Python >= 3.11.  The protocol is described in
@@ -558,13 +561,13 @@ def main(argv=None) -> int:
 
     try:
         greeting = hello()
-    except BaseException as e:  # wrong interpreter, wavetracker missing or broken
+    except BaseException as e:  # wavetracker missing or broken
         msg = error_message(None, e)
         msg["kind"] = "startup"
         if isinstance(e, ImportError):
             msg["message"] = (
-                f"{sys.executable} cannot import {e.name or 'wavetracker'}: {e}. "
-                "Choose the Python that has wavetracker installed."
+                "wavetracker is not installed in this environment: "
+                f"{sys.executable} cannot import {e.name or 'wavetracker'}: {e}"
             )
         send(msg)
         return 3

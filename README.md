@@ -11,7 +11,7 @@ A fork of [bendalab/audian](https://github.com/bendalab/audian) by
 [Jan Benda](https://github.com/janscience).
 
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.11--3.14-blue.svg)](pyproject.toml)
 [![Upstream](https://img.shields.io/badge/fork%20of-bendalab%2Faudian-lightgrey.svg)](https://github.com/bendalab/audian)
 
 </div>
@@ -22,13 +22,19 @@ A fork of [bendalab/audian](https://github.com/bendalab/audian) by
 
 Not on PyPI — `pip install audian` gets you
 [the upstream release](https://pypi.python.org/pypi/audian/), not this fork.
-Install this one from source:
+Install this one from source. It runs on Python 3.11 to 3.14 (the range
+[wavetracker](https://github.com/weygoldt/wavetracker), which it installs
+alongside, supports); [uv](https://docs.astral.sh/uv/) fetches one if needed:
 
 ```sh
 git clone https://github.com/weygoldt/audian
 cd audian
-pip install -e .
+uv sync
 ```
+
+Without uv, in a Python 3.11–3.14 environment: wavetracker is not on PyPI, so
+install it first, `pip install git+https://github.com/weygoldt/wavetracker`,
+then `pip install -e .`.
 
 ## Use
 
@@ -99,10 +105,13 @@ spectrogram you are looking at. It replaces wavetracker's `EODsorter`.
   kept as `ident_v.tracked.npy`, the save is atomic, and the directory still
   loads with wavetracker's `Results.load`.
 
-wavetracker itself runs in its own Python, in a separate process, so its
-torch install stays out of audian's environment and a run never freezes the
-window. Point **Run settings → Python** at that interpreter (or the
-`wavetracker` command) once; it is remembered. The design, and the legacy
+wavetracker is a dependency of this project: `uv sync` installs it into the
+same environment as audian, so there is nothing to set up or point at. It
+runs in a child process of that same Python, so a run never freezes the
+window. To work on wavetracker
+alongside, install your checkout over the locked one with
+`uv pip install -e ../wavetracker`, or move the lock to its latest commit
+with `uv lock --upgrade-package wavetracker`. The design, and the legacy
 bugs it removes, are in [`docs/eodsorter-design.md`](docs/eodsorter-design.md).
 
 ## Curating tracked frequency bands

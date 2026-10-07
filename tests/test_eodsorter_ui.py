@@ -146,6 +146,10 @@ def world(app, tmp_path_factory):
     window.show()
     pump(1.5)
     view = window.browser()
+    # Whether the side panel opens is a remembered setting, and an earlier
+    # module (test_actioninventory's action sweep) can leave it hidden; the
+    # plugin's tab lives there, and a hidden panel is never shown.
+    view.set_side_panel(True)
     view.set_panels(traces=0, specs=1)
     pump(0.8)
     yield {"window": window, "browser": view, "pristine": pristine, "tmp": tmp, "n": n}
@@ -711,7 +715,7 @@ def test_ctrl_shift_e_toggles_edit_mode(panel, world):
 def test_keys_in_a_text_field_are_typed_not_claimed(panel):
     from PySide6.QtCore import Qt
 
-    field = panel.pythonw
+    field = panel.configw
     field.setText("")
     field.setFocus()
     pump(0.05)
@@ -1448,43 +1452,43 @@ def test_sections_fold_and_remember_it(panel):
     assert panel.trackvisw.isVisibleTo(panel) and panel.trackrecw.isVisibleTo(panel)
 
 
-def test_without_interpreter_the_run_buttons_say_where_to_set_it(panel, monkeypatch):
+def test_there_is_no_python_to_choose(panel):
+    """wavetracker is installed with audian and runs under its interpreter:
+    the panel has no field, button or setting for another one."""
+    from PySide6.QtWidgets import QPushButton
+
+    from audian_plugins.eodsorter import panel as P
+
+    assert not hasattr(panel, "pythonw") and not hasattr(panel, "checkw")
+    assert "python" not in P.DEFAULT_PREFS
+    texts = [b.text() for b in panel.findChildren(QPushButton)]
+    assert "Choose…" not in texts and "Check" not in texts
+    text = panel.interpw.text()
+    assert text.startswith("wavetracker ") and "✗" not in text
+
+
+def test_a_stale_python_setting_is_ignored(panel, monkeypatch):
+    from audian_plugins.eodsorter import panel as P
+
+    stored = {"version": P.SETTINGS_VERSION, "python": "/old/venv/bin/python"}
+    monkeypatch.setattr(
+        "audian.pluginapi.settings", lambda: {P.SETTINGS_KEY: stored}, raising=False
+    )
+    assert "python" not in P.load_prefs()
+
+
+def test_a_broken_wavetracker_install_is_one_red_line(panel, monkeypatch):
     from audian_plugins.eodsorter import runner as R
 
-    monkeypatch.setattr(R, "find_interpreter", lambda explicit: None)
+    message = "wavetracker is not installed in this environment: ImportError: x"
+    monkeypatch.setattr(R, "wavetracker_status", lambda: (None, message))
     panel.runner = None
     panel.runner_factory = lambda oneshot: (_ for _ in ()).throw(AssertionError)
-    panel.runner_factory.needs_interpreter = True  # type: ignore[attr-defined]
     panel.sections["Run settings"].set_open(False)
     panel.track_visible()
     assert panel.sections["Run settings"].is_open()
-    assert panel.interpw.text().startswith("✗") and "Choose" in panel.interpw.text()
-    assert "Python" in panel.hintw.text()
-    assert "~/wrk" not in panel.interpw.text() + panel.pythonw.toolTip()
-
-
-def test_choosing_the_wavetracker_command_sets_its_python_and_remembers_it(
-    panel, tmp_path, monkeypatch
-):
-    from audian_plugins.eodsorter import panel as P
-
-    python = tmp_path / "venv" / "bin" / "python"
-    python.parent.mkdir(parents=True)
-    python.write_text("")
-    script = python.parent / "wavetracker"
-    script.write_text(f"#!{python}\n")
-    saved = []
-    monkeypatch.setattr(P, "save_prefs", lambda prefs: saved.append(dict(prefs)))
-    checks = []
-    monkeypatch.setattr(panel, "_check_runner", lambda: checks.append(True))
-    panel.runner = None
-    panel.pythonw.setText(str(script))
-    panel._python_changed()
-    assert panel.pythonw.text() == str(python)
-    assert saved and saved[-1]["python"] == str(python), "persisted at once"
-    assert checks, "and checked right away"
-    panel.pythonw.setText("")
-    panel._python_changed()
+    assert panel.interpw.text() == f"✗ {message}"
+    assert "not installed" in panel.hintw.text()
 
 
 def test_a_runner_that_cannot_start_says_so_in_red(panel):

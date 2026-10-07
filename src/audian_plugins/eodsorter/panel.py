@@ -32,6 +32,7 @@ budget, so a worker was not worth its cancellation paths).
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -103,9 +104,11 @@ from .tools import (
 #: The key of this plugin's preferences in audian's settings store (4.1).
 SETTINGS_KEY = "eodsorter"
 SETTINGS_VERSION = 1
+# There is no "python" key any more: wavetracker is installed with audian
+# and runs under its interpreter.  `load_prefs` keeps only the keys listed
+# here, so a stale "python" from an older version is dropped on the next save.
 DEFAULT_PREFS = {
     "version": SETTINGS_VERSION,
-    "python": "",
     "device": "auto",
     "brush_px": 14,
     "sticky_brush": True,
@@ -517,9 +520,8 @@ class WavetrackerPanel(QWidget):
         self.cleaner = None
         #: how runner clients are made; tests replace it with a fake
         self.runner_factory = lambda oneshot: R.RunnerClient(
-            self._interpreter, oneshot=oneshot, parent=self
+            oneshot=oneshot, parent=self
         )
-        self.runner_factory.needs_interpreter = True
         self._job: Optional[dict] = None
         self._export_thread = None
         self._exporter = None
@@ -712,28 +714,6 @@ class WavetrackerPanel(QWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         group.add_span_row(self.interpw)
-
-        self.pythonw = QLineEdit(self)
-        self.pythonw.setPlaceholderText("Automatic")
-        self.pythonw.setText(self.prefs["python"])
-        self.pythonw.setToolTip(
-            "The Python of the environment wavetracker is installed in, "
-            "e.g. <venv>/bin/python (the wavetracker command works too). "
-            "Empty: this audian's Python if it has wavetracker, else "
-            "$WAVETRACKER_PYTHON, else the wavetracker command on PATH. "
-            "Remembered."
-        )
-        self.pythonw.editingFinished.connect(self._python_changed)
-        browse = QPushButton("Choose…", self)
-        browse.setToolTip(
-            "Pick the Python (or the wavetracker command) of that environment"
-        )
-        browse.clicked.connect(self._browse_python)
-        self.checkw = QPushButton("Check", self)
-        self.checkw.setToolTip("Start wavetracker and ask for its version")
-        self.checkw.clicked.connect(self._check_runner)
-        group.add_row("Python", "", ParameterGroup.expanding(self.pythonw))
-        group.add_span_row(self._row(browse, self.checkw))
 
         self.fminw = QDoubleSpinBox(self)
         self.fmaxw = QDoubleSpinBox(self)
@@ -2296,102 +2276,44 @@ class WavetrackerPanel(QWidget):
 
     # ============================================================ runner
 
-    def _interpreter(self):
-        return R.find_interpreter(self.pythonw.text().strip() or None)
-
     def _interp_status(self, error: str = "") -> None:
-        """The interpreter line: checked (green), failed (red) or not yet."""
+        """The wavetracker line: its version, devices once the runner said
+        hello, or why it cannot run (red)."""
         runner = self.runner
-        ok = False
+        version, broken = R.wavetracker_status()
+        ok = broken is None
         if error:
             text = f"✗ {error}"
+            token = "danger"
+            ok = False
+        elif broken:
+            text = f"✗ {broken}"
             token = "danger"
         elif runner is not None and runner.hello:
             h = runner.hello
             devices = [d for d in h.get("devices", []) if d not in ("auto",)]
             text = (
-                f"✓ wavetracker {h.get('wavetracker', '?')} · Python "
+                f"✓ wavetracker {h.get('wavetracker', version)} · Python "
                 f"{h.get('python', '?')} · {', '.join(devices) or 'cpu'}"
             )
             token = "success"
-            ok = True
-        elif runner is not None and runner.state == "starting":
-            text = "… starting wavetracker"
-            token = "fg.muted"
         else:
-            found = self._interpreter()
-            if found is None:
-                text = (
-                    "✗ No Python with wavetracker found. Choose the Python of "
-                    "the environment wavetracker is installed in (its "
-                    "<venv>/bin/python), or set WAVETRACKER_PYTHON. Opening "
-                    "results and editing work without it."
-                )
-                token = "danger"
-            else:
-                where = {
-                    "setting": "set here",
-                    "sys": "audian's own",
-                    "env": "$WAVETRACKER_PYTHON",
-                    "path": "from the wavetracker command",
-                }.get(found.source, found.source)
-                text = f"{found.path} ({where}) · not checked yet"
-                token = "fg.muted"
+            text = f"wavetracker {version} · Python {platform.python_version()}"
+            if runner is not None and runner.state == "starting":
+                text += " · starting…"
+            token = "fg.muted"
         self.interpw.setText(text)
         theme.tint(self.interpw, token)
-        self.checkw.setText("Checked" if ok else "Check")
         self._refresh_run_summary(ok)
 
     def _refresh_run_summary(self, ok: Optional[bool] = None) -> None:
         """What the folded Run settings header still shows."""
         if ok is None:
-            ok = self.runner is not None and bool(self.runner.hello)
+            ok = R.wavetracker_status()[1] is None
         lo, hi = self.fminw.value(), self.fmaxw.value()
-        mark = "✓" if ok else ("✗" if self._interpreter() is None else "·")
-        self.runsummaryw.setText(f"{mark} {lo:.0f}–{hi:.0f} Hz")
+        mark = "" if ok else "✗ "
+        self.runsummaryw.setText(f"{mark}{lo:.0f}–{hi:.0f} Hz")
         self.runsummaryw.setToolTip(self.interpw.text())
-
-    def _python_changed(self) -> None:
-        text = self.pythonw.text().strip()
-        if text and os.path.basename(text).startswith("wavetracker"):
-            # the command, not the interpreter: read its first line
-            python = R.script_interpreter(os.path.expanduser(text))
-            if python:
-                text = python
-                self.pythonw.setText(text)
-        if text == self.prefs.get("python", "") and self.runner is not None:
-            return
-        self.prefs["python"] = text
-        # a one-time setting: written now, not on the next timer
-        save_prefs(self.prefs)
-        if self.runner is not None and self.runner.state in (
-            "idle",
-            "failed",
-            "stopped",
-        ):
-            self.runner.shutdown(500)
-            self.runner = None
-        self._interp_status()
-        if text:
-            self._check_runner()
-
-    def _browse_python(self) -> None:
-        current = self.pythonw.text().strip()
-        start = (
-            str(Path(os.path.expanduser(current)).parent)
-            if current
-            else str(Path.home())
-        )
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Choose the Python (or the wavetracker command) of the environment "
-            "wavetracker is installed in, e.g. <venv>/bin/python",
-            start,
-            "Python or wavetracker (python* wavetracker*);;All files (*)",
-        )
-        if path:
-            self.pythonw.setText(path)
-            self._python_changed()
 
     def _browse_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -2410,7 +2332,7 @@ class WavetrackerPanel(QWidget):
             self.prefs["fish_range"] = [lo, hi]
             if hasattr(self, "_prefs_timer"):
                 self._prefs_timer.start()
-        if hasattr(self, "runsummaryw") and hasattr(self, "checkw"):
+        if hasattr(self, "runsummaryw") and hasattr(self, "interpw"):
             self._refresh_run_summary()
         broad = abs(lo - 80.0) < 1e-6 and abs(hi - 2400.0) < 1e-6
         self.rangewarnw.setVisible(broad)
@@ -2505,22 +2427,8 @@ class WavetrackerPanel(QWidget):
         client.sigError.connect(self._job_error)
         client.sigState.connect(lambda _s: self._update_add_source())
 
-    def _check_runner(self) -> None:
-        if self._interpreter() is None:
-            self._interp_status()
-            return
-        try:
-            client = self._client()
-            if client.hello:
-                self._interp_status()
-                return
-            client.ensure_started()
-            self._interp_status()
-        except R.RunnerError as exc:
-            self._interp_status(str(exc))
-
     def _runner_failed(self, job, kind, message) -> None:
-        """A runner that could not start says why, in the interpreter line
+        """A runner that could not start says why, in the wavetracker line
         (no job is waiting for it, so nothing else would)."""
         if kind in ("startup", "protocol") or (
             self.runner is not None and not self.runner.hello and kind != "cancelled"
@@ -2611,20 +2519,14 @@ class WavetrackerPanel(QWidget):
     # ---- whole recording (4.2)
 
     def _ready_to_run(self) -> bool:
-        """Whether there is a Python to run wavetracker with; if not, open
-        the Run settings at the interpreter field and say so."""
-        if self.runner is not None or not getattr(
-            self.runner_factory, "needs_interpreter", False
-        ):
-            return True
-        if self._interpreter() is not None:
+        """Whether wavetracker can run here; if not (a broken install), open
+        the Run settings at the line that says why."""
+        broken = R.wavetracker_status()[1]
+        if broken is None:
             return True
         self.sections["Run settings"].set_open(True)
         self._interp_status()
-        self.controller.reject(
-            "choose the Python that has wavetracker first (Run settings)"
-        )
-        self.pythonw.setFocus()
+        self.controller.reject(broken)
         return False
 
     def track_recording(self) -> None:

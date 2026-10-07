@@ -23,12 +23,10 @@ import pytest
 
 from audian_plugins.eodsorter import runner
 from audian_plugins.eodsorter.runner import (
-    Interpreter,
     RunnerClient,
     RunnerError,
     cleanup_job,
     detect_job,
-    find_interpreter,
     peaks_job,
 )
 
@@ -302,13 +300,18 @@ def test_cleanup_that_changes_frequencies_is_an_error(rec):
         p.p.wait(10)
 
 
-def test_missing_wavetracker_is_a_startup_error():
+def test_missing_wavetracker_is_a_startup_error(tmp_path):
+    # wavetracker is installed with audian; a package that fails to import
+    # stands in for a broken install
+    broken = tmp_path / "wavetracker"
+    broken.mkdir()
+    (broken / "__init__.py").write_text("raise ImportError('broken on purpose')\n")
     env = dict(os.environ)
-    env.pop("PYTHONPATH", None)
+    env["PYTHONPATH"] = str(tmp_path)
     p = Proc(env=env)
     msg = p.next()
     assert msg["type"] == "error" and msg["kind"] == "startup"
-    assert "wavetracker" in msg["message"]
+    assert msg["message"].startswith("wavetracker is not installed in this environment")
     assert p.p.wait(10) == 3
 
 
@@ -391,57 +394,35 @@ def test_deep_merge():
     assert base == {"a": {"x": 1, "y": 2}, "b": 3}
 
 
-def test_find_interpreter_order(monkeypatch):
-    monkeypatch.setenv("WAVETRACKER_PYTHON", "/env/python")
-    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda name: object())
-    # explicit beats sys
-    got = find_interpreter("~/venv/bin/python")
-    assert got == Interpreter(os.path.expanduser("~/venv/bin/python"), "setting")
-    # "Automatic" or empty: this interpreter, since it finds wavetracker
-    for auto in (None, "", "Automatic", "  "):
-        assert find_interpreter(auto) == Interpreter(sys.executable, "sys")
-    # sys beats env; without wavetracker here, env
-    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda name: None)
-    assert find_interpreter(None) == Interpreter("/env/python", "env")
-    monkeypatch.delenv("WAVETRACKER_PYTHON")
-    monkeypatch.setattr(runner.shutil, "which", lambda name: None)
-    assert find_interpreter(None) is None
-
-
-def test_find_interpreter_falls_back_to_the_wavetracker_command(monkeypatch, tmp_path):
-    """A wavetracker in its own venv is found through its console script."""
-    python = tmp_path / "venv" / "bin" / "python"
-    python.parent.mkdir(parents=True)
-    python.write_text("")
-    script = tmp_path / "venv" / "bin" / "wavetracker"
-    script.write_text(f"#!{python}\nimport sys\n")
-    monkeypatch.delenv("WAVETRACKER_PYTHON", raising=False)
-    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda name: None)
-    monkeypatch.setattr(
-        runner.shutil,
-        "which",
-        lambda name: str(script) if name == "wavetracker" else None,
+def test_wavetracker_is_installed_alongside_and_cheap_to_check():
+    """wavetracker is a dependency of audian: this interpreter has it, and
+    asking for its version does not pull torch or numba into the GUI."""
+    code = (
+        "import sys\n"
+        "from audian_plugins.eodsorter.runner import wavetracker_status\n"
+        "version, error = wavetracker_status()\n"
+        "assert error is None and version, error\n"
+        "assert 'torch' not in sys.modules and 'numba' not in sys.modules\n"
     )
-    assert find_interpreter(None) == Interpreter(str(python), "path")
-    # the explicit setting and the environment still come first
-    monkeypatch.setenv("WAVETRACKER_PYTHON", "/env/python")
-    assert find_interpreter(None).source == "env"
-    assert find_interpreter("/x/python").source == "setting"
-    # a shebang pointing nowhere is no interpreter
-    monkeypatch.delenv("WAVETRACKER_PYTHON")
-    script.write_text("#!/nonexistent/python\n")
-    assert find_interpreter(None) is None
+    env = dict(os.environ)
+    src = str(Path(runner.__file__).resolve().parents[2])
+    env["PYTHONPATH"] = src
+    subprocess.run([sys.executable, "-c", code], check=True, env=env)
 
 
-def test_script_interpreter_reads_the_shebang_forms(tmp_path):
-    s = tmp_path / "s"
-    s.write_text("#!/opt/venv/bin/python3 -I\nx\n")
-    assert runner.script_interpreter(str(s)) == "/opt/venv/bin/python3"
-    s.write_text("#!/bin/sh\n'''exec' \"/long path/python\" \"$0\" \"$@\"\n' '''\n")
-    assert runner.script_interpreter(str(s)) == "/long path/python"
-    s.write_bytes(b"\x7fELF\x00\x01")
-    assert runner.script_interpreter(str(s)) is None
-    assert runner.script_interpreter(str(tmp_path / "missing")) is None
+def test_wavetracker_status_names_a_broken_install(monkeypatch, tmp_path):
+    pkg = tmp_path / "wavetracker"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("raise ImportError('broken on purpose')\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "wavetracker", raising=False)
+    version, error = runner.wavetracker_status()
+    assert version is None
+    assert error == (
+        "wavetracker is not installed in this environment: "
+        "ImportError: broken on purpose"
+    )
+    monkeypatch.delitem(sys.modules, "wavetracker", raising=False)
 
 
 def test_job_builders():
@@ -524,8 +505,11 @@ def stub_path(monkeypatch):
 
 
 def make_client(path=None, **kw):
-    interp = Interpreter(path or sys.executable, "setting")
-    return RunnerClient(lambda: interp, **kw)
+    return RunnerClient(program=path, **kw)
+
+
+def test_the_runner_is_this_interpreter(app):
+    assert RunnerClient()._program == sys.executable
 
 
 def test_client_runs_a_job_and_stays_alive(app, stub_path, rec):
@@ -615,15 +599,19 @@ def test_client_wrong_interpreter(app, tmp_path):
     assert client.state == "failed" and client.job is None
 
 
-def test_client_interpreter_without_wavetracker(app, monkeypatch, rec):
-    monkeypatch.delenv("PYTHONPATH", raising=False)
+def test_client_with_a_broken_wavetracker(app, monkeypatch, rec, tmp_path):
+    broken = tmp_path / "broken" / "wavetracker"
+    broken.mkdir(parents=True)
+    (broken / "__init__.py").write_text("raise ImportError('broken on purpose')\n")
+    monkeypatch.setenv("PYTHONPATH", str(broken.parent))
     client = make_client()
     rec_ = Recorder(client)
     job = client.submit(**detect_request(rec, job=None))
     wait_for(lambda: rec_.of("error"))
     _, jid, kind, message = rec_.of("error")[0]
     assert (jid, kind) == (job, "startup")
-    assert "wavetracker" in message
+    assert "wavetracker is not installed in this environment" in message
+    assert "broken on purpose" in message
     wait_for(lambda: not client.is_running())
     assert client.state == "failed"
 
@@ -658,13 +646,6 @@ def test_client_protocol_mismatch(app, stub_path, tmp_path, monkeypatch):
     assert "update" in rec_.of("error")[0][3]
     wait_for(lambda: not client.is_running())
     assert client.state == "failed"
-
-
-def test_client_no_interpreter(app):
-    client = RunnerClient(lambda: None)
-    with pytest.raises(RunnerError, match="WAVETRACKER_PYTHON"):
-        client.submit(op="detect")
-    assert client.state == "stopped"
 
 
 def test_client_oneshot_exits_after_the_job(app, stub_path, rec):

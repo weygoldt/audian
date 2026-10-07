@@ -1,12 +1,13 @@
-"""Running wavetracker out of process: interpreter, client, snippet export.
+"""Running wavetracker out of process: client, snippet export.
 
 wavetracker holds the GIL for its whole run and pulls in torch, so it never
 runs in audian's process.  `wtrunner.py`, next to this module, is executed
-by a Python interpreter that has wavetracker installed and talks JSON lines
+in a child process by this same interpreter and talks JSON lines
 (docs/eodsorter-design.md, section 4.4).  This module is the audian side:
 
-* `find_interpreter` picks that interpreter (setting, this process, or
-  ``WAVETRACKER_PYTHON``);
+* the runner is always `sys.executable`: wavetracker is a dependency of
+  audian and lives in the same environment, so nothing is discovered;
+  `wavetracker_status` says whether it imports;
 * `RunnerClient` owns the runner process (a `QProcess`) and turns its
   messages into Qt signals;
 * `SnippetExporter` writes the visible span of the recording, read through
@@ -20,7 +21,7 @@ it runs.
 
 Additions to the interface of section 7.2 (nothing there is changed):
 
-* error kinds besides those of 4.4: ``startup`` (the interpreter could not
+* error kinds besides those of 4.4: ``startup`` (the runner could not
   be started, or cannot import numpy/wavetracker), ``protocol`` (the runner
   speaks another protocol version) and ``cancelled``;
 * ``RunnerClient.last_error`` holds the last error message as a dict, with
@@ -43,20 +44,17 @@ Additions to the interface of section 7.2 (nothing there is changed):
 from __future__ import annotations
 
 import collections
-import importlib.util
 import json
 import os
 import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
-#: the script the interpreter runs
+#: the script the runner process runs
 WTRUNNER = str(Path(__file__).with_name("wtrunner.py"))
 
 #: the protocol version this client speaks (``hello.protocol``)
@@ -74,80 +72,25 @@ KILL_AFTER_MS = 2000
 STATES = ("stopped", "starting", "idle", "busy", "failed")
 
 
-# ------------------------------------------------------------ interpreter
+# ------------------------------------------------------------ wavetracker
 
 
-@dataclass(frozen=True)
-class Interpreter:
-    path: str
-    source: str  # "setting" | "sys" | "env" | "path"
+def wavetracker_status() -> tuple[str | None, str | None]:
+    """``(version, None)`` when wavetracker imports here, else
+    ``(None, "wavetracker is not installed in this environment: <error>")``.
 
-
-def script_interpreter(script: str) -> str | None:
-    """The Python a console script such as ``wavetracker`` runs with.
-
-    pip and uv write the interpreter into the script's first line: either
-    ``#!/abs/python`` or, for paths too long for a shebang, a ``/bin/sh``
-    preamble whose second line is ``'''exec' "/abs/python" "$0" "$@"``.
-    ``#!/usr/bin/env python3`` is looked up on PATH.  None when the file is
-    not such a script (a binary, a Windows launcher, unreadable).
+    wavetracker is a dependency of audian, so the runner is always this
+    interpreter (`sys.executable`) and there is nothing to discover; this
+    only catches a broken install.  ``import wavetracker`` is cheap (its
+    ``__init__`` reads the version and nothing else); torch and numba are
+    imported by the runner process only.
     """
     try:
-        with open(script, "rb") as fh:
-            head = fh.read(1024).decode("utf-8", "replace").splitlines()
-    except OSError:
-        return None
-    if not head or not head[0].startswith("#!"):
-        return None
-    words = head[0][2:].strip().split()
-    if not words:
-        return None
-    name = os.path.basename(words[0])
-    if name == "env":
-        args = [w for w in words[1:] if not w.startswith("-")]
-        return shutil.which(args[0]) if args else None
-    if name in ("sh", "bash"):
-        for line in head[1:4]:
-            if line.startswith("'''exec'"):
-                parts = line.split('"')
-                if len(parts) > 1 and parts[1]:
-                    return parts[1]
-        return None
-    return words[0]
-
-
-def find_interpreter(explicit: str | None) -> Interpreter | None:
-    """The Python that runs `wtrunner.py`, or None.
-
-    1. `explicit` (the panel setting), unless empty or "Automatic";
-    2. this process's interpreter, if it can import wavetracker (checked
-       with `importlib.util.find_spec`, which does not import it);
-    3. the environment variable ``WAVETRACKER_PYTHON``;
-    4. the interpreter of a ``wavetracker`` command on PATH, read from its
-       first line: a wavetracker installed into its own venv (or with
-       ``uv tool``/``pipx``) is found without any setting.
-
-    The candidate is not trusted: the runner's ``hello`` confirms it.
-    """
-    if explicit is not None:
-        text = str(explicit).strip()
-        if text and text.lower() != "automatic":
-            return Interpreter(os.path.expanduser(text), "setting")
-    try:
-        found = importlib.util.find_spec("wavetracker") is not None
-    except (ImportError, ValueError):
-        found = False
-    if found:
-        return Interpreter(sys.executable, "sys")
-    env = os.environ.get("WAVETRACKER_PYTHON", "").strip()
-    if env:
-        return Interpreter(os.path.expanduser(env), "env")
-    script = shutil.which("wavetracker")
-    if script:
-        python = script_interpreter(script)
-        if python and os.path.isfile(python):
-            return Interpreter(python, "path")
-    return None
+        import wavetracker
+    except Exception as e:  # noqa: BLE001 - any failure is "not installed"
+        detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+        return None, f"wavetracker is not installed in this environment: {detail}"
+    return str(getattr(wavetracker, "__version__", "unknown")), None
 
 
 # ------------------------------------------------------------ paths
@@ -264,7 +207,7 @@ def cleanup_job(dir, n_fish, params, mem_limit_bytes) -> dict:
 
 
 class RunnerError(RuntimeError):
-    """`submit` cannot start a job (busy, or no interpreter)."""
+    """`submit` cannot start a job (busy, or still stopping)."""
 
 
 class RunnerClient(QObject):
@@ -275,6 +218,9 @@ class RunnerClient(QObject):
     ``bad_request``, ``input``, ``oom``, ``exception``, ``startup``,
     ``protocol`` or ``cancelled``.  An error that belongs to no job (the
     runner failed to start) has job ``""``.
+
+    The runner is `sys.executable`.  `program` replaces it, for tests only
+    (a stub interpreter, a missing one); nothing in the panel sets it.
     """
 
     sigState = Signal(str)
@@ -286,12 +232,13 @@ class RunnerClient(QObject):
 
     def __init__(
         self,
-        interpreter: Callable[[], Interpreter | None],
         oneshot: bool = False,
         parent: QObject | None = None,
+        *,
+        program: str | None = None,
     ):
         super().__init__(parent)
-        self._interpreter = interpreter
+        self._program = program or sys.executable
         self.oneshot = oneshot
         self.state = "stopped"
         self.hello: dict | None = None
@@ -316,14 +263,8 @@ class RunnerClient(QObject):
         `sigHello`.  A failure to start is reported through `sigError`."""
         if self._proc is not None:
             return
-        interp = self._interpreter()
-        if interp is None:
-            raise RunnerError(
-                "No Python with wavetracker: set it in the panel, or set "
-                "WAVETRACKER_PYTHON"
-            )
         proc = QProcess(self)
-        proc.setProgram(interp.path)
+        proc.setProgram(self._program)
         args = ["-u", WTRUNNER]
         if self.oneshot:
             args.append("--oneshot")
@@ -344,7 +285,7 @@ class RunnerClient(QObject):
 
     def submit(self, op: str, **params) -> str:
         """Start a job; returns its id.  Raises `RunnerError` when a job is
-        running or there is no interpreter."""
+        running."""
         if self.job is not None:
             raise RunnerError("wavetracker is busy with another job")
         if self._proc is not None and self._cancelling:

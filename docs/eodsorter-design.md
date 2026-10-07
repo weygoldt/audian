@@ -135,12 +135,15 @@ answered in sections 5 and 6.
 1. **Package** `src/audian_plugins/eodsorter/`, panel factory
    `audian_wavetracker_panel`, menu **Plugins → Wavetracker**, side-panel tab
    titled **Tracks**.  `frequencybands` stays where it is and is not touched.
-2. **wavetracker runs out of process.**  The tracker holds the GIL for its
-   whole run, torch is several GB, and a path-sourced dependency breaks
-   claudian's CI.  The in-process plugin imports numpy, PySide6, pyqtgraph,
-   soundfile and `audian.pluginapi` only, and never `wavetracker` or
-   `torch`.  A runner script is executed by a configurable Python
-   interpreter that has wavetracker installed (4.1).
+2. **wavetracker runs out of process, from the same environment.**
+   wavetracker is a regular dependency of claudian (a git source in
+   `[tool.uv.sources]`, never its PyQt5 `gui` extra), so `uv sync` installs
+   both into one venv and there is nothing to discover.  The tracker still
+   holds the GIL for its whole run, so a runner script is executed in a
+   child process of `sys.executable` (4.1).  The in-process plugin imports
+   numpy, PySide6, pyqtgraph, soundfile and `audian.pluginapi`; of
+   wavetracker only its top-level package (for the version, which costs no
+   torch or numba), and never `torch`.
 3. **The data model is wavetracker's own arrays**: `fund_v`, `idx_v`,
    `ident_v` (NaN = unassigned), `sign_v`, `times`, and `cplx_v` when
    present.  Edits change `ident_v`, except adding detections, which
@@ -398,41 +401,38 @@ ids in each `Change`.
 
 ### 4.1 The interpreter
 
-`runner.find_interpreter(explicit)` resolves the Python that runs the runner
-script:
+There is no choice to make: the runner is `sys.executable`.  claudian
+depends on wavetracker, so the interpreter running audian has it, and
+`runner.RunnerClient` starts `sys.executable -u wtrunner.py`.  (Its
+keyword-only `program` argument exists for the tests, which run the runner
+against the stub in `tests/data/fake_wavetracker`; the panel never sets it.)
 
-1. **An explicit path set in the panel** (setting key `python`), when it is
-   not "Automatic".  Explicit beats implicit: a reader who typed a path
-   meant it.
-2. Automatic: `sys.executable`, if `importlib.util.find_spec("wavetracker")`
-   finds it in this process (this does not import it).
-3. Automatic: the environment variable `WAVETRACKER_PYTHON`.
-4. Automatic: the interpreter of a `wavetracker` command on PATH, read from
-   its first line (`#!/.../python`, pip's `/bin/sh` exec preamble, or
-   `#!/usr/bin/env python3`): a wavetracker installed into its own venv, or
-   with `uv tool`/`pipx`, needs no setting.
-5. Nothing: the interpreter line says so in red and how to fix it ("Choose
-   the Python of the environment wavetracker is installed in (its
-   `<venv>/bin/python`), or set WAVETRACKER_PYTHON"); **Track visible** and
-   **Track recording** then open the Run settings at that field instead of
-   running.  Opening existing results and every edit still work.
+Earlier versions searched for a separate Python (a panel setting,
+`WAVETRACKER_PYTHON`, the `wavetracker` command on PATH) and had a
+**Python** field with **Choose...** and **Check**.  All of that is gone,
+and a stale `python` key in the settings is ignored and dropped on the next
+save.
 
-Choosing the interpreter is a one-time thing: **Choose...** opens a file
-picker (picking the `wavetracker` command itself works too, it is resolved
-to its Python), the path is written to the settings at once, and the runner
-is started to check it.  The line then reads "wavetracker 0.3.0 · Python
-3.12 · cpu, cuda" in green with a check mark, or "startup: <the last line of
-the error>" in red.
+`runner.wavetracker_status()` imports `wavetracker` (its `__init__` only
+reads the package version, so neither torch nor numba is loaded) and
+returns its version, or, when the import fails, the error
+"wavetracker is not installed in this environment: <exception>".  The
+Run settings line shows "wavetracker 0.3.0 · Python 3.14.7", which becomes
+"✓ wavetracker 0.3.0 · Python 3.14.7 · cpu, cuda" in green once the
+runner's `hello` (4.4) has reported its devices.  With a broken install the
+line is that error in red, and **Track visible** / **Track recording** open
+the Run settings at it instead of running; opening existing results and
+every edit still work.
 
-The candidate is confirmed by the runner's `hello` (4.4), not by trusting
-the path; the panel shows "wavetracker 0.3.0 · Python 3.12.3 · cuda" or the
-error.
+To work on wavetracker itself, install the checkout over the locked one
+with `uv pip install -e ../wavetracker`; to move the lock to wavetracker's
+latest commit, `uv lock --upgrade-package wavetracker`.
 
 **Settings.**  Plugin preferences are kept with audian's own settings store,
 under the key `"eodsorter"` as a versioned dict:
 
 ```json
-{"version": 1, "python": "/path/or/empty", "device": "auto",
+{"version": 1, "device": "auto",
  "brush_px": 14, "sticky_brush": true, "show_unassigned": true,
  "point_px": 3, "gap_break_s": 0.5, "results_dirs": {"<recording path>": "<results dir>"}}
 ```
@@ -942,8 +942,8 @@ button, because a stray Esc must not throw away a twenty-minute run).
 reachable and visible whatever is folded), the snippet bar, **Edit** (toggle,
 tools, hint, Undo/Redo, brush, sticky, "Dim spectrogram", and a "Display and
 keys" disclosure for the rest), **History**, **Tracks**, **Issues** (folded)
-and **Run settings** (interpreter, fish range, device, config, advanced,
-cleanup).  Every group below the header folds; the folds are remembered, and
+and **Run settings** (the wavetracker line, fish range, device, config,
+advanced, cleanup).  Every group below the header folds; the folds are remembered, and
 Run settings folds itself after the first run.  When no spectrogram lane is
 shown, the header says "Tracks are drawn on spectrograms" with a Show button.
 The original plan follows.
@@ -955,7 +955,7 @@ The panel is a narrow side tab (≥ 220 px) built from
    "Unsaved session"; a dirty marker `●` and "unsaved changes"; **Save**
    (Ctrl+S in edit mode); a **⋯** menu with "Open results…", "Save as…",
    "Revert to tracker output…", "Show in file manager".
-2. **Run**: interpreter status line; **Fish range** min/max Hz (prefilled
+2. **Run**: wavetracker status line; **Fish range** min/max Hz (prefilled
    from the loaded `wavetracker.json` or the runner's default config; if left
    at wavetracker's broad default the field turns amber with "set a narrow
    band for your species", the same warning the CLI prints); device; config
@@ -1232,9 +1232,9 @@ src/audian_plugins/eodsorter/
     __init__.py     the panel factory, nothing else                   (C)
     model.py        TrackSet, FrameGrid, Plan, Change, History,
                     Snippet, load/save, issues; numpy only              (A)
-    runner.py       find_interpreter, RunnerClient, SnippetExporter,
+    runner.py       wavetracker_status, RunnerClient, SnippetExporter,
                     job builders; QtCore only                           (B)
-    wtrunner.py     the script run by the wavetracker interpreter;
+    wtrunner.py     the script run in a child process of sys.executable;
                     stdlib + numpy + wavetracker only                   (B)
     geometry.py     View, RenderCache, hit tests, polylines; numpy only (C)
     overlay.py      TrackOverlay per lane (pyqtgraph)                   (C)
@@ -1340,12 +1340,7 @@ records it), so a stale preview can never be committed.
 ### 7.2 Package B: `runner.py`, `wtrunner.py`, upstream
 
 ```python
-@dataclass(frozen=True)
-class Interpreter:
-    path: str
-    source: str            # "setting" | "sys" | "env"
-
-def find_interpreter(explicit: str | None) -> Interpreter | None: ...
+def wavetracker_status() -> tuple[str | None, str | None]: ...   # (version, error)
 
 class RunnerError(RuntimeError): ...
 
@@ -1357,12 +1352,12 @@ class RunnerClient(QObject):
     sigError = Signal(str, str, str)            # job, kind ("cancelled" included), message
     sigLog = Signal(str, str)                   # level, text
 
-    def __init__(self, interpreter: Callable[[], Interpreter | None],
-                 oneshot: bool = False, parent: QObject | None = None): ...
+    def __init__(self, oneshot: bool = False, parent: QObject | None = None,
+                 *, program: str | None = None): ...   # program: tests only; default sys.executable
     state: str
     hello: dict | None
     def ensure_started(self) -> None: ...       # starts the process; hello arrives as a signal
-    def submit(self, op: str, **params) -> str: # job id; raises RunnerError when busy or no interpreter
+    def submit(self, op: str, **params) -> str: # job id; raises RunnerError when busy
     def cancel(self) -> None: ...               # terminate, then kill after 2 s
     def shutdown(self, timeout_ms: int = 2000) -> None: ...
 
@@ -1671,8 +1666,9 @@ calls `progress` three times, `results.py`) put on `PYTHONPATH` for a
 * a stub that raises gives one `error` line with the traceback, and the
   runner keeps serving;
 * unknown config keys give `bad_request`;
-* `find_interpreter`: explicit setting beats `sys.executable` beats
-  `WAVETRACKER_PYTHON` (monkeypatched `find_spec` and environment).
+* `wavetracker_status`: wavetracker imports in this environment without
+  loading torch or numba, and a package that fails to import gives the
+  one-line "not installed in this environment" error.
 
 ### 9.2 Slow, Qt (`app` fixture, offscreen)
 
@@ -1710,7 +1706,8 @@ in `tmp_path` (no wavetracker needed):
 
 ### 9.3 With real wavetracker (opt-in)
 
-Tests marked `wavetracker`, skipped unless `WAVETRACKER_PYTHON` is set:
+Tests marked `wavetracker` (wavetracker is installed with claudian, so
+nothing needs to be set):
 a synthetic recording from `wavetracker synth` run through the real runner
 for `detect` (whole and snippet), `peaks`, and `cleanup`; the snippet's
 detections equal the whole run's in frames away from the snippet edges.

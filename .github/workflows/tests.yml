@@ -4,13 +4,17 @@ on: [push, pull_request]
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # the oldest and the newest Python of requires-python
+        python-version: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
-      # The interpreter the suite is run under locally.
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       # The shared libraries PySide6's offscreen platform plugin links against,
       # which the runner image does not carry, plus PortAudio for sounddevice.
