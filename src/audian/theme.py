@@ -800,6 +800,9 @@ FONT_UI_FAMILIES: tuple[str, ...] = (
 FONT_MONO_FAMILIES: tuple[str, ...] = (
     "JetBrainsMono Nerd Font",
     "JetBrains Mono Nerd Font",
+    # the plain family (e.g. Debian/Ubuntu's fonts-jetbrains-mono, which CI
+    # installs): the Nerd Font is it plus icon glyphs, with the same metrics
+    "JetBrains Mono",
     "Adwaita Mono",
     "DejaVu Sans Mono",
     "monospace",

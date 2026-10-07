@@ -2554,7 +2554,11 @@ def test_the_opens_at_row_costs_the_bar_no_width(browser):
     groups = {g.title: g.minimumSizeHint().width() for g in browser.param_groups}
     assert groups["Spectrogram"] == 172
     assert browser.parambar.minimumWidth() == SidePanel.MIN_WIDTH == 220
-    assert browser.window().minimumSizeHint().width() == 695
+    # The floor itself is not pinned: it is downstream of font metrics and of
+    # which side-panel pages earlier tests left open in the shared settings
+    # (602 alone, 686 after the labels tests, 695 in a full local run, 713 on
+    # GitHub's runner).  What it must do is clear half a 14" laptop panel.
+    assert browser.window().minimumSizeHint().width() < 1097
     # the row still costs no width, which is what this test is really for:
     # the group is not the term that sets anything any more
     assert groups["Spectrogram"] < browser.parambar.minimumWidth()
