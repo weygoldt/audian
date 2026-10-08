@@ -186,6 +186,28 @@ def test_list_input_and_no_final_dir(proc, rec):
     assert "b.wav" in json.loads((out / "wavetracker.json").read_text())["input"]
 
 
+def test_a_range_run_hands_start_and_duration_to_detect(proc, rec):
+    """Track recording over a range (4.2): the request's start and duration
+    reach wavetracker's `detect` unchanged, with a list input too."""
+    proc.next()
+    (rec / "b.wav").write_bytes(b"x")
+    out = rec / "range-run"
+    proc.send(
+        detect_request(
+            rec,
+            input=[str(rec / "rec.wav"), str(rec / "b.wav")],
+            output_dir=str(out),
+            final_dir=None,
+            start=20.4,
+            duration=33.3,
+        )
+    )
+    msgs = proc.until("j1")
+    assert msgs[-1]["type"] == "result", msgs
+    meta = json.loads((out / "wavetracker.json").read_text())
+    assert meta["start"] == 20.4 and meta["duration"] == 33.3
+
+
 def test_prints_go_to_stderr_never_to_the_protocol(proc, rec):
     proc.next()
     proc.send(detect_request(rec))

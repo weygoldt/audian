@@ -435,7 +435,8 @@ under the key `"eodsorter"` as a versioned dict:
 ```json
 {"version": 1, "device": "auto",
  "brush_px": 14, "sticky_brush": true, "show_unassigned": true,
- "point_px": 3, "gap_break_s": 0.5, "results_dirs": {"<recording path>": "<results dir>"}}
+ "point_px": 3, "gap_break_s": 0.5, "results_dirs": {"<recording path>": "<results dir>"},
+ "ranges": {"<recording path(s), newline-joined>": [270.0, 3490.0]}}
 ```
 
 This needs two names added to `src/audian/pluginapi.py`:
@@ -453,8 +454,27 @@ part of work package C.  Until it lands the plugin falls back to
   4.6.  If the runner's `hello` lacks the `multi_input` capability and the
   session has several files, "Track recording" is disabled with the hint
   "needs a wavetracker with list input (see docs/eodsorter-design.md 4.6)".
-* **Range**: the whole recording, or "Track range…" with start and duration
-  fields prefilled from the view.
+* **Range**: the whole recording, or the tracking range of the Range row
+  (5.8).  *As built:* the range's frames are those of a whole run whose
+  centre lies in it (`FrameGrid.frame_range`, as for a snippet), on the
+  grid a run over the whole recording has (`trackrange.recording_grid`:
+  `FrameGrid.for_recording` from the Run settings, or the loaded session's
+  frames extended over the recording, so a range lines up with the
+  session as a snippet does).  `detect` gets `start` = the first sample of
+  frame `k0` and `duration` = up to the last sample of frame `k1 - 1`
+  (`grid.sample_range`), or None when the range runs to the end; so
+  wavetracker's frame `j` is the whole run's frame `k0 + j` and its
+  `times.npy` holds the same absolute times (its `idx_v` stays relative to
+  `start`, which `wavetracker.json` records and `FrameGrid.from_results`
+  reads as `s0`).  Fewer than two frames is refused with the reason on the
+  hint line.  Output directory, Replace / Open existing, the progress bar,
+  Cancel, the Save-first prompt and Clean up are those of a whole run;
+  there is no length cap (this is not a snippet).  Multi-file sessions
+  pass their file list with the same start and duration.
+* **Results of a range run** (`start > 0` or frames ending before a whole
+  run's) set the range to their first and last frame centres when opened
+  (`trackrange.range_of_grid`), unless the range already selects exactly
+  their frames, and say so on the hint line.
 * **Output directory**: `<dir of first file>/<stem of first file>-wavetracker/`,
   editable in the panel.  If it already holds results, a dialog offers
   **Open existing**, **Replace** (the old directory is renamed to
@@ -485,6 +505,11 @@ wavetracker to try again on just that.
    FFT windows, 1.8 s here").  A hint (not a rejection) when
    `k1 - k0 < interference.min_frames` (30): "comb removal needs 30 frames;
    this snippet runs without it".
+   *As built:* with a tracking range set (5.8), the view is first clipped
+   to it ("Snippet clipped to the tracking range …" on the hint line), and
+   a view wholly outside it is refused: the range says where tracking
+   belongs, and accepting a snippet replaces the session's tracks in its
+   span, so a snippet reaching past the range would undo it there.
 3. **Length cap.**  Snippets longer than `MAX_SNIPPET_S = 300` s are
    refused with "use Track range… for spans this long" (the export would be
    gigabytes of WAV).
@@ -1058,7 +1083,22 @@ tools, hint, the selection strip while something is selected (5.3), Undo/Redo,
 brush, sticky, "Dim spectrogram", "Track ridge in brush" (5.5), and a
 "Display and keys" disclosure for the rest), **History**, **Tracks**, **Issues** (folded)
 and **Run settings** (the wavetracker line, fish range, device, config,
-advanced, cleanup).  Every group below the header folds; the folds are remembered, and
+advanced, cleanup).  Under Track visible / Track recording sits the
+**Range** row: "from [time] to [time]" (`hh:mm:ss.s`, or `mm:ss.s` on a
+recording shorter than an hour; `mm:ss` and seconds are accepted, "end" or
+empty for the end), **⇤ view** (from = the view's left edge), **view ⇥**
+(to = its right edge; either moves the other edge to the view when it
+would end up on the wrong side) and **×** (clear: the whole recording).
+Typed times are clamped to the recording (a stop at or past the end is
+"end"), and from ≥ to or text that is not a time is refused on the hint
+line and the fields go back.  With a range set, Track recording reads
+"Track 04:30–58:10" (hours included on recordings of an hour or more),
+and every spectrogram lane shows it: a dashed line at each edge and the
+time outside dimmed in the map's floor colour (`overlay.RangeItem`, one
+passive item per lane under the tracks, updated when the range or the map
+changes, never on a pointer move).  The range is kept per recording in
+the plugin settings (`"ranges": {"<file>[\n<file>…]": [start, stop|null]}`)
+and restored when the recording is opened again.  Every group below the header folds; the folds are remembered, and
 Run settings folds itself after the first run.  When no spectrogram lane is
 shown, the header says "Tracks are drawn on spectrograms" with a Show button.
 The original plan follows.

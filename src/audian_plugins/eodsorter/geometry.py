@@ -767,6 +767,9 @@ class SceneState:
     harmonic_marks: dict = field(default_factory=dict)
     #: veil the spectrogram under the tracks (drawing only, not geometry)
     dim_spec: bool = False
+    #: the tracking range ``(start, stop)`` in seconds (stop None: to the
+    #: end), or None; drawn as two lines with the time outside it dimmed
+    track_range: Optional[tuple] = None
     hover: Optional[Hover] = None
     preview: object = None
     stroke_rows: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))

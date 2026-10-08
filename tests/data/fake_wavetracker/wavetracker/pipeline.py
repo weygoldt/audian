@@ -49,6 +49,7 @@ def detect(input_path, output_dir, cfg, start=0.0, duration=None, device="auto",
             "rate": 1000.0,
             "input": str(input_path),
             "start": start,
+            "duration": duration,
             "config": cfg.to_dict(),
         },  # fmt: skip
     )

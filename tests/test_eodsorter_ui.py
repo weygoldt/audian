@@ -2161,3 +2161,319 @@ def test_clean_up_sits_under_the_track_buttons_and_shows_progress(panel):
         panel.grab().save(shot)
     panel._job = None
     panel.jobroww.hide()
+
+
+# ------------------------------------------------------- tracking range
+
+
+class RangeRunner(FakeRunnerClient):
+    """Writes what wavetracker writes for a ``detect`` over start/duration:
+    frames from the start sample, idx relative to it, times absolute."""
+
+    def submit(self, op, **params):
+        from PySide6.QtCore import QTimer
+
+        jid = f"j{len(self.jobs) + 1}"
+        self.jobs.append((op, params))
+        n_total = int(self.panel.browser.data.frames)
+        s0 = min(n_total, max(0, round(params["start"] * RATE)))
+        d = params["duration"]
+        s1 = n_total if d is None else min(n_total, s0 + round(d * RATE))
+        m = (s1 - s0 - NFFT) // STEP + 1
+        times = (s0 + np.arange(m) * STEP + NFFT / 2) / RATE
+        frames = np.arange(m)
+        out = Path(params["final_dir"] or params["output_dir"])
+        out.mkdir(parents=True, exist_ok=True)
+        np.save(out / "fund_v.npy", np.full(m, 700.0))
+        np.save(out / "idx_v.npy", frames.astype(np.int64))
+        np.save(out / "ident_v.npy", np.zeros(m))
+        np.save(out / "sign_v.npy", np.ones((m, 2), np.float32))
+        np.save(out / "times.npy", times)
+        meta = {
+            "rate": RATE,
+            "start": s0 / RATE,
+            "duration": (s1 - s0) / RATE,
+            "frame_step": STEP / RATE,
+            "config": params["config"],
+        }
+        (out / "wavetracker.json").write_text(json.dumps(meta))
+        QTimer.singleShot(
+            10, lambda: self.sigResult.emit(jid, {"output_dir": str(out)})
+        )
+        return jid
+
+
+def _clean_range(p):
+    p.clear_range()
+    p.prefs["ranges"] = {}
+
+
+def test_range_buttons_set_the_label_and_the_lines_on_the_lanes(panel, world):
+    browser = world["browser"]
+    o = panel.overlays[0]
+    try:
+        assert panel.track_range is None
+        assert panel.trackrecw.text() == "Track recording"
+        assert not panel.rangeclearw.isEnabled()
+        panel.redraw_now()
+        assert o.range_item.boundingRect().isEmpty() and not o.range_item.rects()
+        # ⇤ view: from the view's left edge, to the end
+        panel.rangestartw.click()
+        assert panel.track_range == (pytest.approx(4.0), None)
+        assert panel.rangefromw.text() == "00:04.0" and panel.rangetow.text() == ""
+        assert panel.trackrecw.text() == "Track 00:04–end"
+        # view ⇥: to the right edge of another view
+        browser.set_times(2.0, 10.0)  # offset, window
+        pump(0.3)
+        panel.rangestopw.click()
+        assert panel.track_range == (pytest.approx(4.0), pytest.approx(12.0, abs=1e-6))
+        assert panel.trackrecw.text() == "Track 00:04–00:12"
+        assert "00:04.0–00:12.0" in panel.trackrecw.toolTip()
+        browser.set_times(0.0, 20.0)
+        pump(0.3)
+        panel.redraw_now()
+        # the lines at 4 and 12 s, the time before 4 and after 12 dimmed
+        item = o.range_item
+        assert item.zValue() < o.curves[0].zValue() and item.isVisible()
+        assert item.edges() == [pytest.approx(4.0), pytest.approx(12.0, abs=1e-6)]
+        rects = item.rects()
+        assert len(rects) == 2
+        assert rects[0].left() <= 0.0 + 1e-6 and rects[0].right() == pytest.approx(4.0)
+        assert rects[1].left() == pytest.approx(12.0, abs=1e-6)
+        assert all(len(ov.range_item.rects()) == 2 for ov in panel.overlays)
+        # a pointer move does not touch it
+        key = o._range_key
+        hover(panel, 6.0, 700.0)
+        panel.redraw_now()
+        assert o._range_key is key
+        # ⇤ view past the stop: the stop moves to the view's right edge
+        browser.set_times(13.0, 3.0)
+        pump(0.3)
+        panel.rangestartw.click()
+        assert panel.track_range == (pytest.approx(13.0), pytest.approx(16.0, abs=1e-6))
+        # × clears it: the whole recording
+        assert panel.rangeclearw.isEnabled()
+        panel.rangeclearw.click()
+        assert panel.track_range is None
+        assert panel.trackrecw.text() == "Track recording"
+        assert panel.rangefromw.text() == panel.rangetow.text() == ""
+        panel.redraw_now()
+        assert not o.range_item.rects() and not o.range_item.edges()
+    finally:
+        _clean_range(panel)
+
+
+def test_typed_range_is_validated_and_clamped(panel):
+    def type_in(from_text, to_text):
+        panel.rangefromw.setText(from_text)
+        panel.rangetow.setText(to_text)
+        panel.rangefromw.editingFinished.emit()
+
+    try:
+        type_in("3.5", "0:11")
+        assert panel.track_range == (3.5, 11.0)
+        assert panel.rangefromw.text() == "00:03.5"
+        assert panel.rangetow.text() == "00:11.0"
+        # from after to: refused, said, the fields go back
+        type_in("00:12", "0:11")
+        assert panel.track_range == (3.5, 11.0)
+        assert "before" in panel.hintw.text()
+        assert panel.rangefromw.text() == "00:03.5"
+        type_in("soon", "")
+        assert panel.track_range == (3.5, 11.0)
+        assert "not a time" in panel.hintw.text()
+        # clamped to the recording: past the end is "end"
+        type_in("5", "1:00:00")
+        assert panel.track_range == (5.0, None)
+        assert panel.rangetow.text() == "" and panel.rangetow.placeholderText() == "end"
+        type_in("5", "end")
+        assert panel.track_range == (5.0, None)
+        type_in("", "")
+        assert panel.track_range is None
+    finally:
+        _clean_range(panel)
+
+
+def test_track_recording_runs_detect_over_the_range_on_whole_run_frames(
+    panel, monkeypatch, tmp_path
+):
+    from audian_plugins.eodsorter import runner as R
+
+    out = tmp_path / "range-run"
+    monkeypatch.setattr(R, "default_output_dir", lambda first: str(out))
+    fake = RangeRunner(panel)
+    panel.runner = None
+    panel.runner_factory = lambda oneshot: fake
+    try:
+        panel.set_range((4.33, 12.71))
+        panel.track_recording()
+        op, params = fake.jobs[-1]
+        assert op == "detect"
+        whole = M_grid_for(panel)
+        k0, k1 = whole.frame_range(4.33, 12.71)
+        assert params["start"] * RATE == pytest.approx(k0 * STEP)
+        assert round(params["start"] * RATE) == k0 * STEP
+        assert params["duration"] * RATE == pytest.approx((k1 - k0 - 1) * STEP + NFFT)
+        assert params["input"] == panel.recording_paths()[0]
+        deadline = time.monotonic() + 10
+        while panel.folder != out and time.monotonic() < deadline:
+            pump(0.05)
+        assert panel.folder == out, "the range run's results were loaded"
+        ts = panel.ts
+        t = ts.times[ts.idx]
+        assert t.min() >= 4.33 and t.max() <= 12.71
+        # the same frames, at the same absolute times, as a whole run's
+        assert ts.grid.s0 == k0 * STEP and ts.grid.n_frames == k1 - k0
+        np.testing.assert_array_equal(ts.times, whole.times()[k0:k1])
+        # the range is kept as typed: it selects exactly these frames
+        assert panel.track_range == (4.33, 12.71)
+        assert panel.trackrecw.text() == "Track 00:04–00:13"
+        # to the end: no duration, so wavetracker's frames end where a
+        # whole run's do
+        panel.set_range((10.0, None))
+        panel.ask = lambda title, text, buttons: "Replace"
+        panel.track_recording()
+        params = fake.jobs[-1][1]
+        assert params["duration"] is None and params["start"] > 9.0
+        deadline = time.monotonic() + 10
+        while panel.ts is ts and time.monotonic() < deadline:
+            pump(0.05)
+        assert panel.ts.grid.s0 + (panel.ts.grid.n_frames - 1) * STEP == (
+            (whole.n_frames - 1) * STEP
+        )
+        # without a range: the whole recording, as before
+        panel.clear_range()
+        panel.track_recording()
+        params = fake.jobs[-1][1]
+        assert params["start"] == 0.0 and params["duration"] is None
+        panel.cancel_job(quiet=True)
+    finally:
+        panel.ask = lambda title, text, buttons: "Discard"
+        _clean_range(panel)
+
+
+def M_grid_for(panel):  # noqa: N802 - a grid, named for the model's
+    from audian_plugins.eodsorter.model import FrameGrid
+
+    return FrameGrid.for_recording(RATE, int(panel.browser.data.frames), NFFT, OVERLAP)
+
+
+def test_a_range_too_short_for_two_windows_is_refused(panel):
+    fake = HoldingRunner(panel)
+    panel.runner = None
+    panel.runner_factory = lambda oneshot: fake
+    try:
+        panel.set_range((5.0, 5.01))
+        panel.track_recording()
+        assert not fake.jobs
+        assert "two FFT windows" in panel.hintw.text()
+    finally:
+        _clean_range(panel)
+
+
+def test_a_multi_file_session_passes_every_file_with_the_range(
+    panel, monkeypatch, tmp_path
+):
+    from audian_plugins.eodsorter import runner as R
+
+    monkeypatch.setattr(R, "default_output_dir", lambda first: str(tmp_path / "o"))
+    files = [str(tmp_path / "a.wav"), str(tmp_path / "b.wav")]
+    monkeypatch.setattr(panel, "recording_paths", lambda: files)
+    fake = HoldingRunner(panel)
+    fake.hello["capabilities"] = ["detect", "multi_input"]
+    panel.runner = fake
+    try:
+        panel.set_range((2.0, 9.0))
+        panel.track_recording()
+        params = fake.jobs[-1][1]
+        assert params["input"] == files
+        k0, k1 = M_grid_for(panel).frame_range(2.0, 9.0)
+        assert round(params["start"] * RATE) == k0 * STEP
+        key = "\n".join(files)
+        assert panel.prefs["ranges"][key] == [2.0, 9.0]
+        panel.cancel_job(quiet=True)
+    finally:
+        _clean_range(panel)
+
+
+def test_the_range_is_remembered_per_recording(panel, world):
+    browser = world["browser"]
+    folder = panel.folder
+    try:
+        panel.set_range((3.0, 15.5))
+        browser.close_plugin_panel(LABEL)
+        pump(0.2)
+        assert browser.open_plugin_panel(LABEL)
+        pump(0.3)
+        p = browser.plugin_panels[LABEL]
+        p.ask = lambda title, text, buttons: "Discard"
+        assert p.track_range == (3.0, 15.5)
+        assert p.trackrecw.text() == "Track 00:03–00:16"
+        assert p.ts is not None and p.folder == folder, "results reopened too"
+        browser.set_times(0.0, 20.0)
+        pump(0.3)
+        p.redraw_now()
+        assert p.overlays and p.overlays[0].range_item.edges() == [3.0, 15.5]
+    finally:
+        p = browser.plugin_panels.get(LABEL, panel)
+        _clean_range(p)
+
+
+def test_results_of_a_range_run_show_their_range(panel, tmp_path):
+    from audian_plugins.eodsorter.model import FrameGrid
+
+    whole = M_grid_for(panel)
+    k0, k1 = 60, 400
+    folder = tmp_path / "range-results"
+    folder.mkdir()
+    m = k1 - k0
+    np.save(folder / "fund_v.npy", np.full(m, 700.0))
+    np.save(folder / "idx_v.npy", np.arange(m, dtype=np.int64))
+    np.save(folder / "ident_v.npy", np.zeros(m))
+    np.save(folder / "sign_v.npy", np.ones((m, 2), np.float32))
+    np.save(folder / "times.npy", whole.times()[k0:k1])
+    meta = {
+        "rate": RATE,
+        "start": k0 * STEP / RATE,
+        "duration": ((m - 1) * STEP + NFFT) / RATE,
+        "frame_step": STEP / RATE,
+        "config": {"spectrogram": {"nfft": NFFT, "overlap_frac": OVERLAP}},
+    }
+    (folder / "wavetracker.json").write_text(json.dumps(meta))
+    try:
+        assert panel.open_results(folder, ask=False)
+        r = panel.track_range
+        assert r is not None
+        assert whole.frame_range(r.start, r.stop) == (k0, k1)
+        assert r.start == pytest.approx(whole.times()[k0])
+        assert "cover" in panel.hintw.text()
+        assert isinstance(panel.ts.grid, FrameGrid) and panel.ts.grid.s0 == k0 * STEP
+    finally:
+        _clean_range(panel)
+
+
+def test_track_visible_is_clipped_to_the_range(panel, world):
+    browser = world["browser"]
+    fake = HoldingRunner(panel)
+    panel.runner = None
+    panel.runner_factory = lambda oneshot: fake
+    try:
+        panel.set_range((5.0, 7.0))
+        browser.set_times(4.0, 4.0)
+        pump(0.3)
+        panel.track_visible()
+        job = panel._job
+        assert job is not None and job["kind"] == "export"
+        grid = panel.ts.grid
+        assert (job["k0"], job["k1"]) == grid.frame_range(5.0, 7.0)
+        assert "clipped to the tracking range" in panel.hintw.text()
+        panel.cancel_job(quiet=True)
+        pump(0.2)
+        # a view outside the range: nothing to track there
+        panel.set_range((12.0, 15.0))
+        panel.track_visible()
+        assert panel._job is None
+        assert "outside the tracking range" in panel.hintw.text()
+    finally:
+        panel.cancel_job(quiet=True)
+        _clean_range(panel)

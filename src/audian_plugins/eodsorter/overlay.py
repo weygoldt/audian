@@ -87,6 +87,12 @@ MARK_Z = 26
 VEIL_Z = 18.5
 VEIL_ALPHA = 0.6
 
+#: The tracking range: the time outside it dimmed, its edges marked, over
+#: the veil and under the tracks.
+RANGE_Z = 18.8
+RANGE_ALPHA = 0.55
+RANGE_LINE_PX = 1.5
+
 #: Line widths, in pixels.  The underlay ("shadow") in the map's floor
 #: colour is a pixel wider on each side, so a track reads as a line with a
 #: dark edge even where it lies exactly on the bright ridge it marks.
@@ -493,6 +499,86 @@ class VeilItem(pg.GraphicsObject):
     def paint(self, painter, option, widget=None) -> None:
         if self._colour is not None and not self._rect.isEmpty():
             painter.fillRect(self._rect, self._colour)
+
+
+class RangeItem(pg.GraphicsObject):
+    """The tracking range on a lane: the time before its start and after
+    its stop washed in the map's floor colour, and a dashed line at each
+    edge (on an underlay in the floor colour, legible on any map).
+
+    Passive and cheap: one item, two rectangles and two lines clipped to
+    the view, set when the range or the colours change -- never on a
+    pointer move (a move that exposes part of the lane repaints those
+    rectangles, which is a fill)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._range = None
+        self._dim = QColor(0, 0, 0, 0)
+        self._line = QColor(255, 255, 255)
+        self._under = QColor(0, 0, 0)
+        self._rect = QRectF()
+
+    def set_range(self, rng, dim, line, under) -> None:
+        """`rng` is ``(start, stop)`` (stop None: to the end) or None."""
+        self._range = None if rng is None else (float(rng[0]), rng[1])
+        self._dim, self._line, self._under = QColor(dim), QColor(line), QColor(under)
+        self.viewRangeChanged()
+
+    def rects(self) -> list:
+        """The dimmed rectangles, in data coordinates, for the tests."""
+        out = []
+        r, rng = self._rect, self._range
+        if rng is None or r.isEmpty():
+            return out
+        t0, t1 = rng
+        if t0 > r.left():
+            out.append(
+                QRectF(r.left(), r.top(), min(t0, r.right()) - r.left(), r.height())
+            )
+        if t1 is not None and t1 < r.right():
+            left = max(float(t1), r.left())
+            out.append(QRectF(left, r.top(), r.right() - left, r.height()))
+        return [q for q in out if q.width() > 0]
+
+    def edges(self) -> list:
+        """The times a line is drawn at (those in view)."""
+        r, rng = self._rect, self._range
+        if rng is None or r.isEmpty():
+            return []
+        return [
+            float(t)
+            for t in (rng[0] if rng[0] > 0 else None, rng[1])
+            if t is not None and r.left() <= t <= r.right()
+        ]
+
+    def viewRangeChanged(self) -> None:  # noqa: N802 - pyqtgraph's hook
+        rect = self.viewRect()
+        self.prepareGeometryChange()
+        self._rect = QRectF(rect) if rect is not None else QRectF()
+        self.update()
+
+    def boundingRect(self):  # noqa: N802
+        return self._rect if self._range is not None else QRectF()
+
+    def dataBounds(self, ax, frac=1.0, orthoRange=None):  # noqa: N802, N803
+        return (None, None)
+
+    def paint(self, painter, option, widget=None) -> None:
+        if self._range is None or self._rect.isEmpty():
+            return
+        for q in self.rects():
+            painter.fillRect(q, self._dim)
+        top, bottom = self._rect.top(), self._rect.bottom()
+        under = QPen(self._under, RANGE_LINE_PX + 2.0)
+        under.setCosmetic(True)
+        line = QPen(self._line, RANGE_LINE_PX)
+        line.setCosmetic(True)
+        line.setStyle(Qt.PenStyle.DashLine)
+        for t in self.edges():
+            for pen in (under, line):
+                painter.setPen(pen)
+                painter.drawLine(QPointF(t, top), QPointF(t, bottom))
 
 
 #: Dot sprites, one per (diameter, fill, outline, device pixel ratio).
@@ -994,6 +1080,8 @@ class TrackOverlay:
         self.geometry: G.Geometry | None = None
 
         self.veil = self._add(VeilItem(), VEIL_Z)
+        self.range_item = self._add(RangeItem(), RANGE_Z)
+        self._range_key = None
         # Three image layers (see `ImageLayer`), each one scene item whose
         # z sits among its members': the base (tracks, dots, unassigned),
         # the selection under the id labels, and the hover and previews
@@ -1142,6 +1230,7 @@ class TrackOverlay:
         scene = self.scene
         ts = scene.ts
         snippet = scene.snippet
+        self._draw_range(scene.track_range)
         base_key = (
             id(ts),
             getattr(ts, "revision", -1),
@@ -1163,6 +1252,23 @@ class TrackOverlay:
             self._preview_key = preview_key
             self._draw_preview(ts, view)
         self.last_ms = 1000 * (time.perf_counter() - start)
+
+    def _draw_range(self, rng) -> None:
+        """The tracking range, when it or the map changed (`RangeItem`)."""
+        c = self.colours
+        key = (rng, c.contrast, c.peak.name())
+        if key == self._range_key:
+            if rng is not None and self.range_item.boundingRect().isEmpty():
+                # set before the lane had a view: pick the view up now
+                self.range_item.viewRangeChanged()
+            return
+        self._range_key = key
+        self.range_item.set_range(
+            rng,
+            theme.qcolor(c.contrast, alpha=RANGE_ALPHA),
+            c.peak,
+            theme.qcolor(c.contrast, alpha=SHADOW_ALPHA),
+        )
 
     def _draw_base(self, ts, view: G.View) -> None:
         c = self.colours

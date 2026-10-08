@@ -93,6 +93,9 @@ spectrogram you are looking at. It replaces wavetracker's `EODsorter`.
   shows the result dashed over the session, to *Accept* or *Discard*.
   **Track recording** runs over the whole file (or split session) in the
   background. Or open an existing wavetracker output directory.
+- **Track part of a recording**: the *Range* row (from / to, or *⇤ view* /
+  *view ⇥*) limits Track recording to a stretch, marked on the spectrogram
+  and remembered per recording; × goes back to the whole file.
 - **Edit tracks** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>) gives the mouse
   six tools: Select <kbd>V</kbd>, Erase <kbd>E</kbd>, Cut <kbd>C</kbd>,
   Merge <kbd>M</kbd>, Assign <kbd>A</kbd>, Add <kbd>F</kbd>. Brushes paint

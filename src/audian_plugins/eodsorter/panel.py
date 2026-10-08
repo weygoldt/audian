@@ -5,7 +5,8 @@ bottom:
 
 1. **Session**: the results directory, the unsaved marker, Save and a menu
    (Open results…, Save as…, Revert to tracker output…, Show in file
-   manager); Track visible / Track recording, then Clean up… (the step after
+   manager); Track visible / Track recording, the tracking Range (from, to,
+   ⇤ view, view ⇥, ×; `trackrange`), then Clean up… (the step after
    tracking), with a progress bar and Cancel while a job runs.
 2. **Run settings** (folded after the first run): the wavetracker status
    line, the fish frequency range, device, config file and an Advanced
@@ -91,6 +92,7 @@ from . import geometry as G
 from . import harmonics as HM
 from . import model as M
 from . import runner as R
+from . import trackrange as TR
 from .overlay import TrackOverlay, view_of
 from .ridgeadd import RidgeSource
 from .tools import (
@@ -124,6 +126,9 @@ DEFAULT_PREFS = {
     "fish_range": [],
     "folded": {},
     "results_dirs": {},
+    #: the tracking range per recording (`trackrange.range_key`):
+    #: ``[start, stop]`` in seconds, stop None for "to the end"
+    "ranges": {},
 }
 
 AUTOSAVE_MS = 2000
@@ -611,6 +616,8 @@ class WavetrackerPanel(QWidget):
         self._lane_timer.timeout.connect(self._check_lanes)
 
         self.router = KeyRouter(self)
+        self._range_texts = None
+        self._refresh_range()
         self._refresh_all()
 
     # ================================================================ build
@@ -740,6 +747,7 @@ class WavetrackerPanel(QWidget):
         self.trackrecw.setToolTip("Run wavetracker on the whole recording")
         self.trackrecw.clicked.connect(self.track_recording)
         group.add_span_row(self._row(self.trackvisw, self.trackrecw))
+        self._build_range(group)
         # the step after tracking, so it sits right under it
         self.cleanupw = QPushButton("Clean up…", self)
         self.cleanupw.setToolTip(
@@ -759,6 +767,65 @@ class WavetrackerPanel(QWidget):
         self.jobroww.hide()
         group.add_span_row(self.jobroww)
         box.addWidget(group)
+
+    def _build_range(self, group) -> None:
+        """The Range row: from [time] to [time], ⇤ view, view ⇥, ×."""
+        self.rangew = QWidget(self)
+        grid = QGridLayout(self.rangew)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(theme.S4)
+        grid.setVerticalSpacing(theme.S2)
+        fields = []
+        for row, (word, holder, tip) in enumerate(
+            (
+                (
+                    "from",
+                    "start",
+                    "Where Track recording starts (hh:mm:ss.s, mm:ss or "
+                    "seconds); empty: the start of the recording",
+                ),
+                (
+                    "to",
+                    "end",
+                    "Where Track recording stops (hh:mm:ss.s, mm:ss, seconds "
+                    "or 'end'); empty: the end of the recording",
+                ),
+            )
+        ):
+            label = self._muted(word, wrap=False)
+            label.setToolTip(tip)
+            grid.addWidget(label, row, 0)
+            edit = QLineEdit(self.rangew)
+            edit.setPlaceholderText(holder)
+            edit.setToolTip(tip)
+            edit.setMinimumWidth(40)
+            edit.editingFinished.connect(self._range_edited)
+            grid.addWidget(edit, row, 1)
+            fields.append(edit)
+        self.rangefromw, self.rangetow = fields
+        self.rangestartw = QToolButton(self.rangew)
+        self.rangestartw.setText("⇤ view")
+        self.rangestartw.setToolTip(
+            "Start the tracking range at the left edge of the view"
+        )
+        self.rangestartw.clicked.connect(lambda: self.range_from_view("start"))
+        grid.addWidget(self.rangestartw, 0, 2)
+        self.rangestopw = QToolButton(self.rangew)
+        self.rangestopw.setText("view ⇥")
+        self.rangestopw.setToolTip(
+            "Stop the tracking range at the right edge of the view"
+        )
+        self.rangestopw.clicked.connect(lambda: self.range_from_view("stop"))
+        grid.addWidget(self.rangestopw, 1, 2)
+        for b in (self.rangestartw, self.rangestopw):
+            b.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.rangeclearw = QToolButton(self.rangew)
+        self.rangeclearw.setText("×")
+        self.rangeclearw.setToolTip("Clear the range: track the whole recording")
+        self.rangeclearw.clicked.connect(self.clear_range)
+        grid.addWidget(self.rangeclearw, 0, 3, 2, 1, Qt.AlignmentFlag.AlignVCenter)
+        grid.setColumnStretch(1, 1)
+        group.add_span_row(self.rangew)
 
     def _build_run(self, box) -> None:
         group = self._section(box, "Run settings")
@@ -2297,6 +2364,7 @@ class WavetrackerPanel(QWidget):
         if not paths or paths[0] == self._loaded_for:
             return
         self._loaded_for = paths[0]
+        self._restore_range(paths)
         if self.ts is not None:
             return
         remembered = self.prefs.get("results_dirs", {}).get(paths[0])
@@ -2395,6 +2463,7 @@ class WavetrackerPanel(QWidget):
             f"opened {Path(folder).name}: {len(ts.ids()):,} tracks, {ts.n:,} points",
         )
         self._remember(folder)
+        self._range_from_results(ts)
         self._offer_recovery(folder)
         return True
 
@@ -2909,6 +2978,10 @@ class WavetrackerPanel(QWidget):
                     "needs a wavetracker with list input (see docs/eodsorter-design.md 4.6)"
                 )
                 return
+        window = self._range_window()
+        if window is False:
+            return
+        start, duration = (0.0, None) if window is None else window[2:]
         out = R.default_output_dir(paths[0])
         if Path(out).exists() and (Path(out) / "fund_v.npy").exists():
             answer = self.ask(
@@ -2945,11 +3018,187 @@ class WavetrackerPanel(QWidget):
             out,
             self._config_overrides(),
             self.configw.text().strip() or None,
-            0.0,
-            None,
+            start,
+            duration,
             str(self.devicew.currentData()),
         )
-        self._submit("whole", job, replace=Path(out).exists(), out=out)
+        self._submit(
+            "whole",
+            job,
+            replace=Path(out).exists(),
+            out=out,
+            range=self.track_range,
+        )
+
+    # ---- the tracking range (4.2, 5.8)
+
+    @property
+    def track_range(self) -> Optional[TR.TrackRange]:
+        return self.scene.track_range
+
+    def _range_text(self, r) -> str:
+        h = TR.needs_hours(self._duration())
+        stop = "end" if r.stop is None else TR.format_time(r.stop, h)
+        return f"{TR.format_time(r.start, h)}–{stop}"
+
+    def _recording_grid(self) -> Optional[M.FrameGrid]:
+        """The frames of a run over the whole recording (`recording_grid`):
+        the session's frames where a session is loaded, else the Run
+        settings' nfft and overlap."""
+        data = getattr(self.browser, "data", None)
+        try:
+            rate = float(data.rate)
+            frames = int(data.frames)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        sp = self._config_overrides()["spectrogram"]
+        ts = self.ts
+        return TR.recording_grid(
+            rate,
+            frames,
+            int(sp["nfft"]),
+            float(sp["overlap_frac"]),
+            ts.grid if ts is not None else None,
+        )
+
+    def _range_window(self):
+        """The `DetectWindow` a run over the tracking range asks for, None
+        without a range, False (said why) when it cannot run."""
+        r = self.track_range
+        if r is None:
+            return None
+        grid = self._recording_grid()
+        if grid is None:
+            self.controller.reject("no recording to take the range from")
+            return False
+        try:
+            return TR.detect_window(grid, r)
+        except TR.RangeError as exc:
+            self.controller.reject(str(exc))
+            return False
+
+    def set_range(self, r: Optional[TR.TrackRange], persist: bool = True) -> None:
+        """Set the tracking range (None: the whole recording): the fields,
+        the Track button, the lines on the lanes, the remembered value."""
+        if r is not None and not isinstance(r, TR.TrackRange):
+            r = TR.TrackRange(float(r[0]), None if r[1] is None else float(r[1]))
+        self.scene.track_range = r
+        self._refresh_range()
+        if persist:
+            self._store_range(r)
+        self.schedule()
+
+    def _refresh_range(self) -> None:
+        r = self.track_range
+        h = TR.needs_hours(self._duration())
+        a = "" if r is None else TR.format_time(r.start, h)
+        b = "" if r is None or r.stop is None else TR.format_time(r.stop, h)
+        self.rangefromw.setText(a)
+        self.rangetow.setText(b)
+        self._range_texts = (a, b)
+        self.rangeclearw.setEnabled(r is not None)
+        self.trackrecw.setText(TR.range_label(r, self._duration()))
+        self.trackrecw.setToolTip(
+            "Run wavetracker on the whole recording"
+            if r is None
+            else f"Run wavetracker on {self._range_text(r)} of the recording "
+            "(the Range below; × clears it)"
+        )
+
+    def _range_edited(self) -> None:
+        texts = (self.rangefromw.text(), self.rangetow.text())
+        if texts == self._range_texts:
+            return
+        try:
+            start = TR.parse_time(texts[0]) if texts[0].strip() else 0.0
+            stop = TR.parse_stop(texts[1])
+            r = TR.clamp_range(start, stop, self._duration())
+        except TR.RangeError as exc:
+            self.controller.say(f"Range: {exc}")
+            self._refresh_range()
+            return
+        self.set_range(r)
+
+    def range_from_view(self, edge: str) -> None:
+        """``"start"``: the range starts at the view's left edge; ``"stop"``:
+        it stops at its right edge.  An other edge that would end up on the
+        wrong side moves to the view's other edge."""
+        view = self.view_range()
+        if view is None:
+            self.controller.say("nothing on screen to take the range from")
+            return
+        r = self.track_range or TR.TrackRange(0.0, None)
+        start, stop = r.start, r.stop
+        if edge == "start":
+            start = view[0]
+            if stop is not None and stop <= start:
+                stop = view[1]
+        else:
+            stop = view[1]
+            if start >= stop:
+                start = view[0]
+        try:
+            self.set_range(TR.clamp_range(start, stop, self._duration()))
+        except TR.RangeError as exc:
+            self.controller.say(f"Range: {exc}")
+
+    def clear_range(self) -> None:
+        self.set_range(None)
+
+    def _store_range(self, r) -> None:
+        paths = self.recording_paths()
+        if not paths:
+            return
+        key = TR.range_key(paths)
+        ranges = dict(self.prefs.get("ranges", {}))
+        if r is None:
+            ranges.pop(key, None)
+        else:
+            ranges[key] = [float(r.start), None if r.stop is None else float(r.stop)]
+        if ranges != self.prefs.get("ranges"):
+            self.prefs["ranges"] = ranges
+            self._prefs_timer.start()
+
+    def _restore_range(self, paths) -> None:
+        """The range this recording had last time."""
+        stored = self.prefs.get("ranges", {}).get(TR.range_key(paths))
+        r = None
+        if isinstance(stored, (list, tuple)) and len(stored) == 2:
+            try:
+                r = TR.clamp_range(stored[0], stored[1], self._duration())
+            except (TR.RangeError, TypeError, ValueError):
+                r = None
+        self.set_range(r, persist=False)
+
+    def _range_from_results(self, ts) -> None:
+        """Results of a run over a range show that range (from
+        wavetracker.json's start and duration, through the frame grid),
+        unless the range set already selects exactly their frames."""
+        grid = getattr(ts, "grid", None)
+        whole = self._recording_grid()
+        if grid is None or whole is None:
+            return
+        r = TR.range_of_grid(grid, whole)
+        if r is None:
+            return
+        k0 = (grid.s0 - whole.s0) // whole.step
+        current = self.track_range
+        if current is not None:
+            try:
+                w = TR.detect_window(whole, current)
+            except TR.RangeError:
+                w = None
+            if w is not None and (w.k0, w.k1) == (k0, k0 + grid.n_frames):
+                return
+        try:
+            r = TR.clamp_range(r.start, r.stop, self._duration())
+        except TR.RangeError:
+            return
+        self.set_range(r)
+        if r is not None:
+            self.controller.say(
+                f"These results cover {self._range_text(r)}: the range shows it"
+            )
 
     def _move_results_aside(self, out) -> bool:
         """Rename `out` to ``<out>.old-<stamp>`` (4.2, never deleted).
@@ -3025,7 +3274,23 @@ class WavetrackerPanel(QWidget):
                 "these results have no regular frame grid; snippet runs are disabled"
             )
             return
-        k0, k1 = grid.frame_range(view[0], view[1])
+        t0, t1 = view[0], view[1]
+        notes = []
+        r = self.track_range
+        if r is not None:
+            # the snippet stays inside the tracking range (4.3)
+            a = max(t0, r.start)
+            b = t1 if r.stop is None else min(t1, r.stop)
+            if b <= a:
+                self.controller.reject(
+                    f"the view is outside the tracking range "
+                    f"({self._range_text(r)}); clear it (×) to track here"
+                )
+                return
+            if (a, b) != (t0, t1):
+                notes.append(f"clipped to the tracking range {self._range_text(r)}")
+            t0, t1 = a, b
+        k0, k1 = grid.frame_range(t0, t1)
         if k1 - k0 < 2:
             need = (grid.nfft + grid.step) / grid.rate
             self.controller.reject(
@@ -3037,9 +3302,9 @@ class WavetrackerPanel(QWidget):
             self.controller.reject("use Track recording for spans this long")
             return
         if k1 - k0 < 30:
-            self.controller.say(
-                "comb removal needs 30 frames; this snippet runs without it"
-            )
+            notes.append("comb removal needs 30 frames; this snippet runs without it")
+        if notes:
+            self.controller.say("Snippet " + "; ".join(notes))
         tmp = R.make_tmpdir()
         wav = str(Path(tmp) / "snippet.wav")
         s0, s1 = grid.sample_range(k0, k1)
