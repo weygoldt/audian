@@ -3,12 +3,20 @@ import numpy as np
 import pyqtgraph as pg
 
 from math import floor, log10
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QLineF, QPointF, Qt
+from PySide6.QtGui import QColor, QPainter, QPen, QPicture
 
 from . import theme
 
 
 class TimeAxisItem(pg.AxisItem):
+    #: `_tick_lines` results by everything they depend on.  Every lane has a
+    #: top and a bottom ruling with the same width and the same range, so on
+    #: a stack the lines are computed once per step for all lanes instead of
+    #: once per axis.  Bounded; a pan fills it with one entry per step.
+    _shared_lines: dict = {}
+    _shared_limit = 16
+
     def __init__(self, file_times, file_paths, left_margin, *args, **kwargs):
         self._left_margin = left_margin
         super().__init__(*args, **kwargs)
@@ -27,6 +35,169 @@ class TimeAxisItem(pg.AxisItem):
     def setLogMode(self, *args, **kwargs):
         # no log mode!
         pass
+
+    def _plain_ticks(self) -> bool:
+        """Is this an axis of tick marks only, which `paint` draws itself?"""
+        return (
+            not self.style["showValues"]
+            and self.grid is False
+            and self._tickLevels is None
+            and self.orientation in ("top", "bottom")
+            and tuple(self.style["stopAxisAtTick"]) == (False, False)
+        )
+
+    def paint(self, p, opt, widget):
+        """Draw a tick-mark-only axis straight onto the painter.
+
+        Every lane has two of these -- the rulings along its top and bottom
+        edge, values hidden -- and every pan step moves their ticks.
+        pyqtgraph regenerates an axis by building a `Point` pair and a tuple
+        per tick, recording a `drawLine` per tick into a `QPicture` and
+        replaying it: about 2 ms per lane per step, 60 ms per step for a
+        sixteen-lane stack.  Here the same lines, from the same arithmetic as
+        `AxisItem.generateDrawSpecs`, go out as one `drawLines` per tick
+        level, kept until the axis is invalidated (`self.picture = None`,
+        which is how pyqtgraph marks an axis stale).  An axis with values,
+        a grid or fixed ticks takes pyqtgraph's own path.
+        """
+        if not self._plain_ticks():
+            self._lines = None
+            return super().paint(p, opt, widget)
+        if self.picture is None or getattr(self, "_lines", None) is None:
+            self._lines = self._shared_tick_lines()
+            # pyqtgraph's staleness flag: anything that resets it to None
+            # makes the next paint recompute the lines
+            self.picture = QPicture()
+        axis_pen, span, levels = self._lines
+        if span is None:
+            return
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        p.setPen(axis_pen)
+        p.drawLine(span[0], span[1])
+        for pen, lines in levels:
+            if lines:
+                p.setPen(pen)
+                p.drawLines(lines)
+        p.restore()
+
+    def _shared_tick_lines(self):
+        """`_tick_lines`, from `_shared_lines` when another axis made them."""
+        bounds = self.mapRectFromParent(self.geometry())
+        span = (
+            self.mapToDevice(QPointF(0.0, 0.0)),
+            self.mapToDevice(QPointF(1.0, 0.0)),
+        )
+        if None in span:
+            return self._tick_lines()
+        tick_pen = self.tickPen()
+        axis_pen = self.pen()
+        key = (
+            self.orientation,
+            tuple(self.range),
+            (bounds.x(), bounds.y(), bounds.width(), bounds.height()),
+            # the device scale along the axis, which sets the tick density
+            (span[1].x() - span[0].x(), span[1].y() - span[0].y()),
+            self.scale,
+            self.style["tickLength"],
+            self.style["tickAlpha"],
+            tick_pen.color().rgba(),
+            tick_pen.widthF(),
+            tick_pen.style(),
+            tick_pen.brush().style(),
+            tick_pen.isCosmetic(),
+            axis_pen.color().rgba(),
+            axis_pen.widthF(),
+            axis_pen.style(),
+            type(self).tickSpacing,
+            self._starttime_mode,
+            np.asarray(self._file_times).tobytes(),
+            self._starttime,
+            theme.mono_metrics(theme.SIZE_SMALL_PT).averageCharWidth(),
+        )
+        cache = TimeAxisItem._shared_lines
+        hit = cache.get(key)
+        if hit is None:
+            hit = self._tick_lines()
+            if len(cache) >= TimeAxisItem._shared_limit:
+                cache.pop(next(iter(cache)))
+            cache[key] = hit
+        return hit
+
+    def _updateLabel(self):  # noqa: N802 - pyqtgraph's name
+        """`AxisItem._updateLabel`, without re-laying out an unchanged label.
+
+        pyqtgraph calls this from `setRange` on every range change (through
+        `updateAutoSIPrefix`), and `setHtml` lays the label out again even
+        when the text is the same -- 0.1 ms an axis, three axes a lane, on
+        every pan step.
+        """
+        html = self.labelString()
+        if html != getattr(self, "_label_html", None):
+            self._label_html = html
+            self.label.setHtml(html)
+            self._adjustSize()
+        self.picture = None
+        self.update()
+
+    def _tick_lines(self):
+        """`(axis pen, axis span, [(pen, lines), ...])` for `paint`.
+
+        `AxisItem.generateDrawSpecs` for a top or bottom axis with no grid
+        and no values, step by step, with the per-tick loop done in numpy.
+        """
+        bounds = self.mapRectFromParent(self.geometry())
+        if self.orientation == "top":
+            span = (
+                bounds.bottomLeft() + QPointF(-1.0, -1.0),
+                bounds.bottomRight() + QPointF(1.0, -1.0),
+            )
+            tick_start = tick_stop = bounds.bottom()
+            tick_dir = -1
+        else:
+            span = (
+                bounds.topLeft() + QPointF(-1.0, 1.0),
+                bounds.topRight() + QPointF(1.0, 1.0),
+            )
+            tick_start = tick_stop = bounds.top()
+            tick_dir = 1
+        points = [self.mapToDevice(pt) for pt in span]
+        if None in points:
+            return self.pen(), None, []
+        d = points[1] - points[0]
+        length = (d.x() ** 2 + d.y() ** 2) ** 0.5
+        if length == 0:
+            return self.pen(), None, []
+        tick_levels = self.tickValues(self.range[0], self.range[1], length)
+        dif = self.range[1] - self.range[0]
+        if dif == 0:
+            scale = 1
+            offset = 0
+        else:
+            scale = bounds.width() / dif
+            offset = self.range[0] * scale
+        x_range = [x * scale - offset for x in self.range]
+        x_min = min(x_range)
+        x_max = max(x_range)
+        levels = []
+        for i, (_spacing, ticks) in enumerate(tick_levels):
+            tick_length = self.style["tickLength"] / ((i * 0.5) + 1.0)
+            alpha = self.style["tickAlpha"]
+            if alpha is None:
+                alpha = 255 / (i + 1)
+            elif isinstance(alpha, float):
+                alpha = min(255, max(0, int(round(alpha * 255))))
+            pen = self.tickPen()
+            if pen.brush().style() == Qt.BrushStyle.SolidPattern:
+                pen = QPen(pen)
+                color = QColor(pen.color())
+                color.setAlpha(int(alpha))
+                pen.setColor(color)
+            xs = np.asarray(ticks, dtype=float) * scale - offset
+            xs = xs[(xs >= x_min) & (xs <= x_max)]
+            y1 = tick_stop + tick_length * tick_dir
+            levels.append((pen, [QLineF(x, tick_start, x, y1) for x in xs.tolist()]))
+        return self.pen(), span, levels
 
     def set_left_margin(self, left_margin) -> None:
         """Re-place the axis caption for a changed left-axis width.

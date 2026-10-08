@@ -5,6 +5,7 @@ and the time window shown.
 
 import logging
 import os
+import types
 
 import numpy as np
 
@@ -12,7 +13,7 @@ from audioio import get_datetime
 from thunderlab.dataloader import DataLoader
 
 from . import theme
-from .buffereddata import MinMaxPyramid
+from .buffereddata import MinMaxPyramid, recycle_buffer
 from .bufferedspectrogram import BufferedSpectrogram
 
 log = logging.getLogger(__name__)
@@ -203,6 +204,14 @@ class Data(object):
     min_buffer_time = 10.0
     max_buffer_time = 60.0
 
+    # Most raw bytes one step of a pan reads ahead of the view; see
+    # `place_buffer`.  Every buffer move costs a shift of every buffer in
+    # place (a memmove, ~3 ms per 50 MB) plus reading, filtering and
+    # transforming what is new, so the lead trades how often a pan pays for
+    # a move against how long one move takes.  8 MB is ~10 s of 48 kHz
+    # stereo or ~3 s of 16 channels at 20 kHz -- 10-20 ms of work.
+    lead_bytes = 8 * 1024 * 1024
+
     def __init__(self, file_path, **kwargs):
         self.buffer_time = Data.max_buffer_time
         self.back_time = Data.max_buffer_time / 3
@@ -385,6 +394,7 @@ class Data(object):
         self.data.bufferframes = int(
             (self.buffer_time + self.tbefore + self.tafter) * self.data.rate
         )
+        self.base_bufferframes = self.data.bufferframes
         self.data.backframes = int((self.back_time + self.tbefore) * self.data.rate)
         self.data.set_unwrap(unwrap, unwrap_clip, False, self.data.unit)
         self.data.follow = int(self.follow_time * self.data.rate)
@@ -403,6 +413,8 @@ class Data(object):
         self.data.dests = []
         self.data.need_update = False
         count_buffer_loads(self.data)
+        # shift the raw buffer in place rather than through a temporary
+        self.data._recycle_buffer = types.MethodType(recycle_buffer, self.data)
         self.data.mip_pyramid = MinMaxPyramid()
         self.traces.insert(0, self.data)
         self.sources = [None] + [i + 1 for i in self.sources]
@@ -431,6 +443,71 @@ class Data(object):
         for d in self.data.dests:
             d.set_need_update()
 
+    def place_buffer(self, start: float, stop: float) -> None:
+        """Move the raw buffer so that it covers `[start, stop]` seconds.
+
+        audioio's `update_buffer` sizes the buffer to `bufferframes` and
+        re-centres it whenever the view leaves it.  Two things made every
+        step of a pan expensive with that:
+
+        * A view at least as long as `buffer_time` (60 s on a stereo
+          recording, 26 s on sixteen channels) gets a buffer of exactly its
+          own length.  Every pan step then moved every buffer, and since that
+          length is ``int(stop*rate) - int(start*rate)``, it changed by one
+          frame from step to step -- so every step *reallocated* every buffer
+          (raw, filtered, spectrogram) and copied it across: 22 ms of page
+          faults per step on the iriri session before any data was read.
+        * When the view does leave the buffer, re-centring reads and
+          transforms up to two thirds of it at once -- a 30 s spike in the
+          middle of a pan.
+
+        Here the buffer is always at least the view plus a `lead` on each
+        side and never changes length while it still holds the view with a
+        lead to spare, so a pan inside it costs nothing and a pan out of it
+        shifts the buffers in place and reads `lead` frames beyond the view
+        -- a small, regular step instead of a big, rare one.  A jump to
+        somewhere the buffer does not reach is placed as audioio would,
+        `backframes` before the view.  Memory: the buffer is
+        ``max(base, view + 2*lead)``, never more than ``2*lead`` longer than
+        audioio's (which was ``max(base, view)``), and shrinks back once
+        the view is less than half of it.
+        """
+        loader = self.data
+        rate = loader.rate
+        frames = loader.frames
+        i0 = max(0, int(start * rate))
+        i1 = min(frames, int(stop * rate) + 1)
+        base = getattr(self, "base_bufferframes", loader.bufferframes)
+        if i1 <= i0 or frames <= 0 or base <= 0:
+            loader.update_time(start, stop)
+            return
+        n = i1 - i0
+        row = max(1, loader.channels * 8)
+        lead = max(1, min(max(n, base) // 8, int(Data.lead_bytes // row)))
+        want = min(frames, max(base, n + 2 * lead))
+        offset = loader.offset
+        size = len(loader.buffer)
+        keep = (
+            size > 0
+            and size >= min(frames, n + lead)
+            and size <= max(base, 2 * (n + 2 * lead))
+        )
+        target = size if keep else want
+        loader.bufferframes = max(base, target)
+        if keep and offset <= i0 and i1 <= offset + size:
+            return
+        if keep and i0 < offset + size and i1 > offset:
+            # a pan: shift just far enough to have `lead` beyond the view
+            if i1 > offset + size:
+                new = i1 + lead - target
+            else:
+                new = i0 - lead
+        else:
+            back = min(loader.backframes, max(0, (target - n) // 2))
+            new = i0 - back
+        new = max(0, min(new, frames - target))
+        loader.move_buffer(new, target)
+
     def update_times(self, t0, t1):
         """Move every buffer to cover `[t0, t1]`.
 
@@ -442,7 +519,7 @@ class Data(object):
         first -- see `DataBrowser.set_times`.
         """
         if self.data.need_update:
-            self.data.update_time(t0 - self.tbefore, t1 + self.tafter)
+            self.place_buffer(t0 - self.tbefore, t1 + self.tafter)
         for trace in self.traces[1:]:
             if trace.need_update:
                 trace.align_buffer()

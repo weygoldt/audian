@@ -1,7 +1,7 @@
 import numpy as np
 import pyqtgraph as pg
 
-from PySide6.QtCore import Qt, QRectF, Signal
+from PySide6.QtCore import Qt, QRectF, QTimer, Signal
 from PySide6.QtGui import QTransform
 
 from . import theme
@@ -31,6 +31,10 @@ class SelectViewBox(pg.ViewBox):
         self.channel = channel
         self.drag_modifiers = Qt.KeyboardModifier.NoModifier
         self.setAcceptHoverEvents(True)
+        # a pan drag's travel not yet applied, in this box's own pixels;
+        # see `_pan_by`
+        self._pan_pending = None
+        self._pan_timer = None
 
     def publish_region_mode(self) -> None:
         """Let a modified drag override the current region mode, once.
@@ -148,19 +152,9 @@ class SelectViewBox(pg.ViewBox):
                     ## update shape of scale box
                     self.updateScaleBox(ev.buttonDownPos(), ev.pos())
             else:
-                tr = self.childGroup.transform()
-                tr = pg.functions.invertQTransform(tr)
-                tr = tr.map(dif * mask) - tr.map(pg.Point(0, 0))
-
-                x = tr.x() if mask[0] == 1 else None
-                y = tr.y() if mask[1] == 1 else None
-
-                self._resetTarget()
-                if x is not None or y is not None:
-                    self.translateBy(x=x, y=y)
-                self.sigRangeChangedManually.emit(self.state["mouseEnabled"])
-                self.sigUserZoomed.emit(x is not None, y is not None)
+                self._pan_by(dif * mask, mask)
                 if ev.isFinish():
+                    self._pan_flush()
                     self.add_region(self.viewRect())
         elif ev.button() & Qt.MouseButton.RightButton:
             # print "vb.rightDrag"
@@ -185,6 +179,52 @@ class SelectViewBox(pg.ViewBox):
             self.sigUserZoomed.emit(x is not None, y is not None)
             if ev.isFinish():
                 self.add_region(self.viewRect())
+
+    def _pan_by(self, dif, mask) -> None:
+        """Pan by `dif` pixels -- once per event-loop turn, not per move.
+
+        Every applied pan step makes the browser follow: all lanes take the
+        new range and the buffers and spectrograms are brought to it (5 ms
+        on two lanes, 20 ms on sixteen).  A mouse delivers 125-1000 moves a
+        second; applied one by one they queued up behind each other -- a
+        2 s drag on sixteen lanes replayed for seconds after the button was
+        let go.  The travel is summed here and applied by a zero-delay timer,
+        so moves that arrive while a step is being drawn fold into the next
+        step.  A translation does not change the scale, so the summed
+        pixels map to exactly the sum of the steps they replace.
+        """
+        if self._pan_pending is None:
+            self._pan_pending = [pg.Point(0, 0), np.zeros(2)]
+        self._pan_pending[0] = self._pan_pending[0] + pg.Point(dif)
+        self._pan_pending[1] = np.maximum(self._pan_pending[1], mask)
+        if self._pan_timer is None:
+            self._pan_timer = QTimer(self)
+            self._pan_timer.setSingleShot(True)
+            self._pan_timer.setInterval(0)
+            self._pan_timer.timeout.connect(self._pan_flush)
+        if not self._pan_timer.isActive():
+            self._pan_timer.start()
+
+    def _pan_flush(self) -> None:
+        """Apply the pan travel `_pan_by` collected."""
+        if self._pan_timer is not None:
+            self._pan_timer.stop()
+        pending, self._pan_pending = self._pan_pending, None
+        if pending is None:
+            return
+        dif, mask = pending
+        tr = self.childGroup.transform()
+        tr = pg.functions.invertQTransform(tr)
+        tr = tr.map(dif) - tr.map(pg.Point(0, 0))
+
+        x = tr.x() if mask[0] == 1 else None
+        y = tr.y() if mask[1] == 1 else None
+
+        self._resetTarget()
+        if x is not None or y is not None:
+            self.translateBy(x=x, y=y)
+        self.sigRangeChangedManually.emit(self.state["mouseEnabled"])
+        self.sigUserZoomed.emit(x is not None, y is not None)
 
     def updateScaleBox(self, p1, p2):
         r = QRectF(p1, p2)

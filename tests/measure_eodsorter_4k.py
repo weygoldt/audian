@@ -30,6 +30,16 @@ undo and redo are timed from the call to the first frame showing the new
 model revision ("shown") and to the end of all follow-up work ("settled").
 Medians and 95th percentiles; targets (design 6.1, 4K addendum): hover and
 strokes <= 16 ms p95, no backlog, commit/undo <= 100 ms.
+
+The view section times what moving the view costs audian itself: the
+middle-drag pan and audian's own Pan-mode drag (view updates per second,
+and **lat** to the painted frame), held Page Down and Down keys at a
+30 Hz auto-repeat, single Page Downs, G jumps to the next issue (with the
+issue list computed beforehand, so only the jump is timed) and jumps to
+far-away times.  Targets (4K addendum to design 6.4): pans >= 30 view
+updates/s at <= 100 ms lat, a jump <= 60 ms to the frame.  ``--view-only``
+skips the tool section; ``--channels`` sets the synthetic recording's
+channel count (4) and ``--minutes`` its length (10).
 """
 
 from __future__ import annotations
@@ -58,15 +68,23 @@ def parse(argv):
     ap.add_argument("--hz", type=float, default=240.0, help="pointer rate")
     ap.add_argument("--theme", default="dark", choices=("dark", "light"))
     ap.add_argument("--json", type=Path, default=None, help="write results")
+    ap.add_argument("--channels", type=int, default=4, help="synthetic channels")
+    ap.add_argument("--minutes", type=float, default=10.0, help="synthetic length")
+    ap.add_argument("--view-only", action="store_true", help="skip the tools")
+    ap.add_argument(
+        "--plain",
+        action="store_true",
+        help="audian alone: no plugin, no overlay; the view section only",
+    )
     return ap.parse_args(argv)
 
 
-def synthetic(folder: Path):
-    """A four-channel recording and its wavetracker results directory."""
+def synthetic(folder: Path, channels: int = 4, minutes: float = 10.0):
+    """A multi-channel recording and its wavetracker results directory."""
     import numpy as np
     import soundfile
 
-    rate, dur, channels, nfft, step = 20000, 600.0, 4, 4096, 410
+    rate, dur, nfft, step = 20000, 60.0 * minutes, 4096, 410
     n = int(rate * dur)
     rng = np.random.default_rng(3)
     base = 400 + 900 * rng.random(40)
@@ -232,18 +250,20 @@ def run(args, tmp: Path) -> None:  # noqa: C901 - one scripted session
         while time.perf_counter() < end and quiet < 3:
             n = len(frames) + len(views)
             app.processEvents()
-            busy = ctl._hover_timer.isActive() or any(
-                o._timer.isActive() for o in panel.overlays
+            busy = ctl is not None and (
+                ctl._hover_timer.isActive()
+                or any(o._timer.isActive() for o in panel.overlays)
             )
             quiet = quiet + 1 if not busy and n == len(frames) + len(views) else 0
             time.sleep(0.001)
 
     if args.recording is None:
-        recording, results = synthetic(tmp)
+        recording, results = synthetic(tmp, args.channels, args.minutes)
     else:
         recording, results = args.recording, args.results
     work = tmp / "session"
-    shutil.copytree(results, work)
+    if results is not None:
+        shutil.copytree(results, work)
 
     audian_app.apply_theme_preference(app, args.theme)
     plugins = Plugins()
@@ -256,33 +276,44 @@ def run(args, tmp: Path) -> None:  # noqa: C901 - one scripted session
     window.show()
     pump(2.0)
     browser = window.browser()
-    browser.set_side_panel(True)
+    browser.set_side_panel(not args.plain)
     browser.set_panels(traces=0, specs=1)
     pump(0.5)
-    assert browser.open_plugin_panel("Wavetracker")
-    panel = browser.plugin_panels["Wavetracker"]
-    panel.ask = lambda *a, **k: "Discard"
-    assert panel.open_results(work, ask=False)
-    ctl = panel.controller
-    ts = panel.ts
-    t_start = args.start
-    if t_start is None:
-        t_start = float(ts.times[len(ts.times) // 3])
+    if args.plain:
+        args.view_only = True
+        panel = ctl = ts = None
+        total = browser.data.data.frames / browser.data.data.rate
+        t_start = args.start if args.start is not None else total / 3
+    else:
+        assert browser.open_plugin_panel("Wavetracker")
+        panel = browser.plugin_panels["Wavetracker"]
+        panel.ask = lambda *a, **k: "Discard"
+        assert panel.open_results(work, ask=False)
+        ctl = panel.controller
+        ts = panel.ts
+        t_start = args.start
+        if t_start is None:
+            t_start = float(ts.times[len(ts.times) // 3])
     browser.set_ranges("f", args.fmin, args.fmax)
     browser.set_times(t_start, args.span)
     pump(3.0)
-    panel.set_edit_mode(True)
+    if panel is not None:
+        panel.set_edit_mode(True)
     pump(2.0)
+    lanes = [ax for ax in browser.axs[0] if type(ax).__name__ == "SpectrogramPlot"]
     print(
         f"window {window.width()}x{window.height()} at dpr "
-        f"{window.devicePixelRatioF():g}; {ts.n:,} rows, {len(ts.ids()):,} ids, "
-        f"{len(panel.surfaces)} lanes; pointer at {args.hz:g} Hz"
+        f"{window.devicePixelRatioF():g}; "
+        + (f"{ts.n:,} rows, {len(ts.ids()):,} ids, " if ts is not None else "plain, ")
+        + f"{browser.data.channels} lanes; pointer at {args.hz:g} Hz"
     )
 
-    surface = panel.surfaces[0]
+    from audian_plugins.eodsorter.overlay import view_of
+
+    surface = panel.surfaces[0] if panel is not None else lanes[0].getViewBox()
     view = surface.scene().views()[0]
     vp = view.viewport()
-    v0 = surface.view()
+    v0 = surface.view() if panel is not None else view_of(surface)
 
     def at(t, f):
         x, y = v0.to_px(t, f)
@@ -405,6 +436,32 @@ def run(args, tmp: Path) -> None:  # noqa: C901 - one scripted session
         rest = max(ends) if ends else time.perf_counter()
         return 1000 * ((shown or rest) - a), 1000 * (rest - a)
 
+    if panel is None:
+        view_section(
+            args,
+            app,
+            window,
+            browser,
+            panel,
+            ctl,
+            v0,
+            at,
+            send,
+            drive,
+            drag,
+            timed,
+            report,
+            results_out,
+            settle,
+            pump,
+            seen,
+            views,
+        )
+        if args.json is not None:
+            args.json.write_text(json.dumps(results_out, indent=1))
+        window.close()
+        app.processEvents()
+        return
     # a frequency with tracks on it, at the middle of the view
     k0, k1 = ts.grid.frame_range(0.5 * (v0.x0 + v0.x1) - 1, 0.5 * (v0.x0 + v0.x1) + 1)
     rows = ts.rows_in_frames(k0, k1)
@@ -414,9 +471,13 @@ def run(args, tmp: Path) -> None:  # noqa: C901 - one scripted session
     f_track = float(np.median(fs)) if len(fs) else 0.5 * (v0.y0 + v0.y1)
 
     for key, name in (("V", "Select"), ("A", "Add"), ("M", "Merge"), ("C", "Cut")):
+        if args.view_only:
+            break
         ctl.set_tool(key)
         report(f"hover sweep ({name})", drive(sweep(2.0)))
     for key, name in (("V", "Select"), ("M", "Merge"), ("E", "Erase")):
+        if args.view_only:
+            break
         ctl.set_tool(key)
         schedule = drag(3.0, f_track)
         release = schedule.pop()
@@ -426,16 +487,17 @@ def run(args, tmp: Path) -> None:  # noqa: C901 - one scripted session
         results_out[f"release ({name})"] = [shown, rest]
         ctl.escape()
         ctl.escape()
-    undo, redo = timed(panel.undo), timed(panel.redo)
-    print(f"{'undo / redo':<24s} {undo[0]:6.1f} / {redo[0]:6.1f} ms to the frame")
-    results_out["undo"], results_out["redo"] = undo, redo
-    timed(panel.undo)
-    ctl.set_tool("A")
-    report("stroke 2 s (Add)", drive(drag(2.0, f_track + 13, 0.45, 0.6, 2.0)))
-    timed(panel.undo)
-    ctl.set_tool("C")
-    report("cut line 1.5 s", drive(drag(1.5, f_track, 0.5, 0.52, 0.0)))
-    timed(panel.undo)
+    if not args.view_only:
+        undo, redo = timed(panel.undo), timed(panel.redo)
+        print(f"{'undo / redo':<24s} {undo[0]:6.1f} / {redo[0]:6.1f} ms to the frame")
+        results_out["undo"], results_out["redo"] = undo, redo
+        timed(panel.undo)
+        ctl.set_tool("A")
+        report("stroke 2 s (Add)", drive(drag(2.0, f_track + 13, 0.45, 0.6, 2.0)))
+        timed(panel.undo)
+        ctl.set_tool("C")
+        report("cut line 1.5 s", drive(drag(1.5, f_track, 0.5, 0.52, 0.0)))
+        timed(panel.undo)
     ctl.set_tool("V")
     steps = []
     set_times = browser.set_times
@@ -456,11 +518,168 @@ def run(args, tmp: Path) -> None:  # noqa: C901 - one scripted session
     jumps = [timed(lambda: panel.goto_issue(+1))[1] for _ in range(4)]
     print(f"{'G issue jumps':<24s} " + " / ".join(f"{x:6.1f}" for x in jumps) + " ms")
     results_out["G"] = jumps
+    view_section(
+        args,
+        app,
+        window,
+        browser,
+        panel,
+        ctl,
+        v0,
+        at,
+        send,
+        drive,
+        drag,
+        timed,
+        report,
+        results_out,
+        settle,
+        pump,
+        seen,
+        views,
+    )
     if args.json is not None:
         args.json.write_text(json.dumps(results_out, indent=1))
     panel.set_session(None)
     window.close()
     app.processEvents()
+
+
+def view_section(
+    args,
+    app,
+    window,
+    browser,
+    panel,
+    ctl,
+    v0,
+    at,
+    send,
+    drive,
+    drag,
+    timed,
+    report,
+    results_out,
+    settle,
+    pump,
+    seen,
+    views,
+):
+    """What moving the view costs: pans, keys, jumps. See the module doc."""
+    import numpy as np
+    import pyqtgraph as pg
+    from PySide6.QtCore import Qt
+
+    def counting(fn):
+        steps = []
+        orig = browser.set_times
+        orig_apply = browser.apply_time_ranges
+
+        # a view step takes in every input event due so far, so it is what
+        # "the controller took it" means here (`lat` keys off it)
+        def counted(*a, **k):
+            steps.append(time.perf_counter())
+            seen["ctl"] = seen["due"]
+            try:
+                return orig(*a, **k)
+            finally:
+                seen["drawn"] = max(seen["drawn"], seen["ctl"])
+
+        def counted_apply(*a, **k):
+            steps.append(time.perf_counter())
+            seen["ctl"] = seen["due"]
+            try:
+                return orig_apply(*a, **k)
+            finally:
+                seen["drawn"] = max(seen["drawn"], seen["ctl"])
+
+        browser.set_times = counted
+        browser.apply_time_ranges = counted_apply
+        try:
+            r = fn()
+        finally:
+            browser.set_times = orig
+            browser.apply_time_ranges = orig_apply
+        rate = (len(steps) - 1) / (steps[-1] - steps[0]) if len(steps) > 1 else 0.0
+        return r, rate
+
+    def home():
+        browser.set_times(v0.x0, v0.x1 - v0.x0)
+        settle()
+
+    def jump(fn):
+        """ms from the call to the end of the first frame showing the view.
+
+        The first lane paint that starts after the call has returned shows
+        the new view in full: the spectrogram is uploaded synchronously and
+        the overlays redraw before the next paint.  Follow-up work (the
+        overlay's full-quality pass after the view rests) is not waited for.
+        """
+        settle()
+        views.clear()
+        a = time.perf_counter()
+        fn()
+        b = time.perf_counter()
+        settle()
+        shown = [e for s, e, _d in sorted(views) if s >= b]
+        return 1000 * ((shown[0] if shown else b) - a)
+
+    def line(name, xs):
+        print(f"{name:<24s} " + " / ".join(f"{x:6.1f}" for x in xs) + "  ms")
+        results_out[name] = xs
+
+    # the issue list is computed once, lazily, on the first G; do it first
+    if panel is not None:
+        panel.issues()
+        home()
+        line(
+            "G jumps (issues ready)",
+            [jump(lambda: panel.goto_issue(+1)) for _ in range(6)],
+        )
+    total = float(browser.data.data.frames / browser.data.data.rate)
+    span = v0.x1 - v0.x0
+    rng = np.random.default_rng(5)
+    far = []
+    for _ in range(6):
+        t = float(rng.uniform(0, max(0.0, total - span)))
+        far.append(jump(lambda t=t: browser.set_times(t, span)))
+    line("far jumps", far)
+    home()
+    line("Page Down", [jump(lambda: window.acts.time_down.trigger()) for _ in range(4)])
+    home()
+    line(
+        "Down", [jump(lambda: window.acts.time_small_down.trigger()) for _ in range(4)]
+    )
+
+    def held(action, seconds=2.0, hz=30.0):
+        n = int(seconds * hz)
+        return [(j / hz, action.trigger) for j in range(n)]
+
+    for name, action in (
+        ("held Page Down 30 Hz", window.acts.time_down),
+        ("held Down 30 Hz", window.acts.time_small_down),
+    ):
+        home()
+        r, rate = counting(lambda a=action: drive(held(a)))
+        report(name, r, f"  view updates {rate:4.1f}/s")
+        results_out[name] = rate
+    home()
+    middle = Qt.MouseButton.MiddleButton
+    fmid = 0.5 * (v0.y0 + v0.y1)
+    if panel is not None:
+        r, rate = counting(lambda: drive(drag(2.0, fmid, 0.7, 0.3, 0.0, middle)))
+        report("middle-drag pan (again)", r, f"  view updates {rate:4.1f}/s")
+        results_out["middle-drag pan (again)"] = rate
+        # audian's own Pan mode, out of edit mode
+        panel.set_edit_mode(False)
+    window.acts.pan_zoom.setChecked(True)
+    browser.set_zoom_mode(pg.ViewBox.PanMode)
+    pump(0.3)
+    home()
+    left = Qt.MouseButton.LeftButton
+    r, rate = counting(lambda: drive(drag(2.0, fmid, 0.7, 0.3, 0.0, left)))
+    report("audian Pan-mode drag", r, f"  view updates {rate:4.1f}/s")
+    results_out["audian Pan-mode drag"] = rate
 
 
 if __name__ == "__main__":

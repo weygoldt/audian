@@ -840,6 +840,13 @@ class ImageLayer(pg.GraphicsObject):
     the image is drawn ``quick`` (`LineItem.paint`): one aliased pass per
     line, no dark edge; the full image follows `SETTLE_MS` after the last
     move.
+
+    During a pan the overlay hands the layer members computed for a wider
+    view (`set_pad`, see `TrackOverlay._geometry_view`); the layer then draws
+    that whole padded rectangle once and, for the following steps of the
+    pan, only moves the picture -- which is all a pan does to it.  At rest
+    the exact view is computed and drawn again, so the picture at rest is
+    the same as without the pad.
     """
 
     SETTLE_MS = 120
@@ -859,6 +866,12 @@ class ImageLayer(pg.GraphicsObject):
         self._quick = False
         self._moving_until = 0.0
         self._scale = None  # data units per device pixel, from the last paint
+        # data rectangle the members cover while a pan moves (`set_pad`),
+        # the key of the padded picture, and where it sits relative to the
+        # rectangle's device position
+        self._pad = None
+        self._pad_key = None
+        self._pad_origin = QPointF()
         self._settle = QTimer()
         self._settle.setSingleShot(True)
         self._settle.timeout.connect(self._settled)
@@ -897,6 +910,18 @@ class ImageLayer(pg.GraphicsObject):
             self._dirty_rects.append(rect)
         self.update(rect)
 
+    #: the largest padded picture, in device pixels; beyond it the layer
+    #: draws the exact view as before
+    PAD_MAX_PX = 48_000_000
+
+    def set_pad(self, rect) -> None:
+        """The data rectangle the members cover while the view moves, or
+        None: they cover the view and the layer draws just that."""
+        rect = None if rect is None else QRectF(rect)
+        if rect != self._pad:
+            self._pad = rect
+            self._pad_key = None
+
     def view_moving(self) -> None:
         """The view is moving: draw quick until it rests."""
         self._moving_until = time.perf_counter() + self.SETTLE_MS / 1000.0
@@ -922,10 +947,60 @@ class ImageLayer(pg.GraphicsObject):
     def dataBounds(self, ax, frac=1.0, orthoRange=None):  # noqa: N802, N803
         return (None, None)
 
+    def _paint_padded(self, painter, m, dpr: float) -> bool:
+        """Paint from the padded picture; False when there is none to use.
+
+        Drawn once per padded rectangle and scale: later paints of the same
+        pan put it where the rectangle now is.  The picture keeps the
+        sub-pixel phase of the first step, so a line may sit up to half a
+        device pixel off while the view moves -- the quick picture is
+        aliased anyway, and the exact one follows when the view rests.
+        """
+        full = m.mapRect(self._pad)
+        if full.isEmpty():
+            return False
+        if full.width() * full.height() * dpr * dpr > self.PAD_MAX_PX:
+            return False
+        key = (
+            round(full.width(), 3), round(full.height(), 3), dpr,
+            m.m11(), m.m12(), m.m21(), m.m22(),
+            self._pad.x(), self._pad.y(), self._pad.width(), self._pad.height(),
+        )  # fmt: skip
+        if self._dirty or key != self._pad_key:
+            self._pad_key = key
+            # the exact path has to draw afresh after this
+            self._key = None
+            self._dirty = False
+            self._dirty_full = False
+            self._dirty_rects = []
+            sx = 1.0 / abs(m.m11()) if m.m11() else 0.0
+            sy = 1.0 / abs(m.m22()) if m.m22() else 0.0
+            self._scale = (sx, sy)
+            if all(item.boundingRect().isEmpty() for item in self.members):
+                for item in self.members:
+                    item._shown_rect = QRectF()
+                self._image = None
+                return True
+            target = full.toAlignedRect()
+            self._render(m, target, dpr, True, None)
+            self._pad_origin = QPointF(target.topLeft()) - full.topLeft()
+            self._quick = True
+        if self._image is None:
+            return True
+        pos = full.topLeft() + self._pad_origin
+        painter.save()
+        painter.resetTransform()
+        painter.drawImage(QPointF(round(pos.x()), round(pos.y())), self._image)
+        painter.restore()
+        return True
+
     def paint(self, painter, option, widget=None) -> None:
         if self._rect.isEmpty() or not self.members:
             return
         m = painter.transform()
+        if self._pad is not None and time.perf_counter() < self._moving_until:
+            if self._paint_padded(painter, m, _device_ratio(painter)):
+                return
         target = m.mapRect(self._rect).intersected(QRectF(painter.window()))
         target = target.toAlignedRect()
         if target.isEmpty():
@@ -935,6 +1010,7 @@ class ImageLayer(pg.GraphicsObject):
             target.x(), target.y(), target.width(), target.height(), dpr,
             m.m11(), m.m12(), m.m21(), m.m22(), m.dx(), m.dy(),
         )  # fmt: skip
+        self._pad_key = None
         if self._dirty or key != self._key:
             partial = (
                 self._dirty_rects if key == self._key and not self._dirty_full else None
@@ -1045,6 +1121,16 @@ def _empty():
     return np.zeros(0), np.zeros(0)
 
 
+def _same_scale(a: G.View, b: G.View) -> bool:
+    """Whether two views draw at the same scale and frequency range."""
+    return (
+        abs(a.sx - b.sx) <= 1e-9 * abs(a.sx)
+        and a.y0 == b.y0
+        and a.y1 == b.y1
+        and a.h_px == b.h_px
+    )
+
+
 def view_of(ax) -> G.View:
     """The `geometry.View` of a lane, from its view box."""
     vb = ax if isinstance(ax, pg.ViewBox) else ax.getViewBox()
@@ -1066,6 +1152,14 @@ def view_of(ax) -> G.View:
 class TrackOverlay:
     """Every track of the session, on one spectrogram lane."""
 
+    #: While a pan moves the view at a constant scale, the base layer is
+    #: computed and drawn for the view widened by this fraction of its width
+    #: on either side; the next steps of the pan only move that picture,
+    #: until the view reaches the edge of the pad.  Measured on the iriri
+    #: session at 4K, two lanes: computing and drawing the base layer cost
+    #: 19 ms of every 38 ms pan step.  See `_geometry_view`.
+    MOTION_PAD = 0.5
+
     def __init__(self, ax, scene: G.SceneState, cache: G.RenderCache) -> None:
         self.ax = ax
         self.scene = scene
@@ -1078,6 +1172,11 @@ class TrackOverlay:
         self.last_ms = 0.0
         self.last_base_ms = 0.0
         self.geometry: G.Geometry | None = None
+        # the padded view the base layer was computed for while a pan moves,
+        # and the exact view of the previous update; see `_geometry_view`
+        self._motion_view = None
+        self._last_view = None
+        self._exact = False
 
         self.veil = self._add(VeilItem(), VEIL_Z)
         self.range_item = self._add(RangeItem(), RANGE_Z)
@@ -1129,6 +1228,10 @@ class TrackOverlay:
         self._flash_timer.timeout.connect(self._flash_step)
         self._flash_t0 = 0.0
 
+        # after the layer's own settle handler: the exact view replaces the
+        # padded one before the full-quality picture is drawn
+        self.layer._settle.timeout.connect(self._view_rested)
+
         vb = ax.getViewBox()
         if vb is not None:
             vb.sigRangeChanged.connect(self._view_changed)
@@ -1176,6 +1279,54 @@ class TrackOverlay:
         for layer in (self.layer, self.low, self.high):
             layer.view_moving()
         self.schedule()
+
+    def _view_rested(self) -> None:
+        """The view stopped moving: draw the exact view, not the padded one."""
+        if self._motion_view is None:
+            return
+        self._exact = True
+        try:
+            self.update_plot()
+        finally:
+            self._exact = False
+
+    def _geometry_view(self, view: G.View) -> G.View:
+        """The view to compute the base layer for.
+
+        `view` itself, except while a pan moves it: from the second step of
+        a move that keeps the scale, a view `MOTION_PAD` widths wider on
+        either side, kept for as long as the moving view stays inside it.
+        Its pixel density is the view's own, so it holds the same thinned
+        points and lines; `ImageLayer` draws it once and moves it.  A zoom
+        changes the scale on every step and is drawn exactly, as before.
+        """
+        moving = not self._exact and time.perf_counter() < self.layer._moving_until
+        previous, self._last_view = self._last_view, view
+        if not moving:
+            self._motion_view = None
+            return view
+        padded = self._motion_view
+        if (
+            padded is not None
+            and _same_scale(padded, view)
+            and padded.x0 <= view.x0
+            and view.x1 <= padded.x1
+        ):
+            return padded
+        if previous is None or not _same_scale(previous, view):
+            self._motion_view = None
+            return view
+        pad = self.MOTION_PAD * (view.x1 - view.x0)
+        padded = G.View(
+            view.x0 - pad,
+            view.x1 + pad,
+            view.y0,
+            view.y1,
+            view.w_px * (1.0 + 2.0 * self.MOTION_PAD),
+            view.h_px,
+        )
+        self._motion_view = padded
+        return padded
 
     def schedule(self) -> None:
         """Redraw once, at the end of this event-loop turn."""
@@ -1231,10 +1382,11 @@ class TrackOverlay:
         ts = scene.ts
         snippet = scene.snippet
         self._draw_range(scene.track_range)
+        gview = self._geometry_view(view)
         base_key = (
             id(ts),
             getattr(ts, "revision", -1),
-            view.key(),
+            gview.key(),
             scene.display_key(),
             self.colours.key(),
             id(snippet),
@@ -1243,10 +1395,20 @@ class TrackOverlay:
         if base_key != self._base_key:
             self._base_key = base_key
             t0 = time.perf_counter()
-            self._draw_base(ts, view)
-            self._draw_snippet(snippet, view)
+            self._draw_base(ts, gview)
+            self._draw_snippet(snippet, gview)
             self.last_base_ms = 1000 * (time.perf_counter() - t0)
             self._preview_key = None
+        # All three layers draw the padded rectangle while the pan moves.
+        # The previews (an issue's outline, the selection) are cheap to
+        # compute but were most of the drawing -- each layer is a whole lane
+        # of pixels -- and a picture that only moves need not be redrawn.
+        if gview is view:
+            pad = None
+        else:
+            pad = QRectF(gview.x0, gview.y0, gview.x1 - gview.x0, gview.y1 - gview.y0)
+        for layer in (self.layer, self.low, self.high):
+            layer.set_pad(pad)
         preview_key = (base_key, scene.revision)
         if preview_key != self._preview_key:
             self._preview_key = preview_key

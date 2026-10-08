@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, get_window, sosfilt
 from thunderlab.powerspectrum import spectrogram
 
 from audian.bufferedfilter import BufferedFilter
-from audian.bufferedspectrogram import BufferedSpectrogram
+from audian.bufferedspectrogram import BufferedSpectrogram, power_spectra
 from audian.tasks.tokens import Cancelled, CancelToken
 
 RATE = 20000.0
@@ -84,6 +84,19 @@ def test_the_warm_up_region_is_still_dropped(source):
 
 
 def test_a_chunked_spectrogram_is_bit_identical_to_one_call(source):
+    """Blocks of any size, transformed in parallel or not, give one picture.
+
+    Bit-identical to `power_spectra` over the whole buffer in one call --
+    the seam test, which is what this file is for: a lost carry-back shifts
+    a column per block, so `array_equal` and nothing looser.
+
+    Against thunderlab's `spectrogram` (scipy) the kernel agrees to
+    rounding rather than to the bit: it takes each window's mean over a
+    contiguous copy instead of through scipy's channel-strided view, which
+    sums in another order (and is what made it four times slower).  A shift
+    by one column, or a wrong scale, window or detrend, is many orders of
+    magnitude outside that tolerance.
+    """
     for nfft, overlap in ((256, 0.5), (512, 0.75)):
         spec = BufferedSpectrogram(nfft=nfft, overlap_frac=overlap)
         spec.open(source)
@@ -97,7 +110,14 @@ def test_a_chunked_spectrogram_is_bit_identical_to_one_call(source):
             n_fft=nfft,
             n_overlap=nfft - hop,
         )
-        reference = Sxx.transpose((1, 2, 0))[:ncols]
+        scipy_reference = Sxx.transpose((1, 2, 0))[:ncols]
+        reference = power_spectra(
+            source.buffer, RATE, nfft, hop, get_window("hann", nfft)
+        )[:ncols]
+        assert reference.shape == scipy_reference.shape
+        assert np.allclose(reference, scipy_reference, rtol=1e-9, atol=0), (
+            f"nfft={nfft}: the kernel is not scipy's spectrogram"
+        )
 
         for chunk in (17, 128, 4096):
             spec.chunk_columns = chunk
@@ -107,6 +127,24 @@ def test_a_chunked_spectrogram_is_bit_identical_to_one_call(source):
                 f"nfft={nfft} chunk={chunk} columns differ"
             )
             assert "frequencies" in extra
+
+
+def test_a_float32_source_is_transformed_in_single_precision(source):
+    """What scipy does with the float32 filtered trace, the kernel does too.
+
+    `BufferedData` keeps derived traces in float32, and scipy then computes
+    the whole spectrogram in single precision.  The denoiser chain sees the
+    block in that dtype, so the kernel must not quietly widen it.
+    """
+    x = source.buffer.astype(np.float32)
+    nfft, hop = 256, 128
+    _, _, Sxx = spectrogram(
+        x, RATE, freq_resolution=None, overlap_frac=None, n_fft=nfft, n_overlap=hop
+    )
+    want = Sxx.transpose((1, 2, 0))
+    got = power_spectra(x, RATE, nfft, hop, get_window("hann", nfft))
+    assert got.dtype == want.dtype == np.float32
+    assert np.allclose(got, want, rtol=1e-4, atol=1e-6 * float(want.max()))
 
 
 def test_a_cancelled_filter_stops_inside_the_buffer(source):

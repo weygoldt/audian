@@ -35,7 +35,10 @@ from audian.tasks.manager import TaskManager
 
 RATE = 20000.0
 CHANNELS = 8
-NFRAMES = 600000
+#: 100 s.  Was 30 s (600,000 frames) until the spectrogram moved to a
+#: faster kernel on a thread pool: the chain then took 41-44 ms in the full
+#: suite, under `MIN_JOB_MS`.  Only the size of the workload changed.
+NFRAMES = 2_000_000
 
 #: how often the timer under test wants to fire
 TICK_MS = 16

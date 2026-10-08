@@ -196,6 +196,11 @@ class SpectrogramPlot(TimePlot):
         self._refit_timer = QTimer(self)
         self._refit_timer.setSingleShot(True)
         self._refit_timer.timeout.connect(self._refit_levels)
+        # The image is uploaded for the visible frequency band only, so a
+        # change of that band has to reach it.  Synchronous, so the frame
+        # that shows the new band shows its pixels too; cheap, because the
+        # item returns at once while its padded band still covers the view.
+        self.getViewBox().sigYRangeChanged.connect(self._band_changed)
         # ColorBarItem is a PlotItem, so it comes with the same hidden QMenu
         # tree.  16 channels build 16 of them:
         self.cbar.setMenuEnabled(False)
@@ -454,23 +459,73 @@ class SpectrogramPlot(TimePlot):
         # stride instead of the whole buffer.  It keeps its own
         # containment hysteresis, so calling this on every range change
         # is cheap and only re-uploads when the view leaves the pad.
-        t0, t1 = self.getViewBox().viewRange()[0]
+        (t0, t1), (f0, f1) = self.getViewBox().viewRange()
         for item in self.data_items:
             if hasattr(item, "set_view_range"):
                 item.set_view_range(t0, t1)
+            if hasattr(item, "set_band"):
+                item.set_band(f0, f1)
         super().update_plot()
-        block = self.visible_block()
-        if block is None:
+        power = self.visible_power()
+        if power is None:
             return
-        power = np.mean(block, axis=0)
         power = decibel(power)
         power[power < -200] = -200
         freqs = np.arange(len(power)) * self.spec_data.fresolution
-        zeros = np.zeros(len(freqs)) - 200
+        # The zero line only changes with the frequency axis.  Setting it
+        # anyway made the fill between the two curves rebuild its path a
+        # second time on every pan step (0.2 ms a lane).
+        zero_x, zero_y = self.powerax.zero_item.getData()
+        if zero_y is None or not np.array_equal(zero_y, freqs):
+            self.powerax.zero_item.setData(np.zeros(len(freqs)) - 200, freqs)
         self.powerax.power_item.setData(power, freqs)
-        self.powerax.zero_item.setData(zeros, freqs)
         if not self._levels_fitted:
-            self.fit_levels(block)
+            self.fit_levels()
+
+    def _band_changed(self, _viewbox=None, frange=None) -> None:
+        """Upload what a new frequency band shows, if it is not uploaded."""
+        if frange is None:
+            frange = self.getViewBox().viewRange()[1]
+        f0, f1 = frange
+        for item in self.data_items:
+            if isinstance(item, SpecItem):
+                item.set_band(f0, f1)
+                if item.isVisible() and item._image_range is not None:
+                    item.update_plot()
+
+    def visible_power(self):
+        """Mean power over the visible time range, per bin, or None.
+
+        ``visible_block().mean(axis=0)``, from the spectrogram's cached
+        column sums rather than from the block; see
+        `BufferedSpectrogram.column_sums`.  Falls back to the block when the
+        view is not inside the buffer.
+        """
+        data = self.spec_data
+        if data is None:
+            return None
+        t0, t1 = self.getViewBox().viewRange()[0]
+        # the same index range as `visible_block`
+        i0 = max(0, int(t0 * data.rate))
+        i1 = max(int(t1 * data.rate) - 1, i0 + 1)
+        if i1 > len(data):
+            i1 = len(data)
+            if i1 == i0:
+                i0 = max(0, i1 - 1)
+        if i1 <= i0:
+            return None
+        if (
+            not hasattr(data, "column_sums")
+            or data.buffer.ndim < 3
+            or i0 < data.offset
+            or i1 > data.offset + len(data.buffer)
+        ):
+            block = self.visible_block()
+            return None if block is None else np.mean(block, axis=0)
+        sums = data.column_sums(i0 - data.offset, i1 - data.offset)
+        if self.mean_channels is None:
+            return sums[self.channel] / (i1 - i0)
+        return sums[self.mean_channels].mean(axis=0) / (i1 - i0)
 
     def visible_block(self):
         """The in-view slice of the spectrogram this panel draws, or None.

@@ -1512,10 +1512,21 @@ a 2 s middle-drag took 29 s to finish replaying.  Now:
 * The track table refills 80 ms after an edit instead of inside it.
 
 `tests/measure_eodsorter.py --4k [--dpr 2] [--recording R --results D]`
-measures all of this end to end, input event to painted frame.  What is
-left is audian's own cost of moving the view (a pan step, a G jump):
-every lane re-reads its buffer and recomputes the decibel image over the
-whole frequency range, 40-70 ms a step for two channels at 4K.
+measures all of this end to end, input event to painted frame; its view
+section (`--view-only`, `--plain` for audian without the plugin) times
+pans, held keys and jumps.
+
+Moving the view itself was made cheap in audian's core afterwards: the
+buffers keep a lead around the view and shift in place instead of being
+reallocated and re-read, the spectrogram is transformed four times faster
+on a thread pool, only the visible band is converted to decibel and
+uploaded, and pans and keyboard steps are applied once per event-loop
+turn.  Here, while a pan keeps the scale, `TrackOverlay` computes the base
+layer for the view widened by half its width on either side and the image
+layers draw that once and move it (`_geometry_view`, `ImageLayer.set_pad`);
+the exact view is drawn when the pan rests.  Iriri at 4K, two lanes:
+middle-drag pan 8 -> 31 view updates/s, 300 -> 85 ms to the frame; a G
+jump 70-200 -> 20-50 ms.
 
 ---------------------------------------------------------------------------
 

@@ -1996,6 +1996,13 @@ class DataBrowser(QWidget):
         self.resolution_timer = QTimer(self)
         self.resolution_timer.setSingleShot(True)
         self.resolution_timer.timeout.connect(self.apply_resolution)
+        # keyboard time steps waiting to be applied together; see
+        # `apply_time_ranges`
+        self.pending_time_steps = []
+        self.time_step_timer = QTimer(self)
+        self.time_step_timer.setSingleShot(True)
+        self.time_step_timer.setInterval(0)
+        self.time_step_timer.timeout.connect(self.apply_pending_time_ranges)
         self.pending_nfft = None
         self.pending_overlap = None
         self.denoise_timer = QTimer(self)
@@ -4861,6 +4868,7 @@ class DataBrowser(QWidget):
             "filter_timer",
             "envelope_timer",
             "resolution_timer",
+            "time_step_timer",
             "denoise_timer",
             "overview_timer",
         ):
@@ -8964,18 +8972,40 @@ class DataBrowser(QWidget):
             self.auto_fit_y()
 
     def apply_time_ranges(self, timefunc):
+        """Step the time range (`PlotRanges` method `timefunc`), coalesced.
+
+        Reached from twelve keyboard actions -- both zooms, both centred
+        zooms, up, down, the small steps, home, end and snap.  A held key
+        repeats at 25-30 Hz, and a step that needs new data (a page is half
+        a window) takes longer than that, so the repeats used to queue up
+        and the view kept moving for a second after the key was let go.  The
+        step is queued here and all steps that arrived during one event-loop
+        turn are applied by `apply_pending_time_ranges` with a single data
+        update, so a slow step makes the next one larger instead of later.
+        """
+        self.pending_time_steps.append(timefunc)
+        if not self.time_step_timer.isActive():
+            self.time_step_timer.start()
+
+    def apply_pending_time_ranges(self):
         # Same rule as `set_times` above, and for the same reason: this also
         # calls `update_times`, which shifts the loader's buffer in place
         # while `run_job` may be slicing that very array on the worker
-        # thread.  It is reached from twelve keyboard actions -- both zooms,
-        # both centred zooms, up, down, the small steps, home, end and snap
-        # -- and fans out to every linked browser, so the window in which a
-        # filter change is still recomputing and a key lands is wide.
-        # Without the resume the abandoned recompute is silently dropped too.
+        # thread.  The steps fan out to every linked browser, so the window
+        # in which a filter change is still recomputing and a key lands is
+        # wide.  Without the resume the abandoned recompute is silently
+        # dropped too.
+        self.time_step_timer.stop()
+        steps, self.pending_time_steps = self.pending_time_steps, []
+        if not steps:
+            return
         if self.tasks is not None:
             self.tasks.cancel_and_wait()
         with self.updating():
-            getattr(self.plot_ranges, timefunc)(Panel.times[0], None, self.isVisible())
+            for timefunc in steps:
+                getattr(self.plot_ranges, timefunc)(
+                    Panel.times[0], None, self.isVisible()
+                )
             trange = self.plot_ranges[Panel.times[0]]
             fn = self.data.update_times(trange.r0[0], trange.r1[0])
             self.sigFilenameChanged.emit(self, fn)

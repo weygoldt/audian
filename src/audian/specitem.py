@@ -8,7 +8,7 @@ from PySide6.QtGui import QPainter
 from thunderlab.powerspectrum import decibel
 
 from . import smoothing
-from .bufferedspectrogram import channel_power
+from .bufferedspectrogram import channel_power, fast_decibel
 from .dataitem import VisibleChannelMirror
 
 
@@ -35,6 +35,20 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
     #: uploaded columns per device pixel of widget width
     pixel_oversample = 2
 
+    #: How much of the visible frequency band is uploaded above and below
+    #: it, as a fraction of its height.  Only the band is converted to
+    #: decibel and uploaded: a wavetracker view of 300-1300 Hz on a 48 kHz
+    #: recording shows 6 of 129 bins, and converting the other 123 cost
+    #: 14 ms per lane per pan step.  The pad makes a vertical pan or zoom
+    #: free until the view leaves it, like `view_pad` does in time.
+    band_pad = 0.5
+
+    #: Bins always uploaded beyond the visible band, whatever its height, so
+    #: that a smoothing filter sees the same neighbours at the edge of the
+    #: view as it would over the whole axis: the widest, the strong Gaussian
+    #: (sigma 2, truncated at 4 sigma), reaches 8 bins.
+    band_margin = 10
+
     def __init__(self, data, channel, *args, **kwargs):
         pg.ImageItem.__init__(self, **kwargs)
         self.setOpts(axisOrder="row-major")
@@ -45,8 +59,15 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
         self.mean_channels = None
         # visible time range as told by the panel; None means "whole buffer"
         self._view_range = None
+        # visible frequency band as told by the panel; None means "all bins"
+        self._band = None
         # index range and stride of what is currently uploaded
         self._image_range = None
+        # frequency bins `[k0, k1)` of what is currently uploaded
+        self._image_band = None
+        # the decibel image before smoothing, and what it was made from:
+        # see `_decibel_image`
+        self._raw = None
         # how the image is smoothed on its way to the screen; see `smoothing`
         self.smoothing = smoothing.DEFAULT
 
@@ -60,6 +81,15 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
         old behaviour.
         """
         self._view_range = (float(t0), float(t1))
+
+    def set_band(self, f0: float, f1: float) -> None:
+        """Tell the item which frequency band is visible.
+
+        Like `set_view_range`, for the other axis: until it is called the
+        item uploads every bin.  Cheap; `update_plot` decides whether the
+        uploaded band still covers it.
+        """
+        self._band = (float(f0), float(f1))
 
     def set_mean_channels(self, channels) -> bool:
         """Draw the mean power over `channels`, or `None` for own channel.
@@ -156,15 +186,17 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
 
         The image is `(frequency, time)` -- `update_plot` uploads
         `block.T` and the item is `row-major` -- strided in time by
-        whatever the widget's width asked for and not strided at all in
-        frequency.
+        whatever the widget's width asked for, cropped in frequency to
+        `_image_band` and not strided there at all.
         """
         image = self.image
         if image is None or self._image_range is None or image.ndim != 2:
             return None
         i0, _i1, stride = self._image_range
-        ti, row = self.cell_at(t, f)
+        k0 = self._image_band[0] if self._image_band is not None else 0
+        ti, fi = self.cell_at(t, f)
         col = (ti - self.data.offset - i0) // stride
+        row = fi - k0
         if not (0 <= row < image.shape[0] and 0 <= col < image.shape[1]):
             return None
         return float(image[row, col])
@@ -262,31 +294,144 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
             return 0, n
         return i0, i1
 
+    def visible_bins(self, nbins: int) -> tuple[int, int]:
+        """Frequency bin range `[b0, b1)` that is on screen, clamped."""
+        if self._band is None or nbins == 0:
+            return 0, nbins
+        fres = self.data.fresolution
+        # bin k is drawn over [(k - 1/2) df, (k + 1/2) df); see `cell_at`
+        b0 = int(floor(self._band[0] / fres + 0.5))
+        b1 = int(floor(self._band[1] / fres + 0.5)) + 1
+        b0 = max(0, min(nbins, b0))
+        b1 = max(b0, min(nbins, b1))
+        if b1 <= b0:
+            return 0, nbins
+        return b0, b1
+
+    def _decibel_image(self, i0: int, i1: int, stride: int, k0: int, k1: int):
+        """The decibel image of buffer rows `i0:i1:stride`, bins `k0:k1`.
+
+        When the buffer has only moved since the last upload, the columns
+        both crops share are taken from the last image instead of being
+        converted again: on sixteen lanes of the full band every move of
+        the buffer re-converted the whole padded crop of every lane, 6 ms a
+        lane.  Only columns whose frames stayed in the buffer the whole
+        time are taken (`BufferedData.stable_extent`), and a column's
+        decibel depends on nothing but its own bins, so the image is
+        identical to converting all of it.
+        """
+        data = self.data
+        offset = data.offset
+        ncols = (i1 - i0) // stride
+        raw = self._raw
+        self._raw = None
+        reuse = None
+        if (
+            raw is not None
+            and raw["stride"] == stride
+            and raw["band"] == (k0, k1)
+            and raw["source"] == (self.channel, self.mean_channels)
+            and hasattr(data, "stable_extent")
+        ):
+            extent = data.stable_extent(raw["generation"], raw["seq"])
+            if extent is not None:
+                lo = max(extent[0], raw["start"])
+                hi = min(extent[1], raw["start"] + raw["image"].shape[1] * stride)
+                # absolute frames on both column grids (both are multiples
+                # of the stride), inside both crops
+                a = max(lo, offset + i0)
+                b = min(hi, offset + i0 + ncols * stride)
+                a += (-(a - raw["start"])) % stride
+                if b > a:
+                    reuse = (a, b)
+        if reuse is None:
+            block = self.power_block(data.buffer[i0:i1:stride, :, k0:k1])
+            image = fast_decibel(block.T)
+        else:
+            a, b = reuse
+            image = np.empty((k1 - k0, ncols), dtype=raw["image"].dtype)
+            j0 = (a - offset - i0) // stride
+            j1 = j0 + (b - a + stride - 1) // stride
+            r0 = (a - raw["start"]) // stride
+            image[:, j0:j1] = raw["image"][:, r0 : r0 + (j1 - j0)]
+            for c0, c1 in ((0, j0), (j1, ncols)):
+                if c1 > c0:
+                    rows = data.buffer[i0 + c0 * stride : i0 + c1 * stride : stride]
+                    block = self.power_block(rows[:, :, k0:k1])
+                    image[:, c0:c1] = fast_decibel(block.T)
+        self._raw = {
+            "image": image,
+            "start": offset + i0,
+            "stride": stride,
+            "band": (k0, k1),
+            "source": (
+                self.channel,
+                None if self.mean_channels is None else list(self.mean_channels),
+            ),
+            "generation": getattr(data, "content_generation", None),
+            "seq": getattr(data, "move_seq", None),
+        }
+        return image
+
     def update_plot(self):
+        """Upload the visible part of the buffer, if it is not uploaded yet.
+
+        Cropped in time to the view plus `view_pad` and in frequency to the
+        band plus `band_pad`, and strided in time to the widget's width.  The
+        stride is what the *visible* span needs, and its columns sit on
+        absolute frame indices that are multiples of it: so a pan neither
+        changes the stride nor which columns are drawn, and the picture of a
+        view is the same whichever way the view was reached.  Nothing is
+        re-uploaded while the uploaded crop still covers the view at that
+        stride and the buffer has not changed.
+        """
         n = len(self.data.buffer)
         if n == 0 or self.data.buffer.ndim < 3:
             return
+        nbins = self.data.buffer.shape[2]
         v0, v1 = self.visible_indices()
+        b0, b1 = self.visible_bins(nbins)
         columns = self.max_columns()
-        # stride the visible range alone would need; panning must not change
-        # it, otherwise every pan invalidates the upload:
-        needed = max(1, (v1 - v0) // columns)
+        # stride the visible range alone needs.  From the view's length in
+        # seconds rather than from `v1 - v0`, which flips by one as the
+        # view's edges cross frame boundaries during a pan.
+        if self._view_range is not None:
+            span = int(
+                round((self._view_range[1] - self._view_range[0]) * self.data.rate)
+            )
+        else:
+            span = v1 - v0
+        needed = max(1, span // columns)
         # every channel of the buffer is refilled in one go, so this one
         # flag answers for the mean as well as for a single channel:
         changed = bool(self.data.buffer_changed[self.channel])
         if not changed and self._image_range is not None:
             i0, i1, stride = self._image_range
-            if i0 <= v0 and v1 <= i1 and stride <= needed:
-                # what is on screen is already uploaded at enough detail
+            k0, k1 = self._image_band if self._image_band is not None else (0, nbins)
+            if i0 <= v0 and v1 <= i1 and k0 <= b0 and b1 <= k1 and stride == needed:
+                # what is on screen is already uploaded at its detail
                 return
+        stride = needed
         pad = int(SpecItem.view_pad * max(1, v1 - v0))
         i0 = max(0, v0 - pad)
         i1 = min(n, v1 + pad)
-        stride = max(1, (i1 - i0) // columns)
+        # columns on absolute multiples of the stride
+        first = self.data.offset + i0
+        i0 += (-first) % stride
+        if i0 >= i1:
+            i0 = max(0, i1 - stride)
+        i1 = i0 + max(1, (i1 - i0) // stride) * stride
+        if i1 > n:
+            i1 = i0 + max(1, (n - i0) // stride) * stride
+        if self._band is None:
+            k0, k1 = 0, nbins
+        else:
+            fpad = int(SpecItem.band_pad * max(1, b1 - b0)) + SpecItem.band_margin
+            k0 = max(0, b0 - fpad)
+            k1 = min(nbins, b1 + fpad)
+        image = self._decibel_image(i0, i1, stride, k0, k1)
         self._image_range = (i0, i1, stride)
-        block = self.power_block(self.data.buffer[i0:i1:stride])
-        with np.errstate(all="ignore"):
-            image = decibel(block.T)
+        self._image_band = (k0, k1)
         # Filtered here and not in the buffer: this is the one array that is
         # already cropped to what is on screen and already decimated to the
         # widget's own width, so the filter runs over the pixels it is going
@@ -294,10 +439,11 @@ class SpecItem(VisibleChannelMirror, pg.ImageItem):
         self.setImage(smoothing.smooth(image, self.smoothing), autoLevels=False)
         # rect covers the CROPPED extent, not data.spec_rect:
         rate = self.data.rate
+        fres = self.data.fresolution
         self.setRect(
             (self.data.offset + i0) / rate + self.time_shift(),
-            -0.5 * self.data.fresolution,
+            (k0 - 0.5) * fres,
             (i1 - i0) / rate,
-            self.data.source.rate / 2 + self.data.fresolution,
+            (k1 - k0) * fres,
         )
         self.data.buffer_changed[self.channel] = False

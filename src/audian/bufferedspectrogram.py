@@ -1,8 +1,14 @@
 """Spectrogram of source data on the fly."""
 
-import numpy as np
+import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
-from thunderlab.powerspectrum import decibel, spectrogram
+import numpy as np
+from scipy import fft as sp_fft
+from scipy.signal import get_window
+
+from thunderlab.powerspectrum import decibel
 
 from . import denoise
 from .buffereddata import BufferedData
@@ -37,6 +43,105 @@ def channel_power(block, channel):
     if channels == list(range(block.shape[1])):
         return block.mean(axis=1)
     return block[:, channels, :].mean(axis=1)
+
+
+def fast_decibel(power, min_power=1e-20):
+    """`thunderlab.powerspectrum.decibel` for arrays, bit for bit, in place.
+
+    ``decibel`` copies its input, gathers the bins above `min_power` into a
+    second array, takes their log and scatters it back: four passes and two
+    fancy-index operations.  This takes one contiguous copy (C order, which
+    `pg.ImageItem` wants anyway) and works on it in place.  Every element
+    goes through the same ``10 * log10(p)`` on a contiguous array, so the
+    result is identical -- including NaN staying NaN and anything at or below
+    `min_power` (zero, negative) becoming ``-inf``.  Measured on the image
+    `SpecItem` uploads for a 60 s, 48 kHz view at 4K: 7.1 ms -> 2.0 ms.
+    """
+    out = np.array(power, dtype=np.result_type(power, np.float32), order="C")
+    low = out <= min_power
+    with np.errstate(all="ignore"):
+        np.log10(out, out=out)
+    out *= 10.0
+    out[low] = -np.inf
+    return out
+
+
+class _Pool:
+    """A few threads for transforming spectrogram blocks side by side.
+
+    numpy's ufuncs and scipy's FFT release the GIL, so independent column
+    blocks really do run in parallel.  Shared by every spectrogram; created
+    on first use.  Only the transform runs here: the denoiser chain, which
+    is plugin code, stays on the calling thread.
+    """
+
+    lock = Lock()
+    executor = None
+    #: at four the curve flattens (60 s, 48 kHz, 2 channels: one thread
+    #: 42 ms, two 27 ms, four 18 ms, eight 17 ms)
+    threads = max(1, min(4, (os.cpu_count() or 1)))
+
+    @classmethod
+    def get(cls):
+        with cls.lock:
+            if cls.executor is None and cls.threads > 1:
+                cls.executor = ThreadPoolExecutor(
+                    cls.threads, thread_name_prefix="audian-spec"
+                )
+            return cls.executor
+
+
+def power_spectra(source, rate, nfft, hop, window):
+    """One-sided power spectral density of every full window in `source`.
+
+    `source` is ``(frames, channels)``; the result is
+    ``(columns, channels, nfft//2 + 1)`` in the dtype scipy would give --
+    float32 for a float32 source, float64 otherwise.
+
+    The same arithmetic as `scipy.signal.spectrogram` with ``detrend=
+    'constant'``, ``scaling='density'``, ``mode='psd'`` (what
+    `thunderlab.powerspectrum.spectrogram` asks for): subtract each window's
+    mean, multiply by the window, real FFT, ``|X|^2`` times
+    ``1/(rate*sum(w^2))``, doubled except at DC and Nyquist.  scipy reads
+    the windows through a view whose window axis is strided by the channel
+    count, and numpy's mean over that axis costs more than the FFT itself:
+    on 60 s of 48 kHz stereo 178 ms for the transform against 42 ms here,
+    where the samples are made channel-major first so every window is
+    contiguous.  The sums run in a different order, so the result agrees
+    with scipy to rounding (relative 1e-11 in float64), not to the bit;
+    a column depends only on its own samples, so blocks of any size
+    still give bit-identical columns -- see `tests/test_chunked_dsp.py`.
+    """
+    source = np.asarray(source)
+    dtype = np.float32 if source.dtype == np.float32 else np.float64
+    ncols = (len(source) - nfft) // hop + 1
+    channels = source.shape[1]
+    nbins = nfft // 2 + 1
+    if ncols < 1:
+        return np.zeros((0, channels, nbins), dtype=dtype)
+    win = window.astype(dtype)
+    scale = dtype(1.0 / (rate * float(np.sum(window * window))))
+    used = source[: (ncols - 1) * hop + nfft]
+    samples = np.ascontiguousarray(used.T, dtype=dtype)  # (channels, frames)
+    step = samples.strides[1]
+    frames = np.lib.stride_tricks.as_strided(
+        samples,
+        shape=(channels, ncols, nfft),
+        strides=(samples.strides[0], hop * step, step),
+        writeable=False,
+    )
+    seg = frames - frames.mean(axis=-1, keepdims=True, dtype=dtype)
+    seg *= win
+    spec = sp_fft.rfft(seg, axis=-1)
+    power = np.empty(spec.shape, dtype=dtype)
+    np.multiply(spec.real, spec.real, out=power)
+    power += spec.imag * spec.imag
+    power *= scale
+    if nfft % 2:
+        power[..., 1:] *= 2
+    else:
+        power[..., 1:-1] *= 2
+    return power.transpose(1, 0, 2)
 
 
 NOISE_FLOOR_MARGIN_DB = 3.0
@@ -107,19 +212,34 @@ class BufferedSpectrogram(BufferedData):
         self.ampl_min = 0
         self.ampl_max = self.source.rate / 2
 
-    #: Columns transformed per chunk.  The blocks are hop-aligned and each
-    #: carries back the `nfft - hop` frames its first window needs, which is
-    #: what makes the result **bit-identical** to transforming the whole
-    #: buffer in one call -- see `tests/test_chunked_dsp.py`.
+    #: Columns transformed per chunk, or None to size chunks by
+    #: `chunk_samples`.  The blocks are hop-aligned and each carries back
+    #: the `nfft - hop` frames its first window needs, which is what makes
+    #: the result **bit-identical** to transforming the whole buffer in one
+    #: call -- see `tests/test_chunked_dsp.py`.
     #:
     #: The point is interruptibility: a superseded spectrogram gives the CPU
     #: back within one chunk instead of after the whole buffer.  It is also
-    #: faster, because a block this size stays in cache.  Measured on the
-    #: 16 channel, 20 kHz, 27 s buffer (4251 columns, nfft 256), against
-    #: 447 ms for the single call: 1024 cols -0.4%, 512 -0.5%, 256 -11.0%,
-    #: 128 -19.5%, 64 -33.1%.  128 is the knee -- 10.6 ms of work per chunk,
-    #: which is both a fine cancellation granularity and a fifth off.
-    chunk_columns = 128
+    #: faster, because a block this size stays in cache, and the blocks are
+    #: what `_Pool` hands out to its threads.
+    chunk_columns = None
+
+    #: Samples (columns x channels x nfft) per chunk when `chunk_columns`
+    #: is None.  With `power_spectra` and four threads the knee sits at
+    #: about a quarter million, whatever the channel count -- measured at
+    #: nfft 256, median of 7: 76 s of 48 kHz stereo 29.7 / 17.1 / 12.4 ms
+    #: at 128 / 256 / 512 columns; 26 s of 16 channels at 20 kHz 33.9 /
+    #: 19.5 / 15.6 / 38.9 ms at 16 / 32 / 64 / 128; 40 s of 8 channels 27.0
+    #: / 14.8 / 12.0 / 30.0 ms at 32 / 64 / 128 / 256.  A chunk is then
+    #: 3-10 ms of work for one thread.
+    chunk_samples = 1 << 18
+
+    def chunk_size(self, channels: int) -> int:
+        """Columns per chunk for a source of `channels` channels."""
+        if self.chunk_columns is not None:
+            return max(1, int(self.chunk_columns))
+        per_column = max(1, channels * self.nfft)
+        return max(8, min(1024, self.chunk_samples // per_column))
 
     def process(self, source, dest, nbefore, cancel=NEVER, progress=None):
         """Transform `source` into `dest`, in interruptible column blocks.
@@ -141,30 +261,55 @@ class BufferedSpectrogram(BufferedData):
         enabled = denoise.ordered(self.denoisers)
         params = {k: dict(v) for k, v in self.denoise_params.items()}
         if nsource >= self.nfft:
-            with np.errstate(under="ignore"):
-                while written < ndest:
+            rate = self.source.rate
+            nfft, hop = self.nfft, self.hop
+            freq = sp_fft.rfftfreq(nfft, 1 / rate)
+            window = get_window("hann", nfft)
+            chunks = []
+            start = 0
+            columns = self.chunk_size(source.shape[1] if source.ndim > 1 else 1)
+            while start < ndest:
+                take = min(columns, ndest - start)
+                lo = start * hop
+                hi = min(nsource, lo + (take - 1) * hop + nfft)
+                if hi - lo < nfft:
+                    break
+                chunks.append((lo, hi, start, take))
+                start += take
+            pool = _Pool.get() if len(chunks) > 1 else None
+            batch = _Pool.threads if pool is not None else 1
+
+            def transform(chunk):
+                lo, hi, at, take = chunk
+                block = power_spectra(source[lo:hi], rate, nfft, hop, window)
+                n = min(len(block), take)
+                if enabled:
+                    return block[:n]
+                # no denoiser: the block goes straight to its own rows of
+                # `dest`, from the thread that made it
+                dest[at : at + n] = block[:n]
+                return n
+
+            for b in range(0, len(chunks), batch):
+                cancel.check()
+                todo = chunks[b : b + batch]
+                if pool is not None and len(todo) > 1:
+                    results = list(pool.map(transform, todo))
+                else:
+                    results = [transform(c) for c in todo]
+                for (_lo, _hi, at, _take), result in zip(todo, results):
                     cancel.check()
-                    take = min(self.chunk_columns, ndest - written)
-                    lo = written * self.hop
-                    hi = min(nsource, lo + (take - 1) * self.hop + self.nfft)
-                    if hi - lo < self.nfft:
-                        break
-                    freq, _, Sxx = spectrogram(
-                        source[lo:hi],
-                        self.source.rate,
-                        freq_resolution=None,
-                        overlap_frac=None,
-                        n_fft=self.nfft,
-                        n_overlap=self.nfft - self.hop,
-                    )
-                    n = min(Sxx.shape[1], ndest - written)
+                    if enabled:
+                        # plugin code, so on this thread and in order
+                        with np.errstate(under="ignore"):
+                            block = denoise.apply_chain(result, freq, enabled, params)
+                        n = len(block)
+                        dest[at : at + n] = block
+                    else:
+                        n = result
                     if n < 1:
                         break
-                    block = Sxx.transpose((1, 2, 0))[:n]
-                    if enabled:
-                        block = denoise.apply_chain(block, freq, enabled, params)
-                    dest[written : written + n] = block
-                    written += n
+                    written = at + n
                     extra["frequencies"] = freq
                     if progress is not None:
                         progress(written / ndest)
@@ -271,6 +416,88 @@ class BufferedSpectrogram(BufferedData):
         # Enabling or disabling always needs the buffer redone -- including
         # disabling, which is the recompute that undoes the denoising.
         return spec_update or chain_changed or touched_running
+
+    #: Columns per cached block of `column_sums`.
+    sum_block = 64
+
+    def load_buffer(self, offset, nframes, buffer):
+        super().load_buffer(offset, nframes, buffer)
+        if nframes >= len(self.buffer):
+            # a whole reload: a new hop may have renumbered the columns
+            self._forget_sums()
+        else:
+            self._forget_sums(offset, offset + nframes)
+
+    def apply_update(self, update) -> None:
+        self._forget_sums()
+        super().apply_update(update)
+
+    def _forget_sums(self, start=None, stop=None) -> None:
+        """Drop cached block sums over absolute columns `[start, stop)`."""
+        cache = getattr(self, "_sums", None)
+        if not cache:
+            return
+        if start is None:
+            cache.clear()
+            return
+        b = self.sum_block
+        for k in range(start // b, (stop + b - 1) // b):
+            cache.pop(k, None)
+
+    def column_sums(self, i0: int, i1: int):
+        """Power summed over buffer rows `[i0, i1)`, per channel and bin.
+
+        What the power curve beside each lane is made of -- the visible
+        block's mean over time -- without reading the visible block on every
+        pan step and for every lane.  Reading it was 3.3 ms per lane per
+        step on 60 s of stereo, and on sixteen channels each lane read the
+        whole interleaved buffer for its one channel: 16 x 26 MB per step.
+
+        Sums are cached per block of `sum_block` columns on absolute column
+        indices, so a pan only adds up its two ragged ends and the blocks it
+        has not seen; `load_buffer` and `apply_update` drop the blocks whose
+        columns they rewrite.  Shifting the buffer in place does not change
+        a column, so it keeps them.  The sum runs in another order than
+        ``block.mean(axis=0)`` did, so the curve agrees with it to rounding.
+        """
+        buf = self.buffer
+        n = len(buf)
+        i0 = max(0, min(n, i0))
+        i1 = max(i0, min(n, i1))
+        shape = buf.shape[1:]
+        cache = getattr(self, "_sums", None)
+        if cache is None or getattr(self, "_sums_shape", None) != shape:
+            cache = self._sums = {}
+            self._sums_shape = shape
+        b = self.sum_block
+        a0 = self.offset + i0
+        a1 = self.offset + i1
+        k0 = (a0 + b - 1) // b
+        k1 = a1 // b
+        total = np.zeros(shape)
+        if k1 <= k0:
+            if i1 > i0:
+                np.add.reduce(buf[i0:i1], axis=0, out=total)
+            return total
+        if k0 * b > a0:
+            total += np.add.reduce(buf[i0 : k0 * b - self.offset], axis=0)
+        if a1 > k1 * b:
+            total += np.add.reduce(buf[k1 * b - self.offset : i1], axis=0)
+        blocks = []
+        for k in range(k0, k1):
+            s = cache.get(k)
+            if s is None:
+                j = k * b - self.offset
+                s = cache[k] = np.add.reduce(buf[j : j + b], axis=0, dtype=np.float64)
+            blocks.append(s)
+        total += np.add.reduce(blocks, axis=0)
+        # forget blocks the buffer no longer holds, so memory stays bounded
+        if len(cache) > 2 * (n // b + 2):
+            lo = self.offset // b
+            hi = (self.offset + n) // b
+            for k in [k for k in cache if k < lo or k > hi]:
+                del cache[k]
+        return total
 
     def visible_slice(self, t0: float, t1: float) -> tuple[int, int]:
         """Index range of `[t0, t1]` within the current buffer.

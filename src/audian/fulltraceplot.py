@@ -1223,7 +1223,18 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
         try:
             for ax, region in zip(self.axtraces, self.regions):
                 if ax.getViewBox() is vbox:
-                    region.setRegion(x_range)
+                    # Quietly: `sigRegionChanged` is what a *drag* of the
+                    # region reports, through a 30 Hz `SignalProxy` that
+                    # fires after `no_signal` is long cleared.  Echoed from
+                    # here, every lane's range change came back 33 ms later
+                    # as `update_time_range` setting the same range on every
+                    # lane again: 32 calls and 7 ms per pan step on sixteen
+                    # lanes, for nothing.
+                    blocked = region.blockSignals(True)
+                    try:
+                        region.setRegion(x_range)
+                    finally:
+                        region.blockSignals(blocked)
                     break
         finally:
             self.no_signal = False

@@ -29,6 +29,91 @@ def chunk_frames(source, chunk_bytes: int = CHUNK_BYTES) -> int:
     return max(1, chunk_bytes // max(1, row))
 
 
+def _flat_copy(buffer, dst: int, src: int, n: int) -> None:
+    """``buffer[dst:dst+n] = buffer[src:src+n]`` for overlapping ranges.
+
+    numpy copies an overlapping assignment through a temporary whenever the
+    destination has more than one dimension -- so shifting a buffer by a
+    few frames allocated, faulted in and wrote a second buffer-sized array
+    first (11 ms for 58 MB).  On a one-dimensional view of the same memory
+    the inner loop moves overlapping data directly, like `memmove` (3 ms).
+    """
+    if n <= 0 or dst == src:
+        return
+    if not buffer.flags.c_contiguous:
+        buffer[dst : dst + n] = buffer[src : src + n]
+        return
+    row = 1
+    for k in buffer.shape[1:]:
+        row *= k
+    flat = buffer.reshape(-1)
+    flat[dst * row : (dst + n) * row] = flat[src * row : (src + n) * row]
+
+
+def recycle_buffer(self, offset, nframes):
+    """`BufferedArray._recycle_buffer`, without a temporary copy.
+
+    Same contract and the same decisions as audioio's: keep what the old
+    buffer and the new one share, at its new position, and return the
+    `(r_offset, r_nframes)` still to be loaded.  When the length does not
+    change -- the common case once `Data.place_buffer` keeps it fixed --
+    the surviving frames are shifted in place with `_flat_copy`; when it
+    does, they are copied into the newly allocated array as before.
+
+    A plain function, so that `Data.open` can give it to the raw loader,
+    which is audioio's class and not ours.
+    """
+    r_offset = offset
+    r_nframes = nframes
+    old = self.buffer
+    if offset >= self.offset and offset < self.offset + len(old):
+        i = offset - self.offset
+        n = min(len(old) - i, nframes)
+        self.allocate_buffer(nframes)
+        memory = _shared_memory(old, self.buffer)
+        if memory is not None:
+            _flat_copy(memory, 0, i, n)
+        else:
+            self.buffer[:n] = old[i : i + n]
+        r_offset += n
+        r_nframes -= n
+    elif offset + nframes > self.offset and offset + nframes <= self.offset + len(old):
+        n = offset + nframes - self.offset
+        self.allocate_buffer(nframes)
+        memory = _shared_memory(old, self.buffer)
+        if memory is not None:
+            _flat_copy(memory, nframes - n, 0, n)
+        else:
+            self.buffer[nframes - n :] = old[:n]
+        r_nframes -= n
+    else:
+        self.allocate_buffer(nframes)
+    return r_offset, r_nframes
+
+
+def _shared_memory(old, new):
+    """The array both `old` and `new` start at the beginning of, or None.
+
+    `allocate_buffer` either keeps the very same array, hands out another
+    leading slice of the same backing array, or allocates a new one.  In the
+    first two cases the surviving frames have to be moved within that
+    memory, and indexing through the *backing* array -- not through `new`,
+    which may be shorter than where the frames now sit -- is what keeps the
+    source in range.
+    """
+    if new is old:
+        return old
+    base = new.base
+    if base is None or base is not old.base:
+        return None
+    if (
+        new.__array_interface__["data"][0] != base.__array_interface__["data"][0]
+        or old.__array_interface__["data"][0] != base.__array_interface__["data"][0]
+    ):
+        return None
+    return base
+
+
 class _Notifier(QObject):
     """Signal carrier for `BufferedData`.
 
@@ -86,6 +171,15 @@ class BufferedData(BufferedArray):
         # bumped whenever buffer content is (re)loaded, so that a single
         # shared pyramid rebuild can be triggered from any plot item:
         self.buffer_generation = 0
+        # the array `buffer` is a view of; see allocate_buffer()
+        self._backing = None
+        # what the buffer holds, as far as an image drawn from it can tell:
+        # bumped whenever values are recomputed, not when the buffer only
+        # moves; and the extents the buffer had after each move since.
+        # See `stable_extent`.
+        self.content_generation = 0
+        self.move_seq = 0
+        self.move_log = []
         # how a finished recompute is announced, see apply_update():
         self._notifier = _Notifier()
         self.sigUpdated = self._notifier.sigUpdated
@@ -126,6 +220,7 @@ class BufferedData(BufferedArray):
         self.rate = self.source.rate
         self.buffer_changed = np.zeros(self.channels, dtype=bool)
         self.buffer = np.zeros((0, self.channels), dtype=self.dtype)
+        self._backing = None
         self.visible_channels = np.zeros(self.channels, dtype=bool)
         self.buffer_generation = 0
         self.mip_pyramid = MinMaxPyramid() if more_shape is None else None
@@ -149,9 +244,79 @@ class BufferedData(BufferedArray):
             or self.shape[1:] != self.buffer.shape[1:]
             or self.buffer.dtype != self.dtype
         ):
+            # A derived buffer's length follows its source's offset through
+            # rounding -- the spectrogram's is `floor(end/hop) - ceil(start/
+            # hop)` -- so it flips by a frame as the source moves.  Each flip
+            # used to allocate and fault in a fresh array the size of the
+            # whole buffer (46 MB for 60 s of a stereo spectrogram).  Now the
+            # buffer is a view of a backing array with a little spare length,
+            # reused while the length stays within it.  `_recycle_buffer`
+            # then copies the surviving part from a view of the same memory,
+            # which numpy handles as the overlapping copy it is -- exactly
+            # what it already did whenever the length did not change.
             shape = list(self.shape)
-            shape[0] = nframes
-            self.buffer = np.empty(shape, dtype=self.dtype)
+            spare = max(16, nframes // 64)
+            backing = getattr(self, "_backing", None)
+            if (
+                force
+                or backing is None
+                or self.buffer.base is not backing
+                or backing.shape[1:] != tuple(shape[1:])
+                or len(backing) < nframes
+                or len(backing) > nframes + 2 * spare
+            ):
+                shape[0] = nframes + spare
+                backing = np.empty(shape, dtype=self.dtype)
+                self._backing = backing
+            self.buffer = backing[:nframes]
+
+    _recycle_buffer = recycle_buffer
+
+    #: moves remembered by `move_log`
+    move_log_length = 64
+
+    def move_buffer(self, offset, nframes):
+        """`BufferedArray.move_buffer`, logging where the buffer went."""
+        before = (self.offset, len(self.buffer))
+        super().move_buffer(offset, nframes)
+        if (self.offset, len(self.buffer)) != before:
+            self.move_seq += 1
+            self.move_log.append(
+                (self.move_seq, self.offset, self.offset + len(self.buffer))
+            )
+            del self.move_log[: -self.move_log_length]
+
+    def reload_buffer(self):
+        self.content_changed()
+        super().reload_buffer()
+
+    def content_changed(self) -> None:
+        """The values are about to be recomputed: forget the move log."""
+        self.content_generation += 1
+        self.move_log = []
+
+    def stable_extent(self, generation: int, seq: int):
+        """Absolute frames that have stayed in the buffer since `seq`.
+
+        `(start, stop)` of the frames the buffer has held continuously,
+        with unchanged values, since it was at move `seq` of content
+        `generation` -- or None when that cannot be told any more.  A frame
+        that is moved within the buffer keeps its value; one that leaves it
+        and is loaded again may not (a filter starts afresh), so it does not
+        count.  `SpecItem` keeps the image columns of such frames.
+        """
+        if generation != self.content_generation:
+            return None
+        start, stop = self.offset, self.offset + len(self.buffer)
+        if seq == self.move_seq:
+            return start, stop
+        later = [entry for entry in self.move_log if entry[0] > seq]
+        if not later or later[0][0] != seq + 1:
+            return None
+        for _seq, lo, hi in later:
+            start = max(start, lo)
+            stop = min(stop, hi)
+        return (start, stop) if stop > start else None
 
     def align_buffer(self):
         soffset = self.source.offset
@@ -268,7 +433,9 @@ class BufferedData(BufferedArray):
         the other -- never a half-filled one, which is what writing into the
         live buffer would have given.
         """
+        self.content_changed()
         self.buffer = update.buffer
+        self._backing = None
         self.offset = update.offset
         self.bufferframes = len(update.buffer)
         self.buffer_generation += 1
