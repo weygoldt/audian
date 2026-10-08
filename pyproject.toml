@@ -76,6 +76,10 @@ audian = "audian.audian:run"
 # -- which is indistinguishable, from the outside, from a broken feature.
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The bundled UI font (Inter, SIL OFL 1.1) and its licence.
+audian = ["fonts/*.ttf", "fonts/*.txt"]
+
 # Plugins that live in their own distribution announce themselves in the
 # `audian.plugins` entry point group, naming a module whose `audian_*`
 # callables audian binds:

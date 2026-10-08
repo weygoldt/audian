@@ -71,6 +71,7 @@ helper still maps to the active theme's equivalent.  Prefer helpers.
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 from string import Template
 from typing import Any, Iterable, Sequence
 
@@ -785,7 +786,9 @@ COLORBAR_WIDTH = 8
 # Section 3 -- fonts
 # ---------------------------------------------------------------------------
 
-#: UI text stack, first installed family wins.
+#: UI text stack, first installed family wins.  Inter ships with audian
+#: (`BUNDLED_FONTS_DIR`), so the rest are only a fallback for a broken
+#: install.
 FONT_UI_FAMILIES: tuple[str, ...] = (
     "Inter",
     "Adwaita Sans",
@@ -812,10 +815,46 @@ SIZE_PT = 10  # base UI size; the app is dense
 SIZE_SMALL_PT = 9  # in-plot labels, chips; never go below 8
 
 
+#: Fonts that ship with audian (Inter, SIL OFL 1.1, see Inter-OFL.txt), so
+#: the UI looks -- and measures -- the same on every machine instead of
+#: falling back to whatever sans the system has.  DejaVu Sans, the usual
+#: Linux fallback, is wide enough that a side-panel group no longer fits
+#: the panel's 220 px.
+BUNDLED_FONTS_DIR = Path(__file__).with_name("fonts")
+
+
+def load_bundled_fonts() -> list[str]:
+    """Register the bundled font files with Qt, once; the families added.
+
+    Needs a QGuiApplication (Qt refuses fonts before one exists), so it is
+    called lazily from `_installed_families`, which only runs once fonts are
+    being built.  Never raises: a missing or unreadable file leaves the
+    system's fonts in charge, as before.
+    """
+    loaded = _CACHE.get("bundled")
+    if loaded is not None:
+        return loaded
+    if QGuiApplication.instance() is None:
+        return []
+    families: list[str] = []
+    for path in sorted(BUNDLED_FONTS_DIR.glob("*.ttf")):
+        try:
+            fid = QFontDatabase.addApplicationFont(str(path))
+        except Exception:  # pragma: no cover - Qt reports failure as -1
+            fid = -1
+        if fid >= 0:
+            families.extend(QFontDatabase.applicationFontFamilies(fid))
+    loaded = sorted(set(families))
+    _CACHE["bundled"] = loaded
+    return loaded
+
+
 def _installed_families() -> frozenset[str]:
-    """Return the set of font families Qt can actually see (cached)."""
+    """Return the set of font families Qt can actually see (cached),
+    the bundled ones included."""
     cached = _CACHE.get("families")
     if cached is None:
+        load_bundled_fonts()
         try:
             # Static in Qt6; instantiating it still works but warns.
             cached = frozenset(QFontDatabase.families())

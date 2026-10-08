@@ -21,3 +21,5 @@ __pycache__/
 # Label sidecars are the reader's own work on a recording, written next to it
 # by the browser; one was committed by accident in 5020b8c.
 *-editable-labels.csv
+# the bundled font's licence (SIL OFL) must ship with it
+!src/audian/fonts/*.txt

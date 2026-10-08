@@ -823,3 +823,17 @@ def test_dim_color_constants_are_untouched():
     assert theme.TRACE_DIM_MIX_SPARSE == 0.35
     assert theme.MIN_GRAPHIC_CONTRAST == 3.0
     assert theme.MIN_GRAPHIC_CONTRAST_DAYLIGHT == 4.5
+
+
+def test_inter_ships_with_audian_and_is_the_ui_font(app):
+    """The UI font is bundled, so a machine without Inter (GitHub's runner,
+    most Linux installs, where DejaVu Sans is the fallback) lays the panels
+    out as designed -- DejaVu is wide enough to break the side panel."""
+    from PySide6.QtGui import QFontInfo
+
+    files = sorted(p.name for p in theme.BUNDLED_FONTS_DIR.glob("*.ttf"))
+    assert files == ["Inter-Bold.ttf", "Inter-Regular.ttf"]
+    assert (theme.BUNDLED_FONTS_DIR / "Inter-OFL.txt").exists()
+    assert theme.load_bundled_fonts() == ["Inter"]
+    assert QFontInfo(theme.font_ui()).family() == "Inter"
+    assert QFontInfo(theme.font_ui(bold=True)).family() == "Inter"
