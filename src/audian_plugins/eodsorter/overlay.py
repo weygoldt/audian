@@ -17,6 +17,12 @@ empty.  The design asked for one points scatter; it is one `PointsItem`
 *per slot*, because a single item would need a colour per point, and the
 dots are not `ScatterPlotItem`s at all (see `PointsItem` for why).
 
+Most of them are not scene items either: the curves and dots are members
+of three `ImageLayer`s (base, selection, hover and previews), each one
+scene item that draws its members into an image at device resolution and
+paints the lane by copying it.  At 4K that is what keeps a pointer move
+at a millisecond or two instead of 90 ms (see `ImageLayer`).
+
 Two layers, two keys
 --------------------
 
@@ -47,8 +53,16 @@ import time
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QPen
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+    QRegion,
+    QTransform,
+)
 
 from audian.pluginapi import theme
 
@@ -332,9 +346,16 @@ class LineItem(pg.GraphicsObject):
         self._width = 1.0
         self._shadow = None
         self._lite = False
+        #: the `ImageLayer` that paints this item, if any
+        self._layer = None
         self.xData = None
         self.yData = None
         self.opts = {}
+
+    def _changed(self) -> None:
+        self.update()
+        if self._layer is not None:
+            self._layer.touch(self)
 
     def setPen(self, pen) -> None:  # noqa: N802
         pen = QPen(pen)
@@ -342,19 +363,20 @@ class LineItem(pg.GraphicsObject):
             return  # an unchanged pen must not repaint the lane
         self._pen = pen
         self._width = float(pen.widthF()) or 1.0
-        self.update()
+        self._changed()
 
     def setShadowPen(self, pen) -> None:  # noqa: N802
         shadow = None if pen is None else (QPen(pen), float(pen.widthF()))
         if shadow == self._shadow:
             return
         self._shadow = shadow
-        self.update()
+        self._changed()
 
     def set_lite(self, lite: bool) -> None:
         """One pass, no underlay: for lanes with very many vertices."""
-        self._lite = bool(lite)
-        self.update()
+        if bool(lite) != self._lite:
+            self._lite = bool(lite)
+            self._changed()
 
     def setData(self, x=None, y=None, connect="finite", **_ignored) -> None:  # noqa: N802
         x = np.zeros(0) if x is None else np.asarray(x, dtype=np.float64)
@@ -374,13 +396,25 @@ class LineItem(pg.GraphicsObject):
         else:
             self._path = None
             self._rect = QRectF()
-        self.update()
+        self._changed()
 
     def boundingRect(self):  # noqa: N802
         return self._rect
 
     def dataBounds(self, ax, frac=1.0, orthoRange=None):  # noqa: N802, N803
         return (None, None)
+
+    def signature(self):
+        """What `paint` draws, for `ImageLayer` to recognise a picture it
+        has drawn for another lane: (key, objects the key's ids refer to)."""
+        shadow = None
+        if self._shadow is not None:
+            shadow = (self._shadow[0].color().rgba(), self._shadow[1])
+        key = (
+            "line", id(self._path), self._pen.color().rgba(), self._width,
+            int(self._pen.style().value), shadow, self._lite, self.isVisible(),
+        )  # fmt: skip
+        return key, self._path
 
     def _passes(
         self, painter, colour: QColor, width: float, style, full: bool = False
@@ -401,8 +435,19 @@ class LineItem(pg.GraphicsObject):
             painter.drawPath(self._path)
             painter.restore()
 
-    def paint(self, painter, option, widget=None) -> None:
+    def paint(self, painter, option=None, widget=None, quick: bool = False) -> None:
+        """Stroke the line.  `quick` (a `ImageLayer` redrawing while the
+        view moves) is one aliased pass per line and no underlay: the
+        full-quality frame follows as soon as the view comes to rest."""
         if self._path is None:
+            return
+        if quick:
+            painter.setRenderHint(painter.RenderHint.Antialiasing, False)
+            pen = QPen(self._pen.color(), 1.0)
+            pen.setCosmetic(True)
+            pen.setStyle(self._pen.style())
+            painter.setPen(pen)
+            painter.drawPath(self._path)
             return
         painter.setRenderHint(painter.RenderHint.Antialiasing, not self._lite)
         if self._shadow is not None:
@@ -450,29 +495,95 @@ class VeilItem(pg.GraphicsObject):
             painter.fillRect(self._rect, self._colour)
 
 
+#: Dot sprites, one per (diameter, fill, outline, device pixel ratio).
+_SPRITES: dict = {}
+_SPRITES_MAX = 256
+
+
+def _device_ratio(painter) -> float:
+    device = painter.device()
+    try:
+        return float(device.devicePixelRatioF()) or 1.0
+    except AttributeError:
+        return 1.0
+
+
+def _dot_sprite(size: float, fill: QColor, outline, dpr: float):
+    """A dot drawn once, at device resolution, the way `PointsItem` used to
+    draw every one of them: a round cosmetic point of the outline's
+    diameter under one of the fill's.  Returns (pixmap, side in device
+    pixels)."""
+    key = (
+        size,
+        fill.rgba(),
+        None if outline is None else (outline[0].rgba(), outline[1]),
+        dpr,
+    )
+    hit = _SPRITES.get(key)
+    if hit is not None:
+        return hit
+    outer = size + (2 * outline[1] if outline is not None else 0.0)
+    side = int(np.ceil(outer * dpr)) + 2
+    # an odd side, the centre in the middle of a pixel: the edge is
+    # antialiased all round, as a point at an arbitrary position was (a
+    # centre on a pixel corner draws a crisp dot that looks a pixel smaller)
+    side += 1 - side % 2
+    image = QImage(side, side, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    p = QPainter(image)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, size >= 2.5)
+    p.scale(dpr, dpr)
+    centre = QPointF(side / (2 * dpr), side / (2 * dpr))
+    if outline is not None:
+        pen = QPen(outline[0], outer)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawPoint(centre)
+    pen = QPen(fill, size)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.drawPoint(centre)
+    p.end()
+    hit = (QPixmap.fromImage(image), side)
+    if len(_SPRITES) >= _SPRITES_MAX:
+        _SPRITES.clear()
+    _SPRITES[key] = hit
+    return hit
+
+
 class PointsItem(pg.GraphicsObject):
-    """Round dots from numpy arrays, painted with one `drawPoints` call.
+    """Round dots from numpy arrays, stamped from one pre-drawn sprite.
 
     `pg.ScatterPlotItem` keeps a record per spot and rebuilds them on every
     `setData`; at 100,000 points that was 160 ms of a 180 ms redraw.  Dots of
-    one colour and size need none of that: a cosmetic pen of the dot's
-    diameter with a round cap turns `QPainter.drawPoints` into a dot plotter,
-    and the points go to Qt as one `QPolygonF` filled straight from numpy.
-    The `setData` signature is the subset of `ScatterPlotItem`'s used here,
-    so the two are interchangeable.  An optional outline (``pen``) is drawn
-    as a larger dot underneath.
+    one colour and size need none of that.  They used to be one
+    `QPainter.drawPoints` call with a round cosmetic pen, but Qt rasterises
+    every antialiased round point from scratch: 25,000 dots of 4 px took
+    140 ms on a 4K lane.  Now the dot (with its outline, ``pen``, drawn as
+    a larger dot underneath) is drawn once into a sprite at the device's
+    pixel ratio, and every point is one fragment of a single
+    `drawPixmapFragments` call filled straight from numpy -- 3 ms for the
+    same 25,000.  The `setData` signature is the subset of
+    `ScatterPlotItem`'s used here, so the two are interchangeable.
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self._poly = None
         self._n = 0
         self._rect = QRectF()
         self._size = 3.0
         self._fill = QColor("white")
         self._outline = None
+        self._layer = None
+        self._frags = None
+        self._xy = None
         self.xData = None
         self.yData = None
+
+    def _changed(self) -> None:
+        self.update()
+        if self._layer is not None:
+            self._layer.touch(self)
 
     def setData(self, x=None, y=None, size=3, pen=None, brush=None, **_ignored):  # noqa: N802
         x = np.zeros(0) if x is None else np.asarray(x, dtype=np.float64)
@@ -497,35 +608,227 @@ class PointsItem(pg.GraphicsObject):
             return
         self.prepareGeometryChange()
         self.xData, self.yData = x, y
-        self._n = len(x)
         self._size = float(size)
-        if brush is not None:
-            self._fill = (
-                QColor(brush.color()) if hasattr(brush, "color") else QColor(brush)
-            )
-        self._outline = None
-        if (
-            pen is not None
-            and hasattr(pen, "color")
-            and pen.style() != Qt.PenStyle.NoPen
-        ):
-            self._outline = (QColor(pen.color()), float(pen.widthF()))
+        if fill is not None:
+            self._fill = fill
+        self._outline = outline
+        good = np.isfinite(x) & np.isfinite(y)
+        self._n = int(good.sum())
         if self._n:
-            poly = pg.functions.create_qpolygonf(self._n)
-            arr = pg.functions.ndarray_from_qpolygonf(poly)
-            arr[:, 0] = x
-            arr[:, 1] = y
-            self._poly = poly
-            x0, x1 = float(np.nanmin(x)), float(np.nanmax(x))
-            y0, y1 = float(np.nanmin(y)), float(np.nanmax(y))
+            xs, ys = (x, y) if self._n == len(x) else (x[good], y[good])
+            self._xy = (xs, ys)
+            x0, x1 = float(xs.min()), float(xs.max())
+            y0, y1 = float(ys.min()), float(ys.max())
             self._rect = QRectF(x0, y0, max(x1 - x0, 1e-9), max(y1 - y0, 1e-9))
         else:
-            self._poly = None
+            self._xy = None
             self._rect = QRectF()
-        self.update()
+        self._changed()
 
     def __len__(self) -> int:
-        return self._n
+        return len(self.xData) if self.xData is not None else 0
+
+    def _sprite(self, dpr: float):
+        return _dot_sprite(self._size, self._fill, self._outline, dpr)
+
+    def signature(self):
+        """See `LineItem.signature`."""
+        xy = self._xy
+        outline = None
+        if self._outline is not None:
+            outline = (self._outline[0].rgba(), self._outline[1])
+        key = (
+            "dots", None if xy is None else (id(xy[0]), id(xy[1])), self._n,
+            self._size, self._fill.rgba(), outline, self.isVisible(),
+        )  # fmt: skip
+        return key, xy
+
+    def boundingRect(self):  # noqa: N802
+        return self._rect
+
+    def dataBounds(self, ax, frac=1.0, orthoRange=None):  # noqa: N802, N803
+        return (None, None)
+
+    def paint(self, painter, option=None, widget=None, quick: bool = False) -> None:
+        if self._xy is None or not self._n:
+            return
+        dpr = _device_ratio(painter)
+        sprite, side = self._sprite(dpr)
+        x, y = self._xy
+        m = painter.transform()
+        if self._frags is None:
+            self._frags = pg.Qt.internals.PrimitiveArray(QPainter.PixmapFragment, 10)
+        self._frags.resize(self._n)
+        f = self._frags.ndarray()
+        # fragment centres in device-independent pixels; the sprite is
+        # `side` device pixels square, so it is scaled by 1 / dpr
+        f[:, 0] = m.m11() * x + m.m21() * y + m.dx()
+        f[:, 1] = m.m12() * x + m.m22() * y + m.dy()
+        f[:, 2:6] = (0.0, 0.0, side, side)
+        f[:, 6:10] = (1.0 / dpr, 1.0 / dpr, 0.0, 1.0)
+        painter.save()
+        painter.resetTransform()
+        painter.drawPixmapFragments(*self._frags.drawargs(), sprite)
+        painter.restore()
+
+
+class MarkItem(PointsItem):
+    """Marks of one pyqtgraph symbol (``"o"``, ``"x"``, ...), stamped like
+    `PointsItem`'s dots.
+
+    The rings, drop crosses and cut crosses used to be `ScatterPlotItem`s,
+    which rebuild a record per spot on every `setData`: during a merge or
+    erase stroke over many rows that was 2-3 ms per pointer move.  The
+    sprite is pyqtgraph's own `renderSymbol`, so the marks look the same.
+    ``data`` (the x values) stands in for the scatter's record array where
+    only its length is asked for.
+    """
+
+    def __init__(self, symbol: str = "o") -> None:
+        super().__init__()
+        self.symbol = symbol
+        self._pen = None
+        self._brush = None
+
+    @property
+    def data(self):
+        return self.xData if self.xData is not None else np.zeros(0)
+
+    def setData(self, x=None, y=None, size=3, pen=None, brush=None, **_ignored):  # noqa: N802
+        self._pen = QPen(pen) if pen is not None else QPen(Qt.PenStyle.NoPen)
+        self._brush = brush
+        super().setData(x=x, y=y, size=size, pen=pen, brush=brush)
+
+    def _sprite(self, dpr: float):
+        brush = self._brush if self._brush is not None else theme.brush("#ffffff")
+        key = (
+            "mark", self.symbol, self._size, self._fill.rgba(),
+            None if self._outline is None
+            else (self._outline[0].rgba(), self._outline[1]),
+            dpr,
+        )  # fmt: skip
+        hit = _SPRITES.get(key)
+        if hit is None:
+            image = pg.graphicsItems.ScatterPlotItem.renderSymbol(
+                self.symbol, self._size, self._pen, brush, dpr=dpr
+            )
+            hit = (QPixmap.fromImage(image), image.width())
+            if len(_SPRITES) >= _SPRITES_MAX:
+                _SPRITES.clear()
+            _SPRITES[key] = hit
+        return hit
+
+
+#: Images an `ImageLayer` has drawn, by what they show: the lanes of a
+#: recording share the time axis, the frequency range and the colours, so
+#: their layers are usually the same picture, and the second to fourth lane
+#: take the first one's (implicitly shared, copied only when written).
+_LAYER_IMAGES: dict = {}
+_LAYER_IMAGES_MAX = 6
+
+
+class ImageLayer(pg.GraphicsObject):
+    """Several lines and dot layers of one lane, painted from one image.
+
+    The track curves and dot layers of a lane (`LineItem`, `PointsItem`)
+    are *members* of a layer rather than items of the scene.  The layer
+    draws them all, in z order, into one image the size of the lane in
+    device pixels, and paints its part of the lane by copying the exposed
+    part of that image.  It redraws the image only when a member changed or
+    the view moved.
+
+    Why: every pointer move exposes the lane under the brush ring, the
+    label box and the stroke, and Qt repaints every item there.  Stroking
+    the ~25,000 vertices of a lane's tracks eight times over and stamping
+    their dots took 80-90 ms per frame on a 4K lane, and the previews
+    (hover, halo, selection, merge outlines) another 5-20 ms; the whole
+    window lagged seconds behind a brush.  The base items used to carry a
+    device-coordinate cache each, which would have made that a copy -- but
+    such a cache lives in `QPixmapCache`, whose default 10 MB does not hold
+    even one 4K lane (3350 x 950 x 4 bytes = 12.7 MB), so at 4K every cache
+    was silently dropped.  An image per layer lives outside that cache, and
+    a frame is one copy per layer instead of twenty strokes.
+
+    A changed member repaints only where it was and where it is now
+    (`touch`), not the whole lane.  While the view moves (a pan, a zoom)
+    the image is drawn ``quick`` (`LineItem.paint`): one aliased pass per
+    line, no dark edge; the full image follows `SETTLE_MS` after the last
+    move.
+    """
+
+    SETTLE_MS = 120
+    #: device pixels around a member's data rectangle that its pen may reach
+    MARGIN_PX = 12.0
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.members: list = []
+        self._rect = QRectF()
+        self._image = None
+        self._key = None
+        self._dirty = True
+        #: what to redraw: everything, or the data rectangles `_dirty_rects`
+        self._dirty_full = True
+        self._dirty_rects: list = []
+        self._quick = False
+        self._moving_until = 0.0
+        self._scale = None  # data units per device pixel, from the last paint
+        self._settle = QTimer()
+        self._settle.setSingleShot(True)
+        self._settle.timeout.connect(self._settled)
+        #: for the benchmark and the tests: how many images were drawn, and
+        #: how long the last one took
+        self.renders = 0
+        self.last_render_ms = 0.0
+
+    def add(self, item, z: float):
+        item.setZValue(z)
+        item._layer = self
+        item._shown_rect = QRectF()
+        self.members.append(item)
+        self.members.sort(key=lambda m: m.zValue())
+        self.touch(item)
+        return item
+
+    def touch(self, item=None) -> None:
+        """A member changed: redraw the image where it was and where it is
+        now, and repaint there (all of it without `item`)."""
+        self._dirty = True
+        if item is None or self._scale is None or self._image is None:
+            self._dirty_full = True
+            self.update()
+            return
+        rect = QRectF(getattr(item, "_shown_rect", QRectF()))
+        now = item.boundingRect()
+        if not now.isEmpty():
+            rect = now if rect.isEmpty() else rect.united(now)
+        if rect.isEmpty():
+            return
+        sx, sy = self._scale
+        mx, my = self.MARGIN_PX * sx, self.MARGIN_PX * sy
+        rect = rect.adjusted(-mx, -my, mx, my)
+        if not self._dirty_full:
+            self._dirty_rects.append(rect)
+        self.update(rect)
+
+    def view_moving(self) -> None:
+        """The view is moving: draw quick until it rests."""
+        self._moving_until = time.perf_counter() + self.SETTLE_MS / 1000.0
+        self._settle.start(self.SETTLE_MS)
+
+    def _settled(self) -> None:
+        if self._quick:
+            self.touch()
+
+    def detach(self) -> None:
+        self._settle.stop()
+        self._image = None
+
+    def viewRangeChanged(self) -> None:  # noqa: N802 - pyqtgraph's hook
+        rect = self.viewRect()
+        self.prepareGeometryChange()
+        self._rect = QRectF(rect) if rect is not None else QRectF()
+        self.update()
 
     def boundingRect(self):  # noqa: N802
         return self._rect
@@ -534,34 +837,110 @@ class PointsItem(pg.GraphicsObject):
         return (None, None)
 
     def paint(self, painter, option, widget=None) -> None:
-        if self._poly is None or not self._n:
+        if self._rect.isEmpty() or not self.members:
             return
-        painter.setRenderHint(painter.RenderHint.Antialiasing, self._size >= 2.5)
-        if self._outline is not None:
-            colour, width = self._outline
-            pen = QPen(colour, self._size + 2 * width)
-            pen.setCosmetic(True)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.drawPoints(self._poly)
-        pen = QPen(self._fill, self._size)
-        pen.setCosmetic(True)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.drawPoints(self._poly)
+        m = painter.transform()
+        target = m.mapRect(self._rect).intersected(QRectF(painter.window()))
+        target = target.toAlignedRect()
+        if target.isEmpty():
+            return
+        dpr = _device_ratio(painter)
+        key = (
+            target.x(), target.y(), target.width(), target.height(), dpr,
+            m.m11(), m.m12(), m.m21(), m.m22(), m.dx(), m.dy(),
+        )  # fmt: skip
+        if self._dirty or key != self._key:
+            partial = (
+                self._dirty_rects if key == self._key and not self._dirty_full else None
+            )
+            sx = 1.0 / abs(m.m11()) if m.m11() else 0.0
+            sy = 1.0 / abs(m.m22()) if m.m22() else 0.0
+            self._scale = (sx, sy)
+            self._key = key
+            self._dirty = False
+            self._dirty_full = False
+            self._dirty_rects = []
+            if all(item.boundingRect().isEmpty() for item in self.members):
+                # nothing to draw (no selection, no hover): no image to copy
+                for item in self.members:
+                    item._shown_rect = QRectF()
+                self._image = None
+                return
+            quick = time.perf_counter() < self._moving_until
+            clip = None
+            if partial is not None and self._image is not None:
+                union = QRectF()
+                for rect in partial:
+                    union = union.united(rect)
+                clip = m.mapRect(union).translated(-target.x(), -target.y())
+                clip = QRegion(clip.toAlignedRect().adjusted(-1, -1, 1, 1))
+            self._render(m, target, dpr, quick, clip)
+            self._quick = quick
+        if self._image is None:
+            return
+        painter.save()
+        painter.resetTransform()
+        painter.drawImage(QPointF(target.topLeft()), self._image)
+        painter.restore()
 
-
-def _cached(item):
-    """Paint `item` from a pixmap until it changes.
-
-    The brush ring and the hover box move over the base layer on every
-    pointer move, and each move re-exposed the tracks under them: every
-    base item of the lane was stroked again, 40 to 80 ms per move on a
-    4 h, 11-lane recording.  A device-coordinate cache repaints them from
-    a pixmap instead; it is rebuilt when the item changes or the view
-    zooms."""
-    item.setCacheMode(pg.QtWidgets.QGraphicsItem.CacheMode.DeviceCoordinateCache)
-    return item
+    def _render(self, m, target, dpr: float, quick: bool, clip=None) -> None:
+        """Draw the members into the image: all of it, or only the region
+        `clip` (in image coordinates) -- a changed hover track or brush
+        capture redraws its own neighbourhood, not 13 MB of lane."""
+        start = time.perf_counter()
+        w = int(np.ceil(target.width() * dpr))
+        h = int(np.ceil(target.height() * dpr))
+        old = self._image
+        if old is None or old.width() != w or old.height() != h:
+            clip = None
+        shared = None
+        if clip is None:
+            signatures = [item.signature() for item in self.members]
+            shared = (
+                w, h, dpr, m.m11(), m.m12(), m.m21(), m.m22(),
+                m.dx() - target.x(), m.dy() - target.y(), quick,
+                tuple(key for key, _refs in signatures),
+            )  # fmt: skip
+            hit = _LAYER_IMAGES.get(shared)
+            if hit is not None:
+                for item in self.members:
+                    item._shown_rect = QRectF(item.boundingRect())
+                self._image = QImage(hit[0])
+                self.last_render_ms = 1000 * (time.perf_counter() - start)
+                return
+        if clip is None:
+            # a new image, not the old one painted over: that may be shared
+            # with another lane and would be copied first, for nothing
+            image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+            image.setDevicePixelRatio(dpr)
+        else:
+            image = old
+        p = QPainter(image)
+        if clip is None:
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            p.fillRect(QRectF(0, 0, w / dpr, h / dpr), Qt.GlobalColor.transparent)
+        else:
+            p.setClipRegion(clip)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            for rect in clip:
+                p.fillRect(rect, Qt.GlobalColor.transparent)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        p.setTransform(m * QTransform.fromTranslate(-target.x(), -target.y()))
+        for item in self.members:
+            item._shown_rect = QRectF(item.boundingRect())
+            if item.isVisible():
+                item.paint(p, None, None, quick=quick)
+        p.end()
+        self._image = image
+        if shared is not None:
+            # (a partial redraw is not shared: the next one would have to
+            # copy the 13 MB out of the share before drawing on it)
+            if len(_LAYER_IMAGES) >= _LAYER_IMAGES_MAX:
+                _LAYER_IMAGES.pop(next(iter(_LAYER_IMAGES)))
+            # the references keep the ids in the key from being reused
+            _LAYER_IMAGES[shared] = (QImage(image), signatures)
+        self.renders += 1
+        self.last_render_ms = 1000 * (time.perf_counter() - start)
 
 
 def _clear_scatter(item) -> None:
@@ -615,25 +994,35 @@ class TrackOverlay:
         self.geometry: G.Geometry | None = None
 
         self.veil = self._add(VeilItem(), VEIL_Z)
-        self.curves = [_cached(self._curve(TRACK_Z)) for _ in range(G.N_SLOTS)]
+        # Three image layers (see `ImageLayer`), each one scene item whose
+        # z sits among its members': the base (tracks, dots, unassigned),
+        # the selection under the id labels, and the hover and previews
+        # over them.
+        self.layer = self._add(ImageLayer(), TRACK_Z)
+        self.low = self._add(ImageLayer(), SELECTED_Z)
+        self.high = self._add(ImageLayer(), HALO_Z)
+        base, low, high = self.layer.add, self.low.add, self.high.add
+        self.curves = [base(LineItem(), TRACK_Z) for _ in range(G.N_SLOTS)]
         self.dim_curves: list = []
-        self.points = [_cached(self._dots(POINT_Z)) for _ in range(G.N_SLOTS)]
-        self.unassigned = _cached(self._dots(UNASSIGNED_Z))
-        self.selected = self._curve(SELECTED_Z)
-        self.selected_points = self._dots(SELECTED_Z)
-        self.halo = self._curve(HALO_Z)
-        self.hover = self._curve(HOVER_Z)
-        self.outline_halo = self._curve(HALO_Z - 0.2)
-        self.outline = self._curve(HALO_Z - 0.1)
+        self.points = [base(PointsItem(), POINT_Z) for _ in range(G.N_SLOTS)]
+        self.unassigned = base(PointsItem(), UNASSIGNED_Z)
+        self.selected = low(LineItem(), SELECTED_Z)
+        self.selected_points = low(PointsItem(), SELECTED_Z)
+        self.halo = high(LineItem(), HALO_Z)
+        self.hover = high(LineItem(), HOVER_Z)
+        self.outline_halo = high(LineItem(), HALO_Z - 0.2)
+        self.outline = high(LineItem(), HALO_Z - 0.1)
         # above the hover, so a hovered track shows what the click will make
         # of it (the cut part in the new id's colour, a merged piece in the
         # anchor's)
-        self.recolour = [self._curve(RECOLOUR_Z) for _ in range(RECOLOUR_POOL)]
-        self.recolour_points = [self._dots(RECOLOUR_Z) for _ in range(RECOLOUR_POOL)]
-        self.stroke_points = self._dots(PREVIEW_Z + 0.1)
-        self.rings = self._scatter(MARK_Z)
-        self.drops = self._scatter(MARK_Z)
-        self.crosses = self._scatter(MARK_Z)
+        self.recolour = [high(LineItem(), RECOLOUR_Z) for _ in range(RECOLOUR_POOL)]
+        self.recolour_points = [
+            high(PointsItem(), RECOLOUR_Z) for _ in range(RECOLOUR_POOL)
+        ]
+        self.stroke_points = low(PointsItem(), PREVIEW_Z + 0.1)
+        self.rings = self._add(MarkItem("o"), MARK_Z)
+        self.drops = self._add(MarkItem("x"), MARK_Z)
+        self.crosses = self._add(MarkItem("x"), MARK_Z)
         self.connector = self._curve(MARK_Z - 0.5)
         self.cut_marker = self._curve(MARK_Z)
         self.add_dots = self._scatter(MARK_Z)
@@ -687,15 +1076,17 @@ class TrackOverlay:
 
     def _dim_curve(self, s: int):
         while len(self.dim_curves) <= s:
-            self.dim_curves.append(_cached(self._curve(DIM_Z)))
+            self.dim_curves.append(self.layer.add(LineItem(), DIM_Z))
         return self.dim_curves[s]
 
     def _snippet_curve(self, s: int):
         while len(self.snippet_curves) <= s:
-            self.snippet_curves.append(_cached(self._curve(SNIPPET_Z)))
+            self.snippet_curves.append(self.layer.add(LineItem(), SNIPPET_Z))
         return self.snippet_curves[s]
 
     def _view_changed(self, *args) -> None:
+        for layer in (self.layer, self.low, self.high):
+            layer.view_moving()
         self.schedule()
 
     def schedule(self) -> None:
@@ -719,6 +1110,8 @@ class TrackOverlay:
         """Take every item off the lane and disconnect."""
         self._timer.stop()
         self._flash_timer.stop()
+        for layer in (self.layer, self.low, self.high):
+            layer.detach()
         vb = self.ax.getViewBox()
         if vb is not None:
             for signal in (vb.sigRangeChanged, vb.sigResized):

@@ -128,6 +128,11 @@ DEFAULT_PREFS = {
 
 AUTOSAVE_MS = 2000
 TABLE_VIEW_MS = 200
+#: The track table is refilled this long after an edit, an undo or a load,
+#: not inside it: sorting and sizing ~6,000 rows takes 50-70 ms, and doing
+#: it before the frame that shows the edit delayed that frame by as much.
+#: Held-down Ctrl+Z refills it once, when it is let go.
+TABLE_FILL_MS = 80
 LANE_POLL_MS = 1000
 
 TOOLS = (
@@ -597,6 +602,10 @@ class WavetrackerPanel(QWidget):
         self._table_timer.setSingleShot(True)
         self._table_timer.setInterval(TABLE_VIEW_MS)
         self._table_timer.timeout.connect(self._filter_table)
+        self._fill_timer = QTimer(self)
+        self._fill_timer.setSingleShot(True)
+        self._fill_timer.setInterval(TABLE_FILL_MS)
+        self._fill_timer.timeout.connect(self._refresh_table)
         self._lane_timer = QTimer(self)
         self._lane_timer.setInterval(LANE_POLL_MS)
         self._lane_timer.timeout.connect(self._check_lanes)
@@ -1169,6 +1178,10 @@ class WavetrackerPanel(QWidget):
         self.tablew.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         header = self.tablew.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # sized from the rows on screen and 100 more, not 1,000: the columns
+        # hold numbers of a known width, and each sampled row is seven
+        # Python `data` calls on every refill
+        header.setResizeContentsPrecision(100)
         header.setStretchLastSection(True)
         header.setMinimumSectionSize(24)
         self.tablew.setToolTip(
@@ -1272,6 +1285,7 @@ class WavetrackerPanel(QWidget):
         self._prefs_timer.stop()
         self._lane_timer.stop()
         self._table_timer.stop()
+        self._fill_timer.stop()
         save_prefs(self.prefs)
         self.cancel_job(quiet=True)
         self.ridge_source.shutdown()
@@ -1639,7 +1653,7 @@ class WavetrackerPanel(QWidget):
         self._update_nospec()
         self._refresh_strip()
         self._refresh_header()
-        self._refresh_table()
+        self._fill_timer.start()
         self._refresh_history()
         self._refresh_buttons()
         self.controller.changed()
@@ -1725,6 +1739,7 @@ class WavetrackerPanel(QWidget):
             )
 
     def _refresh_table(self) -> None:
+        self._fill_timer.stop()
         ts = self.ts
         self._filling_table = True
         try:

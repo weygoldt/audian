@@ -1437,6 +1437,46 @@ pixels at every zoom:
   product of its consecutive vertices against the line changes where it
   crosses; vectorised over the track's visible vertices.
 
+### 6.4 At 4K (added after a report of edit mode being unusable on a 4K panel)
+
+The 6.1 numbers were measured on small offscreen windows and missed that
+at 3840 x 2160 every *frame* cost 75-90 ms: a pointer move exposes the
+lane under the brush ring, label box and stroke, and Qt repainted every
+item there -- ~25,000 track vertices stroked eight times over (the 1 px
+passes of `LineItem`) and ~25,000 antialiased round points.  The base
+items carried a `DeviceCoordinateCache` that should have made that a copy,
+but item caches live in `QPixmapCache`, whose 10 MB default does not hold
+one 4K lane (3350 x 950 x 4 B = 12.7 MB), so every cache was dropped
+silently.  The input queue then grew without bound: half a second from
+pointer to frame for hover and brushes, 0.4-0.7 s per commit or undo, and
+a 2 s middle-drag took 29 s to finish replaying.  Now:
+
+* **`ImageLayer`** (overlay.py): the curves and dots of a lane are members
+  of three layers -- base; selection; hover and previews -- each a single
+  scene item that draws its members into an image at device resolution and
+  paints by copying it.  A changed member redraws only its old and new
+  rectangle (clipped); while the view moves the image is drawn "quick"
+  (one aliased pass, no dark edge) and the full one follows 120 ms after
+  the last move.  The id labels and the tool marks stay scene items.
+* **Dots are sprites**: `PointsItem` draws its dot (with outline) once at
+  the device pixel ratio and stamps it with one `drawPixmapFragments`; the
+  rings and crosses (`MarkItem`) use pyqtgraph's own `renderSymbol` sprite.
+  25,000 dots: 140 ms -> 3 ms.
+* **Every pointer move, at most one update per event-loop turn**:
+  `ToolSurface` reads moves off the viewport (pyqtgraph's 100 Hz
+  `mouseRateLimit` drops moves and never delivers the last one, so the
+  ring -- the brush tools' cursor -- stopped short of the pointer); the
+  hover query, the overlays and the middle-drag pan are each coalesced to
+  the latest position.  A pan step costs audian 40-70 ms (buffer and
+  spectrogram), so the pan used to queue every move.
+* The track table refills 80 ms after an edit instead of inside it.
+
+`tests/measure_eodsorter.py --4k [--dpr 2] [--recording R --results D]`
+measures all of this end to end, input event to painted frame.  What is
+left is audian's own cost of moving the view (a pan step, a G jump):
+every lane re-reads its buffer and recomputes the decibel image over the
+whole frequency range, 40-70 ms a step for two channels at 4K.
+
 ---------------------------------------------------------------------------
 
 ## 7. Modules and interfaces
@@ -1461,6 +1501,7 @@ tests/
     test_eodsorter_geometry.py   fast                                   (C)
     test_eodsorter_panel.py      slow                                   (C)
     measure_eodsorter.py         benchmark script                       (C)
+    measure_eodsorter_4k.py      its --4k mode: a real window, end to end
 wavetracker/ (upstream, branch `list-input`)
     wavetracker/io.py, pipeline.py, tests/test_io.py                    (B)
 ```

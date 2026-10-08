@@ -210,6 +210,12 @@ def annotation_chip_row(track: str) -> int:
 
 
 pg.setConfigOption("useNumba", True)
+# Opt-in, untested: AUDIAN_OPENGL=1 gives every plot an OpenGL viewport
+# (pyqtgraph's `useOpenGL`).  Not the default -- it could not be measured
+# where the 4K work was done (no GL offscreen), the raster frames are 1-7 ms
+# since that work, and pyqtgraph itself calls the option unpredictable.
+if os.environ.get("AUDIAN_OPENGL", "") not in ("", "0"):
+    pg.setConfigOption("useOpenGL", True)
 
 
 def frame_widget(widget: QWidget) -> None:

@@ -11,6 +11,11 @@ operation, the median time and the target:
   included), offscreen;
 * a hover query and a brush segment;
 * committing an edit of ~50,000 rows, including the redraw, and undoing it.
+
+``--4k`` measures something else: a whole `Audian` window on a 3840 x 2160
+screen driven by real pointer events, end to end (input to painted frame);
+see `measure_eodsorter_4k` for the options, e.g.
+``.venv/bin/python tests/measure_eodsorter.py --4k --dpr 2``.
 """
 
 from __future__ import annotations
@@ -69,6 +74,12 @@ def report(name, ms, target):
 
 
 def main() -> None:
+    if "--4k" in sys.argv:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from measure_eodsorter_4k import main as main_4k
+
+        main_4k([a for a in sys.argv[1:] if a != "--4k"])
+        return
     t0 = time.perf_counter()
     ts = reference_set()
     print(

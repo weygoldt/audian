@@ -1762,7 +1762,12 @@ class ToolController(QObject):
 
     def move(self, lane, pos, mods) -> None:
         self.mods = Mods.of(mods)
-        self._pointer = (lane, _xy(pos), self.mods)
+        pointer = (lane, _xy(pos), self.mods)
+        if pointer == self._pointer and self.tool.active:
+            # the same move twice: once off the viewport, once through
+            # pyqtgraph (`ToolSurface.eventFilter`)
+            return
+        self._pointer = pointer
         lane.pointer_moved(_xy(pos))
         self._guard(self.tool.move, lane, pos, mods)
 
@@ -2183,6 +2188,16 @@ class ToolSurface(pg.GraphicsObject):
         self._fade.setInterval(16)
         self._fade.timeout.connect(self._fade_step)
         self._fade_t0 = 0.0
+        # pointer moves straight from the viewport (see `eventFilter`)
+        self._viewports: list = []
+        self._dragging = False
+        # a middle-drag pan, applied once per event-loop turn (see `pan`)
+        self._pan_from = None
+        self._pan_to = None
+        self._pan_timer = QTimer()
+        self._pan_timer.setSingleShot(True)
+        self._pan_timer.setInterval(0)
+        self._pan_timer.timeout.connect(self._pan_step)
         # the cut line
         self.line_under = QGraphicsLineItem(self)
         self.line = QGraphicsLineItem(self)
@@ -2224,6 +2239,8 @@ class ToolSurface(pg.GraphicsObject):
 
     def detach(self) -> None:
         self._fade.stop()
+        self._pan_timer.stop()
+        self._hook_viewports(False)
         try:
             self.vb.sigResized.disconnect(self._resized)
         except (RuntimeError, TypeError):
@@ -2252,6 +2269,8 @@ class ToolSurface(pg.GraphicsObject):
             if self.armed
             else Qt.MouseButton.NoButton
         )
+        self._hook_viewports(self.armed)
+        self._dragging = False
         if not self.armed:
             self.pointer_left()
             if self.ctl.hover_lane is self:
@@ -2259,6 +2278,62 @@ class ToolSurface(pg.GraphicsObject):
         else:
             self.adopt_pointer()
         self.tool_changed()
+
+    def _hook_viewports(self, on: bool) -> None:
+        for vp in self._viewports:
+            try:
+                vp.removeEventFilter(self)
+            except RuntimeError:  # the viewport is gone
+                pass
+        self._viewports = []
+        scene = self.scene()
+        if on and scene is not None:
+            for view in scene.views():
+                vp = view.viewport()
+                vp.installEventFilter(self)
+                self._viewports.append(vp)
+
+    def eventFilter(self, obj, ev):  # noqa: N802 - Qt's spelling
+        """Every pointer move over the lane, at the rate the mouse sends.
+
+        pyqtgraph's scene drops a move that comes less than 10 ms after the
+        last one it took (``mouseRateLimit``), and never delivers it later.
+        A 125-1000 Hz mouse loses most of its moves that way, and when the
+        pointer stops, the brush ring -- which *is* the cursor in the brush
+        tools -- and the hover stay where an earlier move left them.  So
+        the surface reads the moves off the viewport itself and hands them
+        to the controller, which only records the position and coalesces
+        the work into one update per event-loop turn.  pyqtgraph's own
+        delivery of the moves it keeps still happens and repeats the same
+        position, which the controller ignores.  The event is never
+        consumed.
+        """
+        if ev.type() == QEvent.Type.MouseMove and self.armed:
+            try:
+                self._raw_move(obj, ev)
+            except RuntimeError:  # an item or view went away under us
+                pass
+        return False
+
+    def _raw_move(self, vp, ev) -> None:
+        view = vp.parentWidget()
+        if view is None or not hasattr(view, "mapToScene"):
+            return
+        p = self.mapFromScene(view.mapToScene(ev.position().toPoint()))
+        buttons = ev.buttons()
+        if buttons & Qt.MouseButton.MiddleButton:
+            if self._pan_from is not None:
+                self._pan_to = self.mapToScene(p)
+                if not self._pan_timer.isActive():
+                    self._pan_timer.start()
+            return
+        if buttons & Qt.MouseButton.LeftButton:
+            if self._dragging:
+                self.ctl.move(self, p, ev.modifiers())
+            return
+        if buttons == Qt.MouseButton.NoButton:
+            if self.ctl.hover_lane is self and self._rect.contains(p):
+                self.ctl.hover_at(self, p, ev.modifiers())
 
     def adopt_pointer(self) -> bool:
         """Edit mode turned on with the pointer resting on this lane: Qt
@@ -2322,9 +2397,11 @@ class ToolSurface(pg.GraphicsObject):
         ev.accept()
         mods = ev.modifiers()
         if ev.isStart():
+            self._dragging = True
             self.ctl.press(self, ev.buttonDownPos(), mods)
             self.ctl.move(self, ev.pos(), mods)
         elif ev.isFinish():
+            self._dragging = False
             self.ctl.release(self, ev.pos(), mods)
         else:
             self.ctl.move(self, ev.pos(), mods)
@@ -2365,30 +2442,55 @@ class ToolSurface(pg.GraphicsObject):
         drag the view.  This moves it the way audian's own Pan mode does:
         `translateBy` in data coordinates, then the signals that make the
         browser follow (linked time axes, loading the data under the view).
+
+        Coalesced: a pointer move only records where the pointer is, and
+        the view moves once per event-loop turn, to the latest position.
+        Moving it costs audian 30-70 ms (every lane re-reads its buffer and
+        recomputes its spectrogram), and doing that for every one of a
+        mouse's 125-1000 moves a second built a backlog of seconds; now a
+        slow frame drops intermediate positions instead of queueing them.
         """
-        vb = self.vb
         if start:
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             self.ring.setVisible(False)
             self.ring_under.setVisible(False)
-        if last is not None and now is not None and last != now:
-            a = vb.mapSceneToView(last)
-            b = vb.mapSceneToView(now)
-            enabled = vb.state["mouseEnabled"]
-            x = float(a.x() - b.x()) if enabled[0] else None
-            y = float(a.y() - b.y()) if enabled[1] else None
-            if x is not None or y is not None:
-                vb._resetTarget()
-                vb.translateBy(x=x, y=y)
-                vb.sigRangeChangedManually.emit(enabled)
-                zoomed = getattr(vb, "sigUserZoomed", None)
-                if zoomed is not None:
-                    zoomed.emit(x is not None, y is not None)
+            self._pan_from = last if last is not None else now
+        if now is not None:
+            if self._pan_from is None:
+                self._pan_from = last if last is not None else now
+            self._pan_to = now
+            if finish:
+                self._pan_step()
+            elif not self._pan_timer.isActive():
+                self._pan_timer.start()
         if finish:
-            add_region = getattr(vb, "add_region", None)
+            self._pan_timer.stop()
+            self._pan_from = self._pan_to = None
+            add_region = getattr(self.vb, "add_region", None)
             if add_region is not None:
-                add_region(vb.viewRect())
+                add_region(self.vb.viewRect())
             self.tool_changed()
+
+    def _pan_step(self) -> None:
+        """Move the view by the pointer's travel since the last step."""
+        self._pan_timer.stop()
+        last, now = self._pan_from, self._pan_to
+        if last is None or now is None or last == now:
+            return
+        vb = self.vb
+        a = vb.mapSceneToView(last)
+        b = vb.mapSceneToView(now)
+        self._pan_from = now
+        enabled = vb.state["mouseEnabled"]
+        x = float(a.x() - b.x()) if enabled[0] else None
+        y = float(a.y() - b.y()) if enabled[1] else None
+        if x is not None or y is not None:
+            vb._resetTarget()
+            vb.translateBy(x=x, y=y)
+            vb.sigRangeChangedManually.emit(enabled)
+            zoomed = getattr(vb, "sigUserZoomed", None)
+            if zoomed is not None:
+                zoomed.emit(x is not None, y is not None)
 
     # ---- feedback, called by the controller and the tools
 

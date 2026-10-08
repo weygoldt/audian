@@ -1676,6 +1676,120 @@ def test_unchanged_lines_and_dots_do_not_repaint(app):
     assert seen == ["line"]
 
 
+def test_an_image_layer_redraws_a_change_as_a_full_redraw_would(app):
+    """`ImageLayer` redraws only around a changed member; the result must be
+    the image a redraw from scratch gives, dots (sprites) included."""
+    import pyqtgraph as pg
+
+    from audian import theme
+    from audian_plugins.eodsorter.overlay import ImageLayer, LineItem, PointsItem
+
+    w = pg.PlotWidget()
+    w.resize(420, 320)
+    w.show()
+    vb = w.getPlotItem().getViewBox()
+    vb.setRange(xRange=(0, 10), yRange=(0, 10), padding=0)
+    layer = ImageLayer()
+    w.addItem(layer, ignoreBounds=True)
+    line = layer.add(LineItem(), 1)
+    dots = layer.add(PointsItem(), 2)
+    line.setPen(theme.pen("#ff0000", width=2))
+    line.setShadowPen(theme.pen("#000000", width=4))
+    x = np.arange(10.0)
+    line.setData(x, np.full(10, 2.0))
+    dots.setData(x=x, y=np.full(10, 5.0), size=6, brush=theme.brush("#00ff00"))
+    pump(0.1)
+    w.grab()
+    before = layer.renders
+    line.setData(x, 2.0 + 0.5 * x)  # moves, and now crosses the dots
+    pump(0.05)
+    partial = w.grab().toImage()
+    assert layer.renders == before + 1
+    layer.touch()
+    pump(0.05)
+    full = w.grab().toImage()
+    assert partial == full
+    # a dot is drawn where its point is, in its colour
+    centre = vb.mapViewToScene(pg.Point(3.0, 5.0))
+    p = w.mapFromScene(centre)
+    colour = full.pixelColor(p.x(), p.y())
+    assert colour.green() > 200 and colour.red() < 60, colour.name()
+    w.close()
+
+
+def test_a_middle_drag_moves_the_view_once_per_event_loop_turn(panel):
+    """Each pan step costs audian tens of ms; a mouse sends hundreds of
+    moves a second.  The moves are merged, never queued."""
+    from PySide6.QtCore import QPointF
+
+    s = lane(panel)
+    vb = s.vb
+    steps = []
+
+    def moved(*args):
+        steps.append(args)
+
+    (x0, x1), _ = vb.viewRange()
+    width = s.boundingRect().width()
+    vb.sigRangeChangedManually.connect(moved)
+    try:
+        start = s.mapToScene(QPointF(200.0, 100.0))
+        s.pan(start, start, start=True)
+        for k in range(1, 6):
+            s.pan(None, s.mapToScene(QPointF(200.0 + 10 * k, 100.0)))
+        assert steps == [], "nothing moves until the event loop turns"
+        pump(0.05)
+        assert len(steps) == 1
+        (u0, u1), _ = vb.viewRange()
+        want = 50.0 * (x1 - x0) / width
+        assert abs((x0 - u0) - want) < 0.02 * want, "all 50 px of travel"
+        assert abs((u1 - u0) - (x1 - x0)) < 1e-6 * (x1 - x0)
+        s.pan(None, s.mapToScene(QPointF(250.0, 100.0)), finish=True)
+        pump(0.05)
+        assert len(steps) == 1, "no travel since the last step"
+    finally:
+        vb.sigRangeChangedManually.disconnect(moved)
+
+
+def test_every_pointer_move_reaches_the_brush_ring(panel):
+    """pyqtgraph drops a move that comes within 10 ms of the last one, and
+    the ring -- the brush tools' cursor -- stopped short of the pointer."""
+    import pyqtgraph as pg
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    s = lane(panel)
+    view = s.scene().views()[0]
+    vp = view.viewport()
+    ident = ids_in_view(panel)[0]
+    t, f, _r = point_of(panel, ident)
+    hover(panel, t, f)
+    assert panel.controller.hover_lane is s
+    x, y = px(s, t, f)
+    last = None
+    # the suite turns the limit off (conftest); the reader's pyqtgraph has it
+    pg.setConfigOption("mouseRateLimit", 100)
+    try:
+        for dx in (0.0, 4.0, 8.0):  # three moves inside a millisecond or two
+            last = QPointF(view.mapFromScene(s.mapToScene(QPointF(x + dx, y + 20))))
+            ev = QMouseEvent(
+                QEvent.Type.MouseMove,
+                last,
+                last,
+                QPointF(vp.mapToGlobal(last.toPoint())),
+                Qt.MouseButton.NoButton,
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            QApplication.sendEvent(vp, ev)
+    finally:
+        pg.setConfigOption("mouseRateLimit", 0)
+    want = s.mapFromScene(view.mapToScene(last.toPoint()))
+    centre = s.ring.rect().center()
+    assert abs(centre.x() - want.x()) < 0.5 and abs(centre.y() - want.y()) < 0.5
+
+
 def test_dim_spectrogram_draws_a_veil_under_the_tracks(panel):
     o = panel.overlays[0]
     assert o.veil.boundingRect().isEmpty()
