@@ -10,6 +10,8 @@ array, a few seconds or a session split across a dozen files.
 A fork of [bendalab/audian](https://github.com/bendalab/audian) by
 [Jan Benda](https://github.com/janscience).
 
+[![tests](https://github.com/weygoldt/audian/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/weygoldt/audian/actions/workflows/tests.yml?query=branch%3Amaster)
+[![coverage](https://raw.githubusercontent.com/weygoldt/audian/badges/coverage.svg)](https://github.com/weygoldt/audian/actions/workflows/tests.yml?query=branch%3Amaster)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11--3.14-blue.svg)](pyproject.toml)
 [![Upstream](https://img.shields.io/badge/fork%20of-bendalab%2Faudian-lightgrey.svg)](https://github.com/bendalab/audian)
@@ -88,6 +90,18 @@ instead of an absolute score, and where the whole approach stops working. See
 **Plugins → Wavetracker** runs [wavetracker](https://github.com/weygoldt/wavetracker)
 from inside audian and lets you correct what it got wrong, on the
 spectrogram you are looking at. It replaces wavetracker's `EODsorter`.
+
+![wavetracker](docs/shots/wavetracker-overview.png)
+
+*A synthetic recording, tracked with Track recording. One fish's rises have
+broken it into four tracks (1, 6, 7, 8), and two fish cross near the end.*
+
+| Add: brush along a line | …and audian says what you added |
+| --- | --- |
+| ![add](docs/shots/wavetracker-add.png) | ![harmonic](docs/shots/wavetracker-harmonic.png) |
+
+*The ridge under the brush becomes a track. This one is the second harmonic
+of fish 4, not a fish, so it is flagged; Enter unassigns it.*
 
 - **Track visible** tracks the window in front of you in a few seconds and
   shows the result dashed over the session, to *Accept* or *Discard*.

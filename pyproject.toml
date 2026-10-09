@@ -56,9 +56,10 @@ classifiers = [
 ]
 
 [dependency-groups]
-# What it takes to run the suite: pytest and the ruff its lint test calls.
+# What it takes to run the suite: pytest and the ruff its lint test calls,
+# plus pytest-cov for the coverage badge CI publishes from master.
 # `uv sync` installs this group by default.
-dev = ["pytest", "ruff"]
+dev = ["pytest", "pytest-cov", "ruff"]
 
 [project.urls]
 Repository    = "https://github.com/bendalab/audian"
@@ -102,6 +103,13 @@ markers = [
   "slow: builds widgets on the QApplication.  Applied by conftest to every test that uses the `app` fixture; deselect with -m 'not slow'.",
   "realdata: needs recordings that are not in this repository.  Deselected by default; run with --realdata.",
 ]
+
+[tool.coverage.run]
+# The wavetracker plugin runs `wtrunner.py` in a child process of this very
+# interpreter; follow it there, or the runner reads as never executed.
+# (CI names the sources as paths, src/audian and src/audian_plugins, so the
+# script counts whether it is imported as a module or run as a file.)
+patch = ["subprocess"]
 
 [tool.ruff]
 # The oldest Python of requires-python, named so that syntax 3.11 cannot

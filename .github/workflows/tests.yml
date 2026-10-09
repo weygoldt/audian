@@ -1,6 +1,9 @@
 name: tests
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
@@ -40,6 +43,62 @@ jobs:
           uv run --locked ruff format --check src tests scripts
 
       - name: Test
+        if: matrix.python-version != '3.14'
         env:
           QT_QPA_PLATFORM: offscreen
         run: uv run --locked pytest tests -q
+
+      # One leg measures coverage, so the other runs at full speed.
+      - name: Test with coverage
+        if: matrix.python-version == '3.14'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          uv run --locked pytest tests -q
+          --cov=src/audian --cov=src/audian_plugins
+          --cov-report=term --cov-report=json
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.14'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.json
+          retention-days: 7
+
+  # Draws the coverage badge and force-pushes it as the only commit of the
+  # orphan `badges` branch, which the README shows.  Pushes to master of this
+  # repository only: never pull requests, other branches or forks.
+  badge:
+    needs: pytest
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/master'
+      && github.repository == 'weygoldt/audian'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: coverage-badge
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage
+
+      - name: Publish badge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          out="$RUNNER_TEMP/badges"
+          python3 scripts/coverage_badge.py coverage.json "$out/coverage.svg"
+          cd "$out"
+          git init -q -b badges
+          git add coverage.svg
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Coverage badge for ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:badges
