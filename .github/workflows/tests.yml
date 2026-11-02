@@ -6,7 +6,11 @@ permissions:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    # Pinned: on ubuntu-26.04 (`ubuntu-latest` since October 2026) libportaudio2
+    # fails to initialise without a sound server, and audioio, which only
+    # catches ImportError around `import sounddevice`, then takes `import
+    # audian` down with it.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

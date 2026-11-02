@@ -294,7 +294,8 @@ tracks can separate two fish that look like one line on screen.
 | "zoom out: wavetracker needs at least two FFT windows" | the view is too short to track |
 | Clean up finds nothing to keep | it is made for a few persistent fish. Correct by hand |
 | dragging is slow | a shorter time window and fewer lanes help most (**S**) |
-| audian will not start and mentions PortAudio | on Debian and Ubuntu: `sudo apt install libportaudio2` |
+| audian will not start: "PortAudio library not found" | on Debian and Ubuntu: `sudo apt install libportaudio2` |
+| audian will not start: "Error initializing PortAudio … Can't connect to server" | no sound server is reachable, for example over SSH: run it in a desktop session |
 
 ## Keys
 
