@@ -35,9 +35,8 @@ class Analyzer(object):
     something with it by implementing a class derived from Analyzer.
     An Analyzer may compute some statistics, some numbers, from the
     selected data and store it in a table that can later on be saved
-    to a file. Or it detects some things that should be marked with
-    marker symbols on the traces. Or it opens a new window where it
-    displays whatever you want based on the selected data.
+    to a file. Or it opens a new window where it displays whatever you
+    want based on the selected data.
 
     Classes inheriting the `Analyzer` class need to reimplement the
     `analyze()` function. Their constructor takes an instance of the
@@ -45,13 +44,10 @@ class Analyzer(object):
     example.
 
     The constructor might add columns to the table where analysis results
-    are stored (`make_column()` function) or initializes event
-    markers to be plotted on top of traces or into specific panels
-    (`make_trace_events()` and `make_panel_events()` functions).
+    are stored (`make_column()` function).
 
     The `analyze()` function then stores analysis results into the
-    table (`store()` function) or plots event markers (`set_events()`
-    and `add_events()` functions).
+    table (`store()` function).
 
     Or you open a new window using, for example, a QDialog with
     self.browser as parent.
@@ -79,8 +75,6 @@ class Analyzer(object):
         `analyze()` provides all the traces of the selected region.
     data: thunderlab.TableData
         The table storing the analysis results.
-    events: dict of list of pyqtgraph.ScatterPlotItem
-        Dictionary of the plot items for plotting event markers.
 
     Methods
     -------
@@ -89,10 +83,6 @@ class Analyzer(object):
     - `trace()`: Full data trace of a given name
     - `make_column()`: Make a column for the table collecting the analysis results.
     - `store()`: Store analysis results in table.
-    - `make_trace_events()`: Prepare events for plotting on top of a specific trace.
-    - `make_panel_events()`: Prepare events for plotting in a specific panel.
-    - `set_events()`: Plot event markers.
-    - `add_events()`: Plot additional event markers.
 
     """
 
@@ -102,15 +92,11 @@ class Analyzer(object):
         self.source_name = source_name
         self.source = self.trace(self.source_name)
         self.data = TableData()
-        self.events = {}
         self.browser.add_analyzer(self)
 
     def clear(self):
-        """Clear the data table and the markers."""
+        """Clear the data table."""
         self.data.clear_data()
-        for name in self.events:
-            for c in range(len(self.events[name])):
-                self.events[name][c].clear()
 
     def analyze(self, t0, t1, channel, traces):
         """Analysis function.
@@ -192,127 +178,6 @@ class Analyzer(object):
 
         """
         self.data.add(args, 0)
-
-    def make_trace_events(self, name, trace_name, symbol, color, size):
-        """Prepare events for plotting on top of a specific trace.
-
-        Call this function in the constructor if your `analyze()`
-        function wants to plot some event markers onto a trace using
-        the `set_events()` or àdd_events()` functions.
-
-        Parameters
-        ----------
-        name: str
-            Name identifying the events.
-        trace_name: str
-            Name of the trace on which the event markers should be plotted.
-        symbol: str
-            Symbol to be used for plotting event markers.
-
-            See [pyqtgraph.ScatterPlotItem.setSymbol()](https://pyqtgraph.readthedocs.io/en/latest/api_reference/graphicsItems/scatterplotitem.html)
-            for options.
-        color: pyqtgraph color specifier
-            Color of the marker symbol.
-        size: int or float
-            Size of the event marker.
-
-        """
-        self.events[name] = []
-        for c in range(self.browser.data.data.channels):
-            spi = pg.ScatterPlotItem()
-            spi.setSymbol(symbol)
-            spi.setBrush(color)
-            spi.setSize(size)
-            self.events[name].append(spi)
-            self.browser.add_to_panel_trace(trace_name, c, spi)
-
-    def make_panel_events(self, name, panel_name, symbol, color, size):
-        """Prepare events for plotting in a specific panel.
-
-        Call this function in the constructor if your `analyze()`
-        function wants to plot some event markers in a specific panel
-        using the `set_events()` or àdd_events()` functions.
-
-        Parameters
-        ----------
-        name: str
-            Name identifying the events.
-        panel_name: str
-            Name of the panel on which the event markers should be plotted.
-        symbol: str
-            Symbol to be used for plotting event markers.
-
-            See [pyqtgraph.ScatterPlotItem.setSymbol()](https://pyqtgraph.readthedocs.io/en/latest/api_reference/graphicsItems/scatterplotitem.html)
-            for options.
-        color: pyqtgraph color specifier
-            Color of the marker symbol.
-        size: int or float
-            Size of the event marker.
-
-        """
-        self.events[name] = []
-        panel = self.browser.panels[panel_name]
-        for ax in panel.axs:
-            spi = pg.ScatterPlotItem()
-            spi.setSymbol(symbol)
-            spi.setBrush(color)
-            spi.setSize(size)
-            self.events[name].append(spi)
-            ax.add_item(spi)
-
-    def set_events(self, name, channel, x, y):
-        """Plot event markers.
-
-        Call this function from the analyze() function
-        for plotting event markers.
-        Previously plotted event markers are erased.
-
-        Parameters
-        ----------
-        name: str
-            Name identifying the events.
-            This is the name that has been used when calling
-            `make_trace_events()` or `make_panel_events()`
-        channel: int
-            Channel where to plot the data.
-            If negative, plot them on all channels.
-        x: array of float
-            x-coordinates of the event marker.
-        y: array of float
-            y-coordinates of the event marker.
-
-        """
-        for c in range(self.browser.data.data.channels):
-            if c == channel or channel < 0:
-                self.events[name][c].setData(x, y)
-            else:
-                self.events[name][c].clear()
-
-    def add_events(self, name, channel, x, y):
-        """Plot additional event markers.
-
-        Call this function from the analyze() function
-        for plotting event markers.
-        Previously plotted event markers are not erased.
-
-        Parameters
-        ----------
-        name: str
-            Name identifying the events.
-            This is the name that has been used when calling
-            `make_trace_events()` or `make_panel_events()`
-        channel: int
-            Channel where to plot the data.
-            If negative, plot them on all channels.
-        x: array of float
-            x-coordinates of the event marker.
-        y: array of float
-            y-coordinates of the event marker.
-
-        """
-        for c in range(self.browser.data.data.channels):
-            if c == channel or channel < 0:
-                self.events[name][c].addPoints(x, y)
 
 
 class PlainAnalyzer(Analyzer):

@@ -2,9 +2,7 @@
 
 Until this module the path had no test at all.  It pins the table the two
 built-in analyzers fill, the clamping and error isolation in
-`DataBrowser.analyze_region`, and the CSV `save_analysis` writes.  The
-analyzer *event* API (`make_trace_events` and friends) is left untested on
-purpose: it is on the decided-deletions list and nothing calls it.
+`DataBrowser.analyze_region`, and the CSV `save_analysis` writes.
 
     .venv/bin/python -m pytest tests/test_analyzer.py -q
 """
