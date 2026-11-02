@@ -5169,7 +5169,7 @@ class DataBrowser(QWidget):
             DataBrowser.LABEL_SETTING,
             {
                 "version": DataBrowser.LABEL_SETTING_VERSION,
-                "categories": categories_to_settings(self.labels.categories),
+                "categories": categories_to_settings(self.labels.lasting_categories),
             },
         )
 
@@ -5402,7 +5402,7 @@ class DataBrowser(QWidget):
         named a category the settings did not know, or a category being
         removed out from under the one that was current.
         """
-        names = [c.name for c in self.labels.categories]
+        names = [c.name for c in self.labels.lasting_categories]
         if self.current_category not in names:
             self.current_category = names[0] if names else ""
         self.rebuild_category_actions()
@@ -5427,7 +5427,7 @@ class DataBrowser(QWidget):
             act.setParent(None)
             act.deleteLater()
         self.category_acts = []
-        for i, category in enumerate(self.labels.categories[:9]):
+        for i, category in enumerate(self.labels.lasting_categories[:9]):
             act = QAction(category.name, self)
             act.setShortcut(str(i + 1))
             act.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
@@ -6049,10 +6049,10 @@ class DataBrowser(QWidget):
             return
         keys = {
             c.name: self.category_key_for(i)
-            for i, c in enumerate(self.labels.categories)
+            for i, c in enumerate(self.labels.lasting_categories)
         }
         self.label_chipbox.set_categories(
-            self.labels.categories, self.current_category, keys
+            self.labels.lasting_categories, self.current_category, keys
         )
         self.label_chips = self.label_chipbox.chips
         # The group grew or shrank by a chip, and `equalize` froze every frame
@@ -6095,7 +6095,7 @@ class DataBrowser(QWidget):
         if self.label_error:
             return f"{count} labels -- SAVE FAILED: {self.label_error}"
         if not count:
-            if not self.labels.categories:
+            if not self.labels.lasting_categories:
                 return "no categories yet -- add one with Edit…"
             return "no labels yet -- press b, then drag over a lane"
         name = self.labels.path.name if self.labels.path is not None else "?"
@@ -10447,9 +10447,9 @@ class DataBrowser(QWidget):
             # the categories are not a fixed set, and a chain would have to be
             # edited in two places every time one is added.
             label_acts = {}
-            if self.labels.categories:
+            if self.labels.lasting_categories:
                 submenu = menu.addMenu("&Label as")
-                for i, category in enumerate(self.labels.categories):
+                for i, category in enumerate(self.labels.lasting_categories):
                     key = self.category_key_for(i)
                     act = submenu.addAction(
                         f"{category.name}  {key}" if key else category.name

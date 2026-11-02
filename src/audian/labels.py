@@ -350,6 +350,9 @@ class LabelSet:
         self.damaged = ""
         #: How to take back the last change, or None.  See `undo`.
         self._undo: Optional[tuple] = None
+        #: Categories that are working state and not the reader's.  See
+        #: `mark_transient`.
+        self._transient: set = set()
         self.set_categories(categories)
         self.revision = 0
 
@@ -358,6 +361,26 @@ class LabelSet:
     @property
     def categories(self) -> tuple[LabelCategory, ...]:
         return tuple(self._categories)
+
+    @property
+    def lasting_categories(self) -> tuple[LabelCategory, ...]:
+        """The reader's vocabulary: every category but the transient ones."""
+        return tuple(c for c in self._categories if c.name not in self._transient)
+
+    def mark_transient(self, name: str) -> None:
+        """Say that a category is a plugin's working state, not the reader's.
+
+        Its rows are drawn and edited like any others, and go no further: never
+        written to the sidecar, by any save, and its name is never offered on the
+        chips or the digit keys, or kept in the settings.  A detector's guesses are
+        like this.  Taking them out again before each save cannot work, since the
+        autosave runs on every edit and a crash leaves whatever was last written,
+        and a box drawn into a category that is about to be rewritten would be lost.
+        """
+        self._transient.add(name)
+
+    def is_transient(self, name: str) -> bool:
+        return name in self._transient
 
     def __len__(self) -> int:
         return len(self.labels)
@@ -413,6 +436,13 @@ class LabelSet:
                 continue
             seen.add(c.name)
             kept.append(c)
+        # The editor shows the reader's vocabulary and hands it back, so a transient
+        # category it never showed has not been removed by it.
+        kept += [
+            c
+            for c in self._categories
+            if c.name in self._transient and c.name not in seen
+        ]
         self._categories = kept
         self.revision += 1
 
@@ -827,7 +857,8 @@ class LabelSet:
                 writer = csv.writer(fp)
                 writer.writerow(COLUMNS)
                 for label in self.labels:
-                    writer.writerow(label.row())
+                    if label.category not in self._transient:
+                        writer.writerow(label.row())
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -872,7 +903,7 @@ class LabelSet:
 
     def save(self, path: Path | str | None = None) -> str:
         """Persist the set: write it, or remove the sidecar when it is empty."""
-        if self.labels:
+        if any(label.category not in self._transient for label in self.labels):
             return self.write(path)
         if path is not None:
             self.path = Path(path)

@@ -891,7 +891,7 @@ class CategoryModel(QAbstractTableModel):
     def __init__(self, store: LabelSet, parent=None):
         super().__init__(parent)
         self.store = store
-        self.rows: list[LabelCategory] = list(store.categories)
+        self.rows: list[LabelCategory] = list(store.lasting_categories)
 
     def rowCount(self, parent=None) -> int:
         return len(self.rows)
@@ -1026,7 +1026,7 @@ class CategoryModel(QAbstractTableModel):
     def store_rows(self) -> list[str]:
         """Push the edited vocabulary onto the store.  Returns names dropped."""
         kept = {c.name for c in self.rows}
-        gone = [c.name for c in self.store.categories if c.name not in kept]
+        gone = [c.name for c in self.store.lasting_categories if c.name not in kept]
         for name in gone:
             self.store.remove_category(name)
         self.store.set_categories(self.rows)
