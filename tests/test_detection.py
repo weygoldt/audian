@@ -2,7 +2,7 @@
 
 Runs without a window::
 
-    .venv-qt6/bin/python -m pytest tests/test_detection.py -q
+    .venv/bin/python -m pytest tests/test_detection.py -q
 
 `audian_plugins.eventdetection.engine` imports no Qt, so nothing here builds one -- the same
 split `tests/test_smoothing.py` states its reasons for.  Every claim below

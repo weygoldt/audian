@@ -2,7 +2,7 @@
 
 Runs offscreen::
 
-    QT_QPA_PLATFORM=offscreen .venv-qt6/bin/python -m pytest tests/test_detector_plugin.py -q
+    QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_detector_plugin.py -q
 
 The arithmetic is pinned next door in ``tests/test_detection.py``, against
 the reader's own annotation of a real cricket.  What is pinned *here* is

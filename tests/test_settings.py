@@ -2,7 +2,7 @@
 
 Runs offscreen::
 
-    QT_QPA_PLATFORM=offscreen .venv-qt6/bin/python -m pytest tests/test_settings.py -q
+    QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_settings.py -q
 
 Every test here writes into a `tmp_path` and points `audian.settings_path`
 at it, because the alternative is writing the developer's real
@@ -143,7 +143,7 @@ def scheme(app):
     reports Dark, then Light, then Dark again after `unsetColorScheme`.  To
     run these two, give the run a display::
 
-        .venv-qt6/bin/python -m pytest tests/test_settings.py -q \\
+        .venv/bin/python -m pytest tests/test_settings.py -q \\
             -k desktop --no-header -p no:cacheprovider
 
     with ``QT_QPA_PLATFORM`` unset.

@@ -2,7 +2,7 @@
 
 Runs offscreen::
 
-    QT_QPA_PLATFORM=offscreen .venv-qt6/bin/python -m pytest tests/test_peaking.py -q
+    QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_peaking.py -q
 
 No window is built, for the reason ``tests/test_smoothing.py`` states: every
 claim here is about a lookup table or a colour distance, and answering it

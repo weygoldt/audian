@@ -2,7 +2,7 @@
 
 Runs offscreen::
 
-    QT_QPA_PLATFORM=offscreen .venv-qt6/bin/python -m pytest tests/test_smoothing.py -q
+    QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_smoothing.py -q
 
 No window is built, for the reason ``tests/test_settings.py`` states: every
 claim here is about an array or a lookup table, and answering it through a

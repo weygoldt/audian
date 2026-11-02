@@ -56,7 +56,7 @@ Therefore:
 
 Verified ratios on ``BG_PLOT``: FG 15.93, FG_MUTED 7.69, PRIMARY 5.87,
 ACCENT 9.25, SUCCESS 8.03, DANGER 6.21, TRACE_RAW 11.42, TRACE_FILTERED 12.06.
-Run ``python -m audian.theme`` to re-check.
+Run ``python src/audian/theme.py`` to re-check.
 
 Themes
 ------
@@ -345,7 +345,7 @@ DARK_TOKENS: dict[str, str] = {
     #
     # Lightness was raised until each clears the graphic floor with room to
     # spare on the deepest surface, bg.raised: 4.99 / 5.35 on bg.plot.  Run
-    # `python -m audian.theme` for the live table.
+    # `python src/audian/theme.py` for the live table.
     #
     # Which family went where is a measurement, not a taste.  `run` is the
     # only other SPAN a lane draws, and a span is told from a span by hue
@@ -3196,7 +3196,7 @@ def delta_e2000(a: Any, b: Any) -> float:
 
     CIE 142-2001 with ``kL = kC = kH = 1``.  Written out rather than pulled
     from a dependency because the whole point of the separation gate is that
-    it is auditable: ``python -m audian.theme`` prints the numbers a reviewer
+    it is auditable: ``python src/audian/theme.py`` prints the numbers a reviewer
     can check against any other implementation.
     """
     l1, a1, b1 = srgb_to_lab(a)
