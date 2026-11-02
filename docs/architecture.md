@@ -119,10 +119,15 @@ or `audian_*denoisers`:
 
 Bundled plugins:
 
-- `audian_plugins/eventdetection/`: Few-shot normalized cross-correlation
-  event detector for trace and spectrogram templates. `engine.py` is the
-  arithmetic and imports no Qt; `panel.py` is the interface. Enable it at
-  **Plugins > Event detection > Normalised cross-correlation**.
+- `audian_plugins/specdetector/`: Trains a detector on the recording from a few
+  labels, at **Plugins > Spectrogram detector**: SAM to label, YOLOE to propose,
+  YOLO to detect, all through Ultralytics in a child process. `tiling.py` turns
+  samples into images and pixels back into seconds and hertz. `dataset.py`,
+  `review.py`, `boxes.py` and `project.py` are the rest of the logic and import no
+  Qt. `models.py` and `modelrunner.py` run out of process and are the only files
+  that touch Ultralytics. The design and its measurements are in
+  [`specdetector-design.md`](specdetector-design.md), and
+  `tests/measure_specdetector.py` reproduces them.
 - `audian_plugins/eodsorter/`: Runs wavetracker and corrects its tracks on the
   spectrogram, at **Plugins > Wavetracker**. The design is in
   [`eodsorter-design.md`](eodsorter-design.md).
@@ -134,7 +139,7 @@ mechanical: move the package directory, give it a `pyproject.toml` declaring
 
 ``` toml
 [project.entry-points."audian.plugins"]
-eventdetection = "audian_plugins.eventdetection"
+specdetector = "audian_plugins.specdetector"
 ```
 
 and delete it from here. No code changes, in either repository.

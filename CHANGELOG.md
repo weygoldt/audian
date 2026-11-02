@@ -9,8 +9,11 @@ at v2.5. Install it from source; `pip install audian` gets upstream.
 
 - **Wavetracker plugin:** run wavetracker from inside audian and correct its
   tracks on the spectrogram, with undo history, autosave and harmonic flags.
-- **Event detection plugin:** a few-shot detector that learns from the events
-  you label.
+- **Spectrogram detector plugin:** label a few events with SAM, review what a
+  model proposes, train a YOLO detector on the recording in about a minute and
+  run it over the whole file. It replaces the template matcher that shipped
+  under **Plugins > Event detection**, which matched on the waveform as well;
+  this one works on the spectrogram only.
 - **Denoiser plugins** for the spectrogram: mains hum and spatial coherence.
 - **Plugin API:** `audian.pluginapi`, plugins bundled in `audian_plugins`, and
   an `audian.plugins` entry point group for installed ones.

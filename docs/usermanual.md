@@ -541,3 +541,109 @@ closer together than one screen pixel are collapsed to the one line they would
 have painted anyway. A session with half a million rows costs a few
 milliseconds a frame, and the count in a chip's tool tip is always the number
 of rows the layer holds, not the number of marks on screen.
+
+## Detecting events on the spectrogram
+
+**Plugins > Spectrogram detector** opens the **Detector** tab. It trains a
+detector on the recording you have open, from the events you label. The first
+time, press **Get models**, which downloads about 120 MB once. After that it
+needs no network.
+
+### Label a few events
+
+Choose or add a class, press **Label**, and drag a box around an event on the
+spectrogram. SAM draws an outline inside your box. Press <kbd>Enter</kbd> to
+accept it. The label goes into the current category, in the same sidecar as every
+other label.
+
+A rough box is enough: detectors trained from rough boxes did about as well as
+those trained from careful ones. A single click is not. It finds only the blob
+under the pointer, such as one harmonic of a pulse, and labels made that way
+trained much worse detectors. Use clicks to adjust an outline.
+
+| Input | What it does |
+| --- | --- |
+| Drag | Box the event |
+| Click | Add this part to the outline |
+| <kbd>Ctrl</kbd>+click | Remove this part from the outline |
+| Click a candidate | Reject it |
+| <kbd>Enter</kbd> | Accept the outline, or if there is none, accept what is left in view and go to the next window |
+| <kbd>Shift</kbd>+<kbd>Enter</kbd> | Reject what is left in view and go to the next window |
+| <kbd>Backspace</kbd> | Undo the last click or rejection |
+| <kbd>Esc</kbd> | Drop the outline |
+
+These keys belong to the tool only while **Label** is on, and never while you are
+typing in a field. The right mouse button and the wheel still move the view.
+Labels you draw the usual way, with **Label** off, count too.
+
+### Find more, and review
+
+**Find more** proposes more events: from your labels with no training if you have
+no model yet, otherwise with the last model you trained. **Look in** sets how much
+of the recording it searches. Candidates appear as labels in `<class> (found)`.
+Move **Cut** to show more or fewer of them, which runs nothing.
+
+**Next window** goes to the window worth looking at next and turns on **Label**.
+Click the wrong candidates to reject them, drag around any event that was missed,
+then press <kbd>Enter</kbd>. Everything still shown in view is accepted, and the
+view counts as reviewed. You can also resize a candidate with its grips, with
+**Label** off, or delete it with the ordinary label tools, which counts as a
+rejection.
+
+Candidates never stay in the sidecar: they are taken off when you close the file,
+and come back next time.
+
+Proposals from your labels alone are a quick first look and are often rough. A
+detector trained on the same few labels is usually much better, so train early.
+
+### Train and run
+
+**Train** builds images from what you have looked at and trains a detector, in
+about a minute or two on a GPU. The tab reports the score and says what it was
+measured on. With few labels there is nothing to hold out, so the score is a
+training score and the tab says so.
+
+Only what you have looked at reaches the model. That means your reviewed views, a
+small area around each label, and each rejection. Everything else on an image is
+masked, so an event you have not labelled is never taught as background. The more
+windows you finish, the more the detector learns about what is not an event.
+
+A label with no frequency band, such as one drawn on a trace, cannot be trained
+on, and the tab says how many it left out. Labels in a category called
+`labeled_region` count as exhaustively reviewed rectangles.
+
+**Run** detects over the whole recording in the background. All scores go to a CSV
+in the project, and what is above the cut is shown as candidates. **Export CSV**
+writes what is above the cut beside the recording as `<stem>-detections.csv`.
+
+**Learn** chooses whether the detector draws boxes or outlines.
+
+### Where things are kept
+
+The project is the directory `<stem>-specdetector` beside the recording. It holds
+what you reviewed and rejected, SAM's outlines, the last candidates, the trained
+models and the results. Each model's `model.json` records the image settings it
+needs.
+
+Delete the `dataset` directory inside a model freely: it is rebuilt from the
+sources. Deleting the project forgets the review and the models, and your labels
+stay.
+
+### What it cannot do
+
+- It works on the spectrogram only. An event must show there, and needs a box with
+  a band.
+- The picture it trains on is its own and ignores audian's spectrogram settings and
+  denoisers. An event you can only see after denoising may not show to the model.
+- Its image settings are chosen from your first labels, so classes much shorter
+  than those are small on the image.
+- A detector generalises from the recordings it has seen. One trained on a single
+  recording does much worse on others, as
+  [`specdetector-design.md`](specdetector-design.md) shows. To learn from several,
+  open each and press **Add to a project** with the first one's project directory.
+  Each recording keeps its own labels and review, and **Train** learns from them
+  all.
+- Scores do not mean the same on a recording the model has not seen. Trained on three
+  recordings and run on a fourth, the best **Cut** ranged from 0.01 to 0.49, so the
+  default lost half the chirps of one and let in false ones on another. Look through
+  a stretch of a new recording and move **Cut** before believing a count.
