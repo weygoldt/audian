@@ -175,7 +175,7 @@ class Plugins(object):
         that has left this tree announces itself::
 
             [project.entry-points."audian.plugins"]
-            eventdetection = "audian_plugins.eventdetection"
+            specdetector = "audian_plugins.specdetector"
 
         The value names a *module*, and it is scanned by the same `bind`
         the other two paths use -- so extraction is a packaging change and
@@ -292,7 +292,7 @@ def panel_menu_path(factory) -> tuple:
 
     The last element is the entry itself; anything before it names a
     submenu.  A plugin sets ``menu_path`` on its factory to file itself
-    under a heading -- ``("Event detection", "Normalised cross-correlation")``
+    under a heading -- ``("Event detection", "Spectrogram detector")``
     -- so that a menu with several detectors in it groups them by what they
     do rather than growing one flat list of product names.
 

@@ -105,8 +105,8 @@ def build_window(app, directory, channels, signal=None):
     and this is already the module with a documented subset flake.
 
     The restore is the caller's, because this is a function and not a fixture.
-    `open_stack` below does it, and so do `test_detector_plugin`'s two window
-    fixtures.  A caller that forgets no longer fails silently: the teardown of
+    `open_stack` below does it, and so does `test_specdetector_panel`'s window
+    fixture.  A caller that forgets no longer fails silently: the teardown of
     `conftest._isolate_settings` fails the run if the store is left pointing
     anywhere but its own scratch directory.
     """

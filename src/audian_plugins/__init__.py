@@ -12,9 +12,9 @@ The shape of a plugin
 One package per plugin, named for what it does rather than for what it is::
 
     audian_plugins/
-        eventdetection/
+        specdetector/
             __init__.py     the ``audian_*`` callables, and nothing else
-            engine.py       the arithmetic, importing no Qt
+            tiling.py       the arithmetic, importing no Qt
             panel.py        the interface
 
 `__init__.py` is the only file audian looks at.  It exposes callables named
@@ -35,7 +35,7 @@ Extraction is meant to be mechanical, and is three steps:
 2. Give it a ``pyproject.toml`` declaring the entry point audian scans::
 
        [project.entry-points."audian.plugins"]
-       eventdetection = "audian_plugins.eventdetection"
+       specdetector = "audian_plugins.specdetector"
 
 3. Delete it from here, and add its distribution to audian's extras.
 
