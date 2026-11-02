@@ -17,7 +17,6 @@ TRACE_ROLES = {
     "trace": "raw",
     "filtered": "filtered",
     "filter": "filtered",
-    "envelope": "envelope",
 }
 
 

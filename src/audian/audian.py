@@ -314,25 +314,6 @@ def _draw_glyph(painter: QPainter, kind: str, size: int, color: str, alpha) -> N
         path.lineTo(m + e * 0.78, top)
         path.lineTo(m + e * 0.90, base)
         painter.drawPath(path)
-    elif kind == "envelope":
-        # The two hulls a cut-off smooths around the signal, about the
-        # signal's own axis, with the axis running past both ends.  The
-        # overhang is the whole of it: hulls that meet the axis at its ends
-        # close into a lens, and a lens reads as an eye rather than as an
-        # outline of something.
-        y = size / 2
-        painter.drawLine(int(m), int(y), int(m + e), int(y))
-        for direction in (-1, 1):
-            path.moveTo(m + e * 0.10, y + direction * e * 0.10)
-            path.cubicTo(
-                m + e * 0.36,
-                y + direction * e * 0.62,
-                m + e * 0.64,
-                y + direction * e * 0.62,
-                m + e * 0.90,
-                y + direction * e * 0.10,
-            )
-        painter.drawPath(path)
     elif kind == "speaker":
         # Where the sound goes, which is what the Audio group sets: a cone,
         # filled, with the two waves coming off it.
@@ -1514,9 +1495,6 @@ class CheatSheet(QDialog):
                 "highpass_down",
                 "lowpass_up",
                 "lowpass_down",
-                "show_envelope",
-                "envelope_up",
-                "envelope_down",
             ),
         ),
         (
@@ -1793,7 +1771,6 @@ class Audian(QMainWindow):
         for s in Panel.amplitudes + Panel.frequencies + Panel.powers:
             self.link_ranges[s] = True
         self.link_filter = True
-        self.link_envelope = True
         self.link_channels = True
         self.link_panels = True
         self.link_audio = True
@@ -4423,59 +4400,6 @@ class Audian(QMainWindow):
 
         return spec_menu
 
-    def toggle_link_envelope(self):
-        self.link_envelope = not self.link_envelope
-
-    def toggle_show_envelope(self):
-        self.browser().update_envelope(
-            show_envelope=not self.browser().data.is_visible("envelope")
-        )
-
-    def dispatch_envelope(self):
-        if self.link_envelope and "envelope" in self.browser().data:
-            envelope_cutoff = self.browser().data["envelope"].envelope_cutoff
-            show_envelope = self.browser().data.is_visible("envelope")
-            for b in self.browsers:
-                if b is not self.browser():
-                    b.update_envelope(
-                        envelope_cutoff=envelope_cutoff,
-                        show_envelope=show_envelope,
-                        dispatch=False,
-                    )
-
-    def setup_envelope_actions(self, menu):
-        self.acts.link_envelope = QAction("Link &envelope", self)
-        self.acts.link_envelope.setShortcut("Alt+E")
-        self.acts.link_envelope.setCheckable(True)
-        self.acts.link_envelope.setChecked(self.link_envelope)
-        self.acts.link_envelope.toggled.connect(self.toggle_link_envelope)
-
-        self.acts.show_envelope = QAction("&Show envelope", self)
-        self.acts.show_envelope.setShortcut("Ctrl+E")
-        self.acts.show_envelope.setCheckable(True)
-        self.acts.show_envelope.setChecked(True)
-        self.acts.show_envelope.toggled.connect(self.toggle_show_envelope)
-
-        self.acts.envelope_up = QAction("Envelope cutoff &up", self)
-        self.acts.envelope_up.setShortcut("Shift+E")
-        self.acts.envelope_up.triggered.connect(lambda x: self.browser().envfw.stepUp())
-
-        self.acts.envelope_down = QAction("Envelope cutoff &down", self)
-        self.acts.envelope_down.setShortcut("E")
-        self.acts.envelope_down.triggered.connect(
-            lambda x: self.browser().envfw.stepDown()
-        )
-
-        envelope_menu = menu.addMenu("&Envelope")
-        envelope_menu.addAction(self.acts.link_envelope)
-        envelope_menu.addAction(self.acts.show_envelope)
-        envelope_menu.addAction(self.acts.envelope_up)
-        envelope_menu.addAction(self.acts.envelope_down)
-
-        self.data_menus.append(envelope_menu)
-
-        return envelope_menu
-
     def toggle_link_channels(self):
         self.link_channels = not self.link_channels
 
@@ -5375,7 +5299,6 @@ class Audian(QMainWindow):
         self.setup_time_actions(view_menu)
         self.setup_amplitude_actions(view_menu)
         self.setup_frequency_actions(view_menu)
-        self.setup_envelope_actions(view_menu)
         self.setup_channel_actions(view_menu)
         self.setup_panel_actions(view_menu)
         self.setup_annotation_actions(view_menu)
@@ -5655,7 +5578,6 @@ class Audian(QMainWindow):
             browser.sigLevelsChanged.connect(self.dispatch_levels)
             browser.sigPeakingChanged.connect(self.dispatch_peaking)
             browser.sigFilterChanged.connect(self.dispatch_filter)
-            browser.sigEnvelopeChanged.connect(self.dispatch_envelope)
             browser.sigTraceChanged.connect(self.dispatch_trace)
             browser.sigAudioChanged.connect(self.dispatch_audio)
             browser.sigAudioSourceChanged.connect(self.dispatch_audio_source)

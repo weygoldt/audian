@@ -25,7 +25,6 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "audian"
 DATA_LAYER = [
     "buffereddata.py",
     "bufferedfilter.py",
-    "bufferedenvelope.py",
     "bufferedspectrogram.py",
     "data.py",
     "compresseddata.py",

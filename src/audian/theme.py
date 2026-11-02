@@ -55,8 +55,8 @@ Therefore:
   colour group.
 
 Verified ratios on ``BG_PLOT``: FG 15.93, FG_MUTED 7.69, PRIMARY 5.87,
-ACCENT 9.25, SUCCESS 8.03, DANGER 6.21, TRACE_RAW 11.42, TRACE_FILTERED 12.06,
-TRACE_ENVELOPE 7.79.  Run ``python -m audian.theme`` to re-check.
+ACCENT 9.25, SUCCESS 8.03, DANGER 6.21, TRACE_RAW 11.42, TRACE_FILTERED 12.06.
+Run ``python -m audian.theme`` to re-check.
 
 Themes
 ------
@@ -129,7 +129,6 @@ __all__ = [
     # data series
     "TRACE_RAW",
     "TRACE_FILTERED",
-    "TRACE_ENVELOPE",
     "TRACE_ZERO",
     "GRID_COLOR",
     "GRID_ALPHA",
@@ -281,7 +280,6 @@ DANGER = "#FF5C5C"
 # Data series.
 TRACE_RAW = "#7FD4FF"
 TRACE_FILTERED = "#FFC65C"
-TRACE_ENVELOPE = "#FF7AB6"
 TRACE_ZERO = "#2B3546"
 
 # Derived -- defined explicitly so no call site computes them inline.
@@ -318,7 +316,6 @@ DARK_TOKENS: dict[str, str] = {
     "danger": DANGER,
     "trace.raw": TRACE_RAW,
     "trace.filtered": TRACE_FILTERED,
-    "trace.envelope": TRACE_ENVELOPE,
     "trace.zero": TRACE_ZERO,
     # foreground for anything sitting ON a primary fill (checked toolbar
     # buttons, the open button).  Light in BOTH themes: primary.dim is dark
@@ -422,7 +419,6 @@ LIGHT_TOKENS: dict[str, str] = {
     "danger": "#A11212",
     "trace.raw": "#0B4F8A",
     "trace.filtered": "#8A4200",
-    "trace.envelope": "#8E1A5C",
     "trace.zero": "#AAB4C0",
     "on.primary": "#FFFFFF",
     "bg.lane": "#E8ECF3",
@@ -1019,7 +1015,6 @@ _TRACE_ROLES: dict[str, str] = {
     "trace": "trace.raw",
     "filtered": "trace.filtered",
     "filter": "trace.filtered",
-    "envelope": "trace.envelope",
     "zero": "trace.zero",
 }
 
@@ -1038,7 +1033,7 @@ def trace_color(role: str) -> str:
     """Return the hex colour for a trace role.
 
     Roles: ``'data'``/``'raw'`` (both the raw waveform), ``'filtered'``,
-    ``'envelope'``, ``'zero'``.  An unknown role falls back to the raw colour
+    ``'zero'``.  An unknown role falls back to the raw colour
     and never raises -- a mislabelled trace should still be drawn.
     """
     return TOKENS[_trace_token(role)]
@@ -1392,8 +1387,8 @@ def waveform_role(trace: Any = None, role: str | None = None) -> str:
     Returns
     -------
     str
-        A short role name (``'raw'``, ``'filtered'``, ``'envelope'``,
-        ``'zero'``) accepted by :func:`trace_color` and :func:`trace_pen`.
+        A short role name (``'raw'``, ``'filtered'``, ``'zero'``)
+        accepted by :func:`trace_color` and :func:`trace_pen`.
     """
     if role is None:
         role = getattr(trace, "name", None)
@@ -3010,7 +3005,6 @@ TEXT_CONTRAST_PAIRS: tuple[tuple[str, str], ...] = (
     ("danger", "bg.plot"),
     ("trace.raw", "bg.plot"),
     ("trace.filtered", "bg.plot"),
-    ("trace.envelope", "bg.plot"),
 )
 
 MIN_CONTRAST = 4.5
@@ -3343,8 +3337,6 @@ PAINTED_TRACE_COLORS: tuple[tuple[str, str | None, bool, bool], ...] = (
     ("raw dense", "raw", False, True),
     ("filtered", "filtered", False, False),
     ("filtered dense", "filtered", False, True),
-    ("envelope", "envelope", False, False),
-    ("envelope dense", "envelope", False, True),
     # the selected lane, which is `primary` in every plot that draws it
     ("selected", "raw", True, False),
 )
@@ -3542,7 +3534,6 @@ def _report() -> int:
             "danger",
             "trace.raw",
             "trace.filtered",
-            "trace.envelope",
             "trace.zero",
         ):
             row = fg_name.ljust(18)

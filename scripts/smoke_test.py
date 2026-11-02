@@ -3,7 +3,7 @@
 
 Builds the real Audian main window on the offscreen Qt platform, pumps the
 event loop long enough for the deferred/threaded work (compression of the
-navigator overview, buffered filter/envelope recomputes, debounced layout
+navigator overview, buffered filter recomputes, debounced layout
 passes) to land, optionally grabs a screenshot, and exits non-zero on any
 exception or on any Qt message that indicates a real fault.
 

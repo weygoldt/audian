@@ -1174,7 +1174,7 @@ not the legacy sorter's application-wide arrow filter (B24).
 | Key | In edit mode does | audian's binding it shadows there |
 |---|---|---|
 | `Ctrl+Shift+E` | toggle edit mode (panel open is enough) | free |
-| `V` `E` `C` `M` `A` `F` | tools Select, Erase, Cut, Merge, Assign, Add | Fit Y, Envelope cutoff down, Center, (rail `M`), Analyze, free |
+| `V` `E` `C` `M` `A` `F` | tools Select, Erase, Cut, Merge, Assign, Add | Fit Y, free, Center, (rail `M`), Analyze, free |
 | `Ctrl+Z` | undo | Pan zoom |
 | `Ctrl+Shift+Z`, `Ctrl+Y` | redo | free |
 | `Ctrl+S` | save track edits | Save window as (still on the menu, and on `Ctrl+Shift+S`) |

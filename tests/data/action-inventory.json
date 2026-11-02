@@ -200,26 +200,6 @@
     "path": "Spectrogram \u203a Denoising",
     "text": "Spatial coherence"
   },
-  "envelope_down": {
-    "checkable": false,
-    "checked": false,
-    "in_menus": true,
-    "keys": [
-      "E"
-    ],
-    "path": "View \u203a Envelope",
-    "text": "Envelope cutoff down"
-  },
-  "envelope_up": {
-    "checkable": false,
-    "checked": false,
-    "in_menus": true,
-    "keys": [
-      "Shift+E"
-    ],
-    "path": "View \u203a Envelope",
-    "text": "Envelope cutoff up"
-  },
   "frequency_down": {
     "checkable": false,
     "checked": false,
@@ -379,16 +359,6 @@
     ],
     "path": "View \u203a Channels",
     "text": "Link channels"
-  },
-  "link_envelope": {
-    "checkable": true,
-    "checked": true,
-    "in_menus": true,
-    "keys": [
-      "Alt+E"
-    ],
-    "path": "View \u203a Envelope",
-    "text": "Link envelope"
   },
   "link_filter": {
     "checkable": true,
@@ -851,16 +821,6 @@
     ],
     "path": "View \u203a Fixed labels",
     "text": "Show all layers"
-  },
-  "show_envelope": {
-    "checkable": true,
-    "checked": true,
-    "in_menus": true,
-    "keys": [
-      "Ctrl+E"
-    ],
-    "path": "View \u203a Envelope",
-    "text": "Show envelope"
   },
   "system_theme": {
     "checkable": true,

@@ -1,9 +1,8 @@
 """Work that does not belong on the GUI thread.
 
 The one measurement this package exists for: a refilter of a 16 channel,
-20 kHz, 27 s buffer costs 0.51 s of `sosfilt` and `spectrogram` (0.75 s with
-an envelope trace), and on the GUI thread that is 0.51 s in which a 16 ms
-`QTimer` fires **once**.  The same chain on a `QThread` leaves it firing 35
+20 kHz, 27 s buffer costs 0.51 s of `sosfilt` and `spectrogram`, and on the
+GUI thread that is 0.51 s in which a 16 ms `QTimer` fires **once**.  The same chain on a `QThread` leaves it firing 35
 times at a 16.0 ms median -- the kernels release the GIL well enough that
 the event loop never notices.
 

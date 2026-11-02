@@ -365,9 +365,9 @@ class ParameterGroup(QWidget):
     def expanding(widget: QWidget) -> QWidget:
         """Mark one field as wanting the width the group has, and return it.
 
-        For the fields where width IS resolution -- the filter and envelope
-        cutoff sliders, the overlap slider, the chip strips -- and for
-        nothing else.  `add_row` reads the policy back and hands that column
+        For the fields where width IS resolution -- the filter cutoff
+        sliders, the overlap slider, the chip strips -- and for nothing
+        else.  `add_row` reads the policy back and hands that column
         the stretch instead of the spacer; see `SPACER_COLUMN`.
         """
         policy = widget.sizePolicy()
@@ -1553,8 +1553,8 @@ class DataBrowser(QWidget):
     LABEL_SETTING_VERSION = 1
 
     #: Key the parameter bar's open tab is saved under, by group NAME.  Not
-    #: by index: the Filter and Envelope groups only exist when the data has
-    #: those traces, so the same index is a different tab on a different
+    #: by index: the Filter group only exists when the data has a filtered
+    #: trace, so the same index is a different tab on a different
     #: recording.  Not per recording either -- a reader walking the file
     #: spine of one session is doing one job, and a tab that flipped as they
     #: stepped would be a control moving under them.
@@ -1778,7 +1778,6 @@ class DataBrowser(QWidget):
     sigPluginPanelsChanged = Signal()
     sigLevelsChanged = Signal(float, float)
     sigFilterChanged = Signal()
-    sigEnvelopeChanged = Signal()
     sigTraceChanged = Signal(object, object, object)
     sigAudioChanged = Signal(object, object, object)
     sigAudioSourceChanged = Signal(object)
@@ -1965,10 +1964,8 @@ class DataBrowser(QWidget):
         self.ymodew = None
         self.hpfw = None
         self.lpfw = None
-        self.envfw = None
         self.hpsliderw = None
         self.lpsliderw = None
-        self.envsliderw = None
         self.linkbandw = None
         self.link_band = False
         # channel stack (scroll area, grid of rail rows and figures):
@@ -1989,10 +1986,6 @@ class DataBrowser(QWidget):
         self.filter_timer.timeout.connect(self.apply_filter)
         self.pending_highpass = None
         self.pending_lowpass = None
-        self.envelope_timer = QTimer(self)
-        self.envelope_timer.setSingleShot(True)
-        self.envelope_timer.timeout.connect(self.apply_envelope)
-        self.pending_envelope = None
         self.resolution_timer = QTimer(self)
         self.resolution_timer.setSingleShot(True)
         self.resolution_timer.timeout.connect(self.apply_resolution)
@@ -3110,14 +3103,13 @@ class DataBrowser(QWidget):
 
     #: The glyph that stands for each built-in group in the panel's strip.
     #:
-    #: Four of these are drawn for this strip and nothing else -- `filter`,
-    #: `envelope`, `speaker` and `label-fixed`.  The two label groups cannot
+    #: Three of these are drawn for this strip and nothing else -- `filter`,
+    #: `speaker` and `label-fixed`.  The two label groups cannot
     #: share `label`: an icon strip has no words, and `audian.py` already
     #: records what happens when two commands share one pixmap.
     PARAM_TAB_GLYPHS = {
         "Filter": "filter",
         "Spectrogram": "spectrogram",
-        "Envelope": "envelope",
         "Audio": "speaker",
         FIXED_TAB: "label-fixed",
         EDITABLE_TAB: "label",
@@ -3597,47 +3589,6 @@ class DataBrowser(QWidget):
             self.zmidw = None
             self.zmidsliderw = None
             self.peakingw = None
-
-        # envelope:
-        if "envelope" in self.data:
-            envelope = self.data["envelope"]
-            group = self.param_group("Envelope")
-            self.envfw = pg.SpinBox(
-                self,
-                envelope.envelope_cutoff,
-                bounds=(0, 0.5 * nyquist),
-                suffix="Hz",
-                siPrefix=True,
-                step=0.5,
-                dec=True,
-                decimals=3,
-                minStep=10 ** floor(log10(0.00001 * nyquist)),
-            )
-            self.style_parameter_spinbox(self.envfw)
-            self.envfw.sigValueChanged.connect(
-                lambda s: self.update_envelope(envelope_cutoff=s.value())
-            )
-            self.envsliderw = LogSlider(0, 0.5 * nyquist, self.parambar)
-            self.envsliderw.set_hz(envelope.envelope_cutoff)
-            self.envsliderw.valueChanged.connect(
-                lambda v: self.update_envelope(
-                    envelope_cutoff=self.envsliderw.value_hz()
-                )
-            )
-            group.add_row(
-                "Cutoff",
-                "E / ⇧E",
-                ParameterGroup.expanding(self.envsliderw),
-                self.envfw,
-            )
-            groups.append(group)
-        else:
-            self.envfw = None
-            self.envsliderw = None
-            self.acts.link_envelope.setEnabled(False)
-            self.acts.show_envelope.setEnabled(False)
-            self.acts.envelope_up.setEnabled(False)
-            self.acts.envelope_down.setEnabled(False)
 
         # audio playback:
         group = self.param_group("Audio")
@@ -4866,7 +4817,6 @@ class DataBrowser(QWidget):
             "audio_timer",
             "resize_timer",
             "filter_timer",
-            "envelope_timer",
             "resolution_timer",
             "time_step_timer",
             "denoise_timer",
@@ -7315,10 +7265,9 @@ class DataBrowser(QWidget):
     def restore_parameter_tab(self) -> None:
         """Open the bar on the tab this reader last chose.
 
-        By NAME and not by index: the Envelope group only exists when the
-        data has an envelope, and the Filter group only when it has a
-        filtered trace, so the same index is a different tab on a different
-        recording.  An unknown name falls back to the first tab rather than
+        By NAME and not by index: the Filter group only exists when the
+        data has a filtered trace, so the same index is a different tab on a
+        different recording.  An unknown name falls back to the first tab rather than
         to nothing.
         """
         if self.param_tabs is None:
@@ -9825,52 +9774,6 @@ class DataBrowser(QWidget):
             self.hpsliderw.set_hz(highpass)
         if self.lpsliderw is not None:
             self.lpsliderw.set_hz(lowpass)
-
-    def update_envelope(
-        self, envelope_cutoff=None, show_envelope=None, dispatch: bool = True
-    ) -> None:
-        """Called when envelope cutoff was changed by key shortcuts or widget.
-
-        The membership check happens *before* the guard flag is taken.
-        The default plugin set installs 'filtered' and 'spectrogram' but
-        no 'envelope', so the very first Ctrl+E used to leak
-        `self.setting == True` and silently freeze all further scrolling
-        and zooming.
-        """
-        if self.setting:
-            return
-        if "envelope" not in self.data:
-            return
-        if envelope_cutoff is not None:
-            self.pending_envelope = envelope_cutoff
-            self.envelope_timer.start(200)
-        if show_envelope is not None:
-            with self.updating():
-                for name in self.data.keys():
-                    if name.startswith("env"):
-                        self.set_trace(show_envelope, name)
-            self.adjust_layout(self.width(), self.height())
-        if dispatch:
-            self.sigEnvelopeChanged.emit()
-
-    def apply_envelope(self, dispatch: bool = True) -> None:
-        """Recompute the envelope from the stashed cutoff."""
-        if "envelope" not in self.data or self.pending_envelope is None:
-            return
-        envelope = self.data["envelope"]
-        with self.updating():
-            envelope.envelope_cutoff = self.pending_envelope
-            self.pending_envelope = None
-            self.data.set_need_update()
-            self.request_recompute(envelope)
-            if self.envfw is not None:
-                blocked = self.envfw.blockSignals(True)
-                self.envfw.setValue(envelope.envelope_cutoff)
-                self.envfw.blockSignals(blocked)
-            if self.envsliderw is not None:
-                self.envsliderw.set_hz(envelope.envelope_cutoff)
-        if dispatch:
-            self.sigEnvelopeChanged.emit()
 
     def add_to_show_channels(self, channels):
         if isinstance(channels, int):

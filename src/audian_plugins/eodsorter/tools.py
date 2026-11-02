@@ -2689,7 +2689,7 @@ KEY_HELP = (
     (
         "V E C M A F",
         "Select, Erase, Cut, Merge, Assign, Add",
-        "Fit Y, Envelope, Center, —, Analyze, —",
+        "Fit Y, —, Center, —, Analyze, —",
     ),
     ("Ctrl+Z", "undo", "Pan zoom"),
     ("Ctrl+Shift+Z, Ctrl+Y", "redo", "free"),
