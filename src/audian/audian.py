@@ -613,7 +613,7 @@ class VerticalTabBar(QTabBar):
         return -1
 
     def mouseMoveEvent(self, event) -> None:
-        hovered = self._close_at(event.pos())
+        hovered = self._close_at(event.position().toPoint())
         if hovered != self._hover_close:
             self._hover_close = hovered
             self.update()
@@ -627,7 +627,7 @@ class VerticalTabBar(QTabBar):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            index = self._close_at(event.pos())
+            index = self._close_at(event.position().toPoint())
             if index >= 0:
                 self.tabCloseRequested.emit(index)
                 event.accept()

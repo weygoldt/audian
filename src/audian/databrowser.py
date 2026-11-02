@@ -1441,7 +1441,7 @@ class ChannelRailRow(QWidget):
         self.browser.toggle_maximize(self.channel)
 
     def mousePressEvent(self, event) -> None:
-        self.drag_origin = event.pos()
+        self.drag_origin = event.position().toPoint()
         modifiers = QApplication.keyboardModifiers()
         self.browser.rail_clicked(
             self.channel, bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
@@ -1450,7 +1450,7 @@ class ChannelRailRow(QWidget):
     def mouseMoveEvent(self, event) -> None:
         if self.drag_origin is None:
             return
-        dy = event.pos().y() - self.drag_origin.y()
+        dy = event.position().toPoint().y() - self.drag_origin.y()
         if abs(dy) < self.height() // 2:
             return
         self.browser.move_channel(self.channel, 1 if dy > 0 else -1)

@@ -1235,7 +1235,7 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
 
     def mousePressEvent(self, ev):
         if ev.button() == Qt.MouseButton.LeftButton:
-            spos = self.mapToScene(ev.pos())
+            spos = self.mapToScene(ev.position().toPoint())
             for ax, region in zip(self.axs, self.regions):
                 if not ax.isVisible():
                     continue
@@ -1260,7 +1260,7 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
         super().mousePressEvent(ev)
 
     def mouseMoveEvent(self, ev):
-        spos = self.mapToScene(ev.pos())
+        spos = self.mapToScene(ev.position().toPoint())
         for c, ax in enumerate(self.axs):
             if not ax.isVisible():
                 continue
