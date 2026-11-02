@@ -1905,7 +1905,7 @@ def overlap(browser):
     spectrogram = browser.data["spectrogram"]
     before = spectrogram.overlap_frac
     yield browser
-    browser.set_resolution(overlap_frac=before, dispatch=False)
+    browser.set_resolution(overlap_frac=before)
     settle()
     pump(0.3)
 
@@ -1984,7 +1984,7 @@ def test_a_box_typed_into_is_debounced_like_a_key_held_down(overlap):
     """
     browser = overlap
     spectrogram = browser.data["spectrogram"]
-    browser.set_resolution(overlap_frac=0.5, dispatch=False)
+    browser.set_resolution(overlap_frac=0.5)
     settle()
     browser.ofracw.setValue(70.0)
     browser.ofracw.setValue(75.0)
@@ -2002,7 +2002,7 @@ def test_the_two_keys_still_work_and_both_halves_follow_them(overlap, action):
     """`O` and `Shift+O` halve and double the hop, which is a gesture rather
     than a number -- the row follows the transform, it does not hold it."""
     browser = overlap
-    browser.set_resolution(overlap_frac=0.5, dispatch=False)
+    browser.set_resolution(overlap_frac=0.5)
     settle()
     pump(0.3)
     before = browser.data["spectrogram"].overlap_frac

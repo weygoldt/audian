@@ -3992,22 +3992,6 @@ class Audian(QMainWindow):
 
         return freq_menu
 
-    def set_spectrogram(self, spec):
-        for b in self.browsers:
-            b.set_spectrogram(False, spec)
-
-    def dispatch_resolution(self):
-        pass
-        """
-        TODO: should set nfft and hop for all spectrograms!!!
-        if self.link_ranges[Panel.frequencies[0]]:
-            for b in self.browsers:
-                if not b is self.browser():
-                    b.set_resolution(self.browser().data.nfft,
-                                     self.browser().data.hop_frac,
-                                     False)
-        """
-
     def dispatch_colormap(self):
         cm = self.browser().color_map
         for b in self.browsers:
@@ -5571,7 +5555,6 @@ class Audian(QMainWindow):
                 self.adapt_menu(self.tabs.currentIndex())
             browser.sigRangesChanged.connect(self.dispatch_ranges)
             browser.sigFilenameChanged.connect(self.set_tab_title)
-            browser.sigResolutionChanged.connect(self.dispatch_resolution)
             browser.sigColorMapChanged.connect(self.dispatch_colormap)
             browser.sigSmoothingChanged.connect(self.dispatch_smoothing)
             browser.sigCutoffLinesChanged.connect(self.dispatch_cutoff_lines)

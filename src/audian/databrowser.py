@@ -1767,7 +1767,6 @@ class DataBrowser(QWidget):
 
     sigRangesChanged = Signal(object, object)
     sigFilenameChanged = Signal(object, str)
-    sigResolutionChanged = Signal()
     sigColorMapChanged = Signal()
     sigSmoothingChanged = Signal()
     sigCutoffLinesChanged = Signal()
@@ -3705,7 +3704,7 @@ class DataBrowser(QWidget):
         # Fixed labels group for nothing.  See `equalize_parameter_bar`.
         self.restore_parameter_tab()
         if "spectrogram" in self.data:
-            self.set_resolution(dispatch=False)
+            self.set_resolution()
 
     def style_parameter_spinbox(self, spin: pg.SpinBox) -> None:
         """Theme a parameter-bar spin box and drop its stepper stubs.
@@ -9043,19 +9042,15 @@ class DataBrowser(QWidget):
             return
         self.set_resolution(nfft=nfft, overlap_frac=overlap_frac)
         # end of the gesture, so this is a window the reader asked for.
-        # Only this browser writes: the others are reached through
-        # `dispatch_resolution`, which comes in by `set_resolution` and
-        # never past here, so the stored value cannot depend on the order
-        # the tabs happen to sit in.
+        # Only this browser writes: no other tab follows it, so the stored
+        # value cannot depend on the order the tabs happen to sit in.
         spectrogram = self.data[self.spectrogram] if self.spectrogram else None
         if spectrogram is not None:
             self.nfft_pref = int(spectrogram.nfft)
             self.overlap_pref = float(spectrogram.overlap_frac)
             self.schedule_spectrogram_save()
 
-    def set_resolution(
-        self, nfft=None, overlap_frac=None, dispatch: bool = True
-    ) -> None:
+    def set_resolution(self, nfft=None, overlap_frac=None) -> None:
         """Set the Fourier window and overlap of the spectrogram.
 
         The membership check happens *before* the guard flag is taken:
@@ -9111,8 +9106,6 @@ class DataBrowser(QWidget):
                 )
                 self.ofracsliderw.setToolTip(tip)
                 self.ofracw.setToolTip(tip)
-        if dispatch:
-            self.sigResolutionChanged.emit()
 
     def current_nfft(self) -> int:
         """The window the next step should be taken from.
