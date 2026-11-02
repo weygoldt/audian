@@ -1131,18 +1131,18 @@ class AddTool(BrushTool):
         ridge = self.ridge_mode()
         if self.active:
             to = (
-                f"extend {id_text(self._target)}"
+                f"to extend {id_text(self._target)}"
                 if self._target is not None
-                else "a new track"
+                else "as a new track"
             )
             if ridge:
                 return (
-                    f"release: track the ridge under the brush as {to} "
+                    f"release: track the ridge under the brush {to} "
                     "· hold Ctrl to paint literally"
                 )
             n = len(self._frames)
             skip = int(np.asarray(self.scene.marks.add_skip).sum())
-            return f"release: add {plural(n - skip, 'point')} as {to} · frequency from {source}"
+            return f"release: add {plural(n - skip, 'point')} {to} · frequency from {source}"
         if ridge:
             if hover is not None:
                 return (

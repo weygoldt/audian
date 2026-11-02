@@ -2477,3 +2477,24 @@ def test_track_visible_is_clipped_to_the_range(panel, world):
     finally:
         panel.cancel_job(quiet=True)
         _clean_range(panel)
+
+
+def test_a_run_does_not_drop_the_focus_into_the_range_fields(panel, world):
+    """The Track buttons disable themselves while a job runs, and Qt then hands
+    their focus to the next widget.  That must not be a text field: the
+    plugin's keys are refused in one, so the next M would type an "m" there."""
+    from PySide6.QtWidgets import QApplication, QLineEdit
+
+    window = world["window"]
+    window.activateWindow()
+    pump(0.1)
+    for button in (panel.trackvisw, panel.trackrecw):
+        button.setFocus()
+        pump(0.05)
+        if QApplication.focusWidget() is not button:
+            pytest.skip("this platform gives no widget the focus")
+        button.setEnabled(False)
+        pump(0.05)
+        focus = QApplication.focusWidget()
+        button.setEnabled(True)
+        assert not isinstance(focus, QLineEdit), focus

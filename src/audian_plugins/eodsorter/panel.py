@@ -799,6 +799,10 @@ class WavetrackerPanel(QWidget):
             edit.setPlaceholderText(holder)
             edit.setToolTip(tip)
             edit.setMinimumWidth(40)
+            # by click only: the Track buttons above disable themselves during
+            # a run, and Qt would hand their focus on to the next widget that
+            # takes tab focus; in a text field the next M would type an "m"
+            edit.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
             edit.editingFinished.connect(self._range_edited)
             grid.addWidget(edit, row, 1)
             fields.append(edit)
