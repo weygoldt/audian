@@ -91,6 +91,9 @@ instead of an absolute score, and where the whole approach stops working. See
 from inside audian and lets you correct what it got wrong, on the
 spectrogram you are looking at. It replaces wavetracker's `EODsorter`.
 
+**New to it? Start with the [quickstart](docs/wavetracker-quickstart.md)**, a
+15-minute walk through tracking and correcting a demo recording.
+
 ![wavetracker](docs/shots/wavetracker-overview.png)
 
 *A synthetic recording, tracked with Track recording. One fish's rises have
@@ -104,7 +107,7 @@ broken it into four tracks (1, 6, 7, 8), and two fish cross near the end.*
 of fish 4, not a fish, so it is flagged; Enter unassigns it.*
 
 - **Track visible** tracks the window in front of you in a few seconds and
-  shows the result dashed over the session, to *Accept* or *Discard*.
+  shows the result as a preview over the session, to *Accept* or *Discard*.
   **Track recording** runs over the whole file (or split session) in the
   background. Or open an existing wavetracker output directory.
 - **Track part of a recording**: the *Range* row (from / to, or *⇤ view* /
