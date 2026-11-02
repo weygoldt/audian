@@ -140,7 +140,11 @@ _REAL_STORE_DIRS = tuple(
     sorted(
         {
             os.fspath(directory) + os.sep
-            for path in (_audian_dirs.user_config_path, _audian_dirs.user_cache_path)
+            for path in (
+                _audian_dirs.user_config_path,
+                _audian_dirs.user_cache_path,
+                _audian_dirs.user_data_path,
+            )
             for directory in (path, Path(os.path.realpath(path)))
         }
     )
@@ -162,6 +166,12 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="also run the tests that need the reader's own recordings",
+    )
+    parser.addoption(
+        "--realmodels",
+        action="store_true",
+        default=False,
+        help="also run the tests that need model weights and that train",
     )
 
 
@@ -191,6 +201,13 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "app" in getattr(item, "fixturenames", ()):
             item.add_marker(pytest.mark.slow)
+    if not config.getoption("--realmodels"):
+        skip_models = pytest.mark.skip(
+            reason="needs model weights and trains; run with --realmodels"
+        )
+        for item in items:
+            if "realmodels" in item.keywords:
+                item.add_marker(skip_models)
     if config.getoption("--realdata"):
         return
     skip = pytest.mark.skip(
@@ -242,8 +259,10 @@ class _ScratchDirs:
     def __init__(self, base: Path) -> None:
         self.user_config_path = base / "config"
         self.user_cache_path = base / "cache"
+        self.user_data_path = base / "data"
         self.user_config_path.mkdir(parents=True, exist_ok=True)
         self.user_cache_path.mkdir(parents=True, exist_ok=True)
+        self.user_data_path.mkdir(parents=True, exist_ok=True)
 
 
 @pytest.fixture(scope="session", autouse=True)
