@@ -8,14 +8,13 @@ dynamic = ["version"]
 dependencies = [
   "scipy",
   "numpy",
-  "numba",
-  "pandas",
   "polars>=1.0",
-  "matplotlib",
   "platformdirs",
   "PySide6",
   "pyqtgraph",
   "SoundFile",
+  # Nothing here imports it: it is what audioio plays through, and audioio
+  # does not ask for it.  Without it audian opens and cannot make a sound.
   "sounddevice",
   "thunderlab>=1.6.0",
   "audioio",
@@ -30,7 +29,7 @@ authors = [
   {name = "Jan Benda", email = "jan.benda@uni-tuebingen.de"},
 ]
 maintainers = [
-  {name = "Jan Benda", email = "jan.benda@uni-tuebingen.de"},
+  {name = "Patrick Weygoldt"},
 ]
 description = "GUI for viewing and analyzing recordings of animal vocalizations."
 readme = "README.md"
@@ -62,7 +61,8 @@ classifiers = [
 dev = ["pytest", "pytest-cov", "ruff"]
 
 [project.urls]
-Repository    = "https://github.com/bendalab/audian"
+Repository = "https://github.com/weygoldt/audian"
+Upstream = "https://github.com/bendalab/audian"
 
 [project.scripts]
 audian-compress = "audian.compresseddata:run"

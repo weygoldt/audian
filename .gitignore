@@ -1,28 +1,36 @@
-.idea
-.idea/*
+# Python and its tools
+__pycache__/
 *.pyc
-*.npy
-*.pdf
-*.txt
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
 .coverage
 .coverage.*
 coverage.json
 coverage.xml
-__pycache__
+
+# Editors and the local environment
+.idea/
 *~
-.venv/
-src/audian.egg-info/
-__pycache__/
-*.pyc
+.envrc
+.direnv/
+
+# Analysis output left beside a recording
+*.npy
+*.pdf
+*.txt
+# the bundled font's licence (SIL OFL) must ship with it
+!src/audian/fonts/*.txt
+
+# Label sidecars are the reader's own work on a recording, written next to it
+# by the browser; one was committed by accident in 5020b8c.
+*-editable-labels.csv
+
+# Local recordings for tests and screenshots from the smoke test
 .devdata/
 .devshots/
 
 # Agent worktrees and scratch. Worktrees live at .claude/worktrees/<name> so the
 # primary checkout can stay on master -- one held elsewhere silently strands it.
 .claude/
-
-# Label sidecars are the reader's own work on a recording, written next to it
-# by the browser; one was committed by accident in 5020b8c.
-*-editable-labels.csv
-# the bundled font's licence (SIL OFL) must ship with it
-!src/audian/fonts/*.txt

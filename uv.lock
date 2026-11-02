@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -27,11 +27,8 @@ name = "audian"
 source = { editable = "." }
 dependencies = [
     { name = "audioio" },
-    { name = "matplotlib" },
-    { name = "numba" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "pandas" },
     { name = "platformdirs" },
     { name = "polars" },
     { name = "pyqtgraph" },
@@ -54,10 +51,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "audioio", git = "https://github.com/weygoldt/audioio" },
-    { name = "matplotlib" },
-    { name = "numba" },
     { name = "numpy" },
-    { name = "pandas" },
     { name = "platformdirs" },
     { name = "polars", specifier = ">=1.0" },
     { name = "pyqtgraph" },
