@@ -41,8 +41,9 @@ then `pip install -e .`.
 ## Use
 
 ```sh
-audian recording.wav        # one file
-audian session/*.wav        # a split session, joined by its timestamps
+uv run audian data/Gryllus_campestris.wav   # a short recording that ships with it
+uv run audian recording.wav                 # one file
+uv run audian session/*.wav                 # a split session, joined by its timestamps
 ```
 
 Press <kbd>Ctrl</kbd>+<kbd>K</kbd> for every shortcut, or <kbd>?</kbd> for the
@@ -52,7 +53,7 @@ cheat sheet. Almost everything has one.
 
 - **Long recordings, quickly.** Only the visible part is held in memory, so an
   hour-long multi-channel file opens as fast as a short one.
-- **Traces, filters, envelopes, spectrograms** — per channel, in any
+- **Traces, filters, spectrograms** — per channel, in any
   combination, each panel hidden or shown with a key.
 - **A spectrogram you can argue with.** Window length, overlap, colour map,
   level range, smoothing, and peaking to show where it clips — all live, all
@@ -160,8 +161,8 @@ audian --theme light recording.wav
 
 ## Writing a plugin
 
-A plugin is a module exposing a callable named `audian_*panel`, `*analyzer` or
-`*traces`. Bundled ones live in
+A plugin is a module exposing a callable named `audian_*panel`, `*analyzer`,
+`*traces` or `*denoisers`. Bundled ones live in
 [`src/audian_plugins/`](src/audian_plugins/); your own can sit in the
 directory you launch from, or in its own installable package that declares:
 
@@ -193,9 +194,28 @@ Plus [pyqtgraph](https://pyqtgraph.readthedocs.io) for the plotting and
 
 GPLv3, inherited from upstream.
 
-## Notes
+## Documentation
 
-Documentation is out of date and being rewritten — `audian --help` and the
-in-app cheat sheet (<kbd>?</kbd>) are current, the rest is not.
-[`docs/architecture.md`](docs/architecture.md) describes how the code is put
-together and lags it in places; `todo.md` is the working list.
+- `audian --help`, the cheat sheet (<kbd>?</kbd>) and the shortcut list
+  (<kbd>Ctrl</kbd>+<kbd>K</kbd>) for what is on hand while you work.
+- [User manual](docs/usermanual.md): how the features work, and why.
+- [Wavetracker quickstart](docs/wavetracker-quickstart.md).
+- [Internals](docs/architecture.md): how the code is put together.
+- [Changelog](CHANGELOG.md) and [`todo.md`](todo.md), the working list.
+
+## Development
+
+```sh
+uv sync                                    # audian, pytest and ruff
+git config core.hooksPath .githooks        # refuse commits ruff would fail
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+uv run pytest tests -q                     # everything, about 9 minutes
+uv run pytest tests -q -m "not slow"       # builds no windows, about 25 s
+uv run ruff check src tests scripts
+uv run ruff format --check src tests scripts
+uv run python scripts/smoke_test.py data/Gryllus_campestris.wav
+```
+
+The suite runs offscreen and never touches your real settings. Tests that need
+recordings outside this repository are skipped unless you pass `--realdata`.

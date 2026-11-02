@@ -448,7 +448,7 @@ part of work package C.  Until it lands the plugin falls back to
 
 ### 4.2 Whole-recording runs
 
-* **Input**: `source_paths()` (copied from `frequencybands/panel.py:882`,
+* **Input**: `source_paths()` (copied from the since removed `frequencybands`,
   the full ordered file list of the browser's timeline).  A single path is
   passed as a string; several as a list, which needs the upstream change in
   4.6.  If the runner's `hello` lacks the `multi_input` capability and the
@@ -942,7 +942,7 @@ history entry.
 
 **Selection rendering.**  Selected points are drawn on top in the selection
 colour (the lane colour map's opposed hue, or `#FF2BD6` on an achromatic
-map, as `frequencybands/overlay.py:193` does), points 2 px larger than
+map, as the since removed `frequencybands` did), points 2 px larger than
 normal, lines 1.5 px wider.  The panel shows "412 points in 3 tracks
 selected".
 
@@ -1058,8 +1058,8 @@ button, because a stray Esc must not throw away a twenty-minute run).
   hues (36° apart, starting at 15°).  Stable for an id for its whole life,
   across sessions, and consecutive ids (which a tracker hands to neighbouring
   fragments) land 3 slots apart.  7 is coprime to 10, so every slot is used.
-* The palette is derived from the lane's colour map, as
-  `frequencybands/overlay.py:157-203` does (`map_ends`): saturation 200 and
+* The palette is derived from the lane's colour map, as the since removed
+  `frequencybands` did (`map_ends`): saturation 200 and
   value 255 when the map's floor is dark, value 150 when it is light; hues
   within 25° of the map's bright end are shifted 40° away.  Pens are re-read
   on every redraw so a theme or colour-map switch takes effect immediately.
@@ -1414,8 +1414,8 @@ dataset so CI catches order-of-magnitude regressions.
 
 ### 6.2 Rendering
 
-`overlay.py` copies and adapts the machinery of
-`frequencybands/overlay.py`: passive items (`_passive`), `ignoreBounds=True`,
+`overlay.py` copies and adapts the machinery of the since removed
+`frequencybands` overlay: passive items (`_passive`), `ignoreBounds=True`,
 NaN-joined polylines, gated redraws, colours from the lane map, `detach()`.
 
 * **Geometry is computed once per view, not per lane.**  Lanes share the
@@ -1988,8 +1988,8 @@ state transitions, signals, `cancel()` terminates a stub that sleeps and
 reports `cancelled`, restart on the next job, `SnippetExporter` writes a WAV
 with the right samples from a multi-file test recording.
 
-`test_eodsorter_panel.py` (C), with a module-scoped `browser` fixture as in
-`tests/test_frequencybands.py` and a results directory generated with numpy
+`test_eodsorter_panel.py` (C), with a module-scoped `browser` fixture and a
+results directory generated with numpy
 in `tmp_path` (no wavetracker needed):
 
 * the plugin is discovered, its menu entry has a tip

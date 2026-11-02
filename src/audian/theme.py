@@ -397,10 +397,11 @@ DARK_TOKENS: dict[str, str] = {
 #:   and luminance is the entire budget under glare.
 #: * ink is near-black.  There are no mid-greys: a 4.5:1 label that reads
 #:   fine indoors disappears at 50 000 lux, so even ``fg.faint`` -- excluded
-#:   from the contrast gate as decoration -- is held above 6:1 here.
+#:   from the contrast gate as decoration -- is held above 5:1 here: 5.85 on
+#:   white and 5.08 on ``bg.surface``, its worst ground.
 #: * data-series colours are dark and saturated rather than bright.  On white
 #:   a pale trace has almost no contrast; the dark theme's ``#7FD4FF`` scores
-#:   1.4:1 on white against 8.9:1 for the value used below.
+#:   1.65:1 on white against 8.40:1 for the value used below.
 #: * borders are strong enough to survive washout instead of being hairlines.
 LIGHT_TOKENS: dict[str, str] = {
     "bg.base": "#FFFFFF",
@@ -908,7 +909,7 @@ def font_ui(size: int | None = None, bold: bool = False) -> QFont:
     this face at this size, and a desktop font one point larger pushes five
     of sixteen channels below the scroll.  The colours can come from
     anywhere; the metrics cannot, until they are expressions rather than
-    numbers.  See todo.md.
+    numbers.
     """
     return _font(FONT_UI_FAMILIES, size, bold, mono=False)
 

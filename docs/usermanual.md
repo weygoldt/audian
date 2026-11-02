@@ -1,6 +1,9 @@
 # Audian user manual
 
-...
+How audian's features work, and why they work that way. For the keys, press
+`Ctrl+K` for every shortcut, `?` for the cheat sheet, or `Ctrl+Shift+P` for the
+command palette. The wavetracker plugin has its own
+[quickstart](wavetracker-quickstart.md).
 
 ## Full trace overview
 
@@ -59,7 +62,7 @@ metadata.
 ## Navigator: waveform or activity
 
 The strip below the data plots summarises the whole recording. It has two
-overviews, toggled with `Alt+F6` (*Panels -> Navigator: activity*).
+overviews, toggled with `Alt+F6` (*View → Panels → Navigator: activity*).
 
 **Waveform** (default) draws the true min/max envelope of every pixel column.
 
@@ -99,9 +102,10 @@ are written together from then on.
 
 ## Daylight mode
 
-Audian ships two themes. The default is dark. `Ctrl+Shift+L` (*View → Daylight
-mode*) switches to the high-contrast light theme; the choice is remembered
-between sessions, and `audian --theme light` sets it for one run.
+Audian ships two themes, and until you choose one it follows the desktop
+(*View → Follow system theme*). `Ctrl+Shift+L` (*View → Daylight mode*) switches
+to the high-contrast light theme; the choice is remembered between sessions, and
+`audian --theme light` sets it for one run.
 
 Daylight mode is not a polite inversion of the dark theme — it is built for
 reading a laptop screen in direct sun, where the display is competing with the
@@ -109,10 +113,10 @@ sky:
 
 - plot and page grounds are pure white, because under glare luminance is the
   entire budget and any tint spends it;
-- there are no mid-greys. Even the faintest text is held above 6:1, where the
+- there are no mid-greys. Even the faintest text is held above 5:1, where the
   dark theme lets decoration sit lower;
 - traces are dark and saturated rather than bright. The dark theme's cyan
-  scores 1.4:1 on white; the daylight blue scores 8.4:1;
+  scores 1.65:1 on white; the daylight blue scores 8.4:1;
 - unselected traces are dimmed only as far as 4.5:1, against 3:1 in the dark
   theme. Glare raises the effective black level, so a line that measures 3:1
   on the bench is less than that on a riverbank;
@@ -131,7 +135,7 @@ colormaps and the toolbar icons. Nothing needs restarting.
 Open files are listed down the **left** edge as a narrow upright spine, not
 across the top. Two axes are bought this way: the strip comes off the top,
 where a stacked waveform view is short of room, and turning the tabs upright
-costs about 28 px of width instead of the ~180 px a column of horizontal tabs
+costs about 30 px of width instead of the ~180 px a column of horizontal tabs
 needs for its labels. On a sixteen-channel file that is worth two extra pixels
 of lane height per channel and the full window width for the data.
 
@@ -140,7 +144,7 @@ Labels read bottom-to-top, the usual direction for a left-hand spine.
 With a single file open the strip hides itself entirely.
 
 `Ctrl+PgUp` / `Ctrl+PgDown` move between tabs, `Ctrl+W` closes the current
-one, and each tab carries a close mark on its right.
+one, and each tab carries a close mark at its top.
 
 
 ## Playback
@@ -148,8 +152,8 @@ one, and each tab carries a close mark on its right.
 `Space` plays the visible window; dragging a region in Play mode plays that
 region.
 
-**What gets played** is set by *Audio → Source* in the parameter bar, or
-`Shift+P`:
+**What gets played** is set by the *Source* row of the side panel's *Audio* tab,
+or `Shift+P`:
 
 - **selected channel** (default) — the current channel alone, in mono. This
   is what you want on an electrode array: averaging eight electrodes into one
@@ -181,8 +185,8 @@ pyqtgraph as you zoom. Its *amplitude* is its colour, so that scale lives on
 the colour bar, in dB.
 
 In a dense stack the per-lane axis is collapsed to reclaim its width, and the
-unit rides on the stack's single amplitude readout in the bottom-left corner
-instead — or, for a spectrogram, in its corner caption.
+range and unit ride in the status bar's `A` field instead — or, for a
+spectrogram, in its corner caption.
 
 Note that only genuine SI units are rescaled and prefixed (`V` → `mV`).
 Anything else is shown verbatim: pyqtgraph will happily prefix any string it
@@ -256,7 +260,7 @@ channel rail goes off screen the same way.
 All the lines are drawn in the same muted trace colour, so the picture is
 the shape of the whole array rather than sixteen colours to decode. To pick
 one channel out, **click its line** or **click its number** in the caption
-(`OVERLAY 00 01 02 …`): it is drawn on top, thicker, in the accent colour,
+(`OVERLAY 00 01 02 …`): it is drawn on top, thicker, in the selection colour,
 and its number goes bold. Click it again to put it back. The picked channel
 is also the current channel, so `Space` with the playback source on
 *selected channel* plays it. Pointing at a line names its channel in the
@@ -291,9 +295,9 @@ default, and which the tool bar reports as *Y: shared*. Under a shared Y
 every lane shows the same span by definition, so an operation on one lane is
 an operation on all of them.
 
-Switch the Y axis to per-channel and the same operations apply only to the
-selected channels instead, which is what selecting a range of lanes with
-shift-click is for.
+Switch the Y axis to per-channel and Reset, Center and the zoom steps apply
+only to the selected channels instead, which is what selecting a range of lanes
+with shift-click is for. Fit Y refits every visible channel.
 
 
 ## The frequency axis, and the band a spectrogram opens at
@@ -353,7 +357,7 @@ Audian ships with no band set, so nothing changes until you type a number.
 > colour bar dragged by hand until that is settled.
 
 
-## Annotations from a session bundle
+## Fixed labels from a session bundle
 
 A **session bundle** is what a fakefish run writes beside its recording: a
 `*_metadata.toml` naming the recording and carrying the fit that maps the
@@ -386,20 +390,20 @@ tracks, no lanes within a lane and no stacking, on any surface — layers
 overlap, which is why switching them on and off is the gesture the panel is
 built around.
 
-### The Annotations panel
+### The Fixed labels tab
 
-The bottom bar grows an **Annotations** group while a bundle is loaded:
+The side panel's **Fixed labels** tab shows the bundle that is loaded:
 
 - **Source** — the session, the channel the fit was made against, and a badge
   saying how far its positions may be believed. Hover the badge for the fit
   itself: scale, offset and drift.
 - **Show** — the master switch, then one chip per place the marks can go:
   **Traces**, **Spectrograms**, **Navigator**. The same three sit in
-  *View ▸ Annotations*, and the two always agree. The rest of the row is the
-  **pointer readout**: the span the pointer is standing *inside* and how far
-  into it you are, then the nearest instant and how far away it is. A trial
-  you are in the middle of is reported as a trial you are in the middle of,
-  never as a mark tens of seconds away.
+  *View ▸ Fixed labels*, and the two always agree.
+- **Pointer** — the span the pointer is standing *inside*, with its bounds and
+  what it holds, then the nearest instant and how far away it is. A trial you
+  are in the middle of is reported as a trial you are in the middle of, never
+  as a mark tens of seconds away.
 - **Sent** and **Heard** — one chip per layer of the bundle. Sent is what the
   stimulator was told to do, Heard is what the recording turned out to hold
   and what the device logged about itself. The chips are drawn with the pens
@@ -420,7 +424,7 @@ the channel rail does:
   `Shift+F8` does the same from the keyboard, and its tool tip says how many
   layers are currently hidden.
 
-Every layer also has an entry in *View ▸ Annotations ▸ Layers*, carrying its
+Every layer also has an entry in *View ▸ Fixed labels ▸ Layers*, carrying its
 name and its row count, and the menu and the chips always agree.
 
 Which layers you left on is remembered between sessions, per layer, together
@@ -430,7 +434,7 @@ comes up as the bundle says it should rather than silently off. The `F8`
 master is deliberately *not* remembered: it is a glance, not a setting.
 
 `F8` hides and shows the whole overlay. `n` and `Shift+N` step the view to
-the next and previous annotation of a layer that is shown — which is how you
+the next and previous fixed label of a layer that is shown — which is how you
 check the overlay against the audio: step to an event, zoom in, and see
 whether the line sits on the pulse.
 
@@ -458,9 +462,10 @@ setting of zero, and it is not drawn like one.
 
 ### The navigator strip
 
-The navigator shows the whole session at once, and it draws exactly what the
-lanes draw: the same full-height marks, in the same hues, spanning the whole
-row. That is what makes it readable as a map — a stretch of session with no
+The navigator shows the whole session at once, and it draws the marks the lanes
+draw: full height, in the same hues, spanning the whole row, without the caps
+and treatment letters that would not survive at that scale. That is what makes
+it readable as a map — a stretch of session with no
 volley trials in it is a stretch with no volley ink in it, and the region
 handle tells you where you are looking.
 
@@ -478,7 +483,8 @@ be and nothing in the recording confirms it — which is exactly why its
 **dashed**, with a hollow diamond cap at the top, so it can never be mistaken
 for something that was seen. Full height rather than a short stub: the marks
 are bounded in x and only in x, everywhere, and the difference is carried by
-the dash and the cap.
+the dash and the cap. The cap is dropped on the navigator and above 400 drawn
+points, where caps would merge into a bar; the dash is not.
 
 exp2 has 7 predicted pulses out of 2187; exp3 has 629 out of 5281, so on a
 long session this is not a rare corner.

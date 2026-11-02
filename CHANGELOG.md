@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased: this fork
+
+Everything since forking [bendalab/audian](https://github.com/bendalab/audian)
+at v2.5. Install it from source; `pip install audian` gets upstream.
+
+### Added
+
+- **Wavetracker plugin:** run wavetracker from inside audian and correct its
+  tracks on the spectrogram, with undo history, autosave and harmonic flags.
+- **Event detection plugin:** a few-shot detector that learns from the events
+  you label.
+- **Denoiser plugins** for the spectrogram: mains hum and spatial coherence.
+- **Plugin API:** `audian.pluginapi`, plugins bundled in `audian_plugins`, and
+  an `audian.plugins` entry point group for installed ones.
+- **Labels:** editable labels drawn with the mouse into a CSV sidecar, beside
+  fixed labels that audian never writes (<kbd>B</kbd>, <kbd>F8</kbd>,
+  <kbd>F9</kbd>).
+- **Session bundles** drawn over the recording (`-a`/`--events`).
+- **Daylight theme** for reading a screen in the sun (`--theme light`,
+  <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>).
+- **Side panel** for parameters, which plugins can add tabs to
+  (<kbd>Ctrl</kbd>+<kbd>B</kbd>).
+- **Navigator activity overview** (<kbd>Alt</kbd>+<kbd>F6</kbd>), which tells
+  sustained signals from transients.
+- **Mean spectrogram** (<kbd>Shift</kbd>+<kbd>F2</kbd>) and **overlay traces**
+  (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F2</kbd>) for reading an array in one
+  lane.
+- **Spectrogram controls:** smoothing, peaking (<kbd>X</kbd>), and sliders for
+  the colour scale and overlap.
+- **Command palette** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>),
+  shortcut list (<kbd>Ctrl</kbd>+<kbd>K</kbd>) and cheat sheet (<kbd>?</kbd>).
+
+### Changed
+
+- PySide6 and Qt6 instead of PyQt5.
+- Derived traces are computed off the GUI thread.
+- The playback speed is a multiplier: 2 plays twice as fast and an octave up.
+- Python 3.11 to 3.14, with dependencies locked by uv.
+- The UI font, Inter, ships with audian.
+
+### Removed
+
+- The envelope trace controls, which no recording could reach since upstream
+  took the envelope out of the default plugins.
+- The analyzer event API (`make_trace_events` and friends), which nothing used.
+- `songdetector.py`, `runaudian.py` and upstream's documentation site.
+
+
 ## v2.5
 
 - Time is indicated in all formats when hovering over time axis or

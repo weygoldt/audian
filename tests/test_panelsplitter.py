@@ -2521,7 +2521,7 @@ def test_the_field_names_the_way_back_out(browser):
 
 
 def test_the_opens_at_row_costs_the_bar_no_width(browser):
-    """`todo.md` asked for the group's `minimumSizeHint` before and after,
+    """The request was for the group's `minimumSizeHint` before and after,
     because `21169f6` records that this bar is the binding constraint on a
     14" laptop -- and the Spectrogram group is already the widest page.
 
@@ -2537,9 +2537,9 @@ def test_the_opens_at_row_costs_the_bar_no_width(browser):
     plus its two margins.  The absolute numbers moved because every one of
     them is downstream of font metrics.
 
-    They moved the right way.  `todo.md` records the 734 floor as the thing
-    that would stop audian tiling into half a 14" laptop panel; on Qt6 that
-    floor is 695.  Nothing was done to earn that and nothing depends on it,
+    They moved the right way.  On PyQt5 a 734 px floor was the thing that
+    would stop audian tiling into half a 14" laptop panel; on Qt6 that floor
+    is 695.  Nothing was done to earn that and nothing depends on it,
     but it is worth knowing the port did not cost width.
 
     Re-baselined a second time, for the side panel, and the middle term has
