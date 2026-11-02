@@ -99,12 +99,6 @@ class YAxisItem(pg.AxisItem):
         # no log mode!
         pass
 
-    def set_max_major_ticks(self, n: int) -> None:
-        """Set the maximum number of labelled ticks."""
-        self.max_major_ticks = max(2, int(n))
-        self.picture = None
-        self.update()
-
     def set_si_unit(self, unit: str) -> None:
         """Scale tick values by an SI prefix even without a visible label.
 

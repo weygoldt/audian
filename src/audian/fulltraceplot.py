@@ -1087,14 +1087,6 @@ class FullTracePlot(pg.GraphicsLayoutWidget):
         super().showEvent(ev)
         self._schedule_sync()
 
-    def sync_layout(self) -> None:
-        """Public hook: re-align the strip with the data plots above it.
-
-        Call after anything that moves the data plots sideways -- toggling
-        the channel rail, showing or hiding a scroll bar.
-        """
-        self._schedule_sync()
-
     def _schedule_sync(self, *args) -> None:
         """Coalesce alignment work: many geometry signals, one measurement."""
         timer = getattr(self, "_align_timer", None)

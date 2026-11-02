@@ -499,56 +499,6 @@ class BufferedSpectrogram(BufferedData):
                 del cache[k]
         return total
 
-    def visible_slice(self, t0: float, t1: float) -> tuple[int, int]:
-        """Index range of `[t0, t1]` within the current buffer.
-
-        Clamped to the buffer, so the result is always safe to slice with
-        and never triggers a reload.
-        """
-        n = len(self.buffer)
-        if n == 0:
-            return 0, 0
-        i0 = int(np.floor(t0 * self.rate)) - self.offset
-        i1 = int(np.ceil(t1 * self.rate)) + 1 - self.offset
-        i0 = max(0, min(n, i0))
-        i1 = max(i0, min(n, i1))
-        if i1 <= i0:
-            return 0, n
-        return i0, i1
-
-    def estimate_noiselevels_visible(self, channel, t0, t1):
-        """Noise levels from the visible part of the buffer only.
-
-        `estimate_noiselevels()` deliberately keeps its `self.init` guard:
-        without it a 424 ms decibel pass over the whole 16 channel buffer
-        would run on every scroll.  This variant looks at the cropped
-        visible slice instead, so it is cheap enough to call whenever the
-        buffer actually moved -- but only then, not on every repaint.
-
-        `channel` may be a sequence, in which case the estimate is made of
-        the mean power over those channels -- see `channel_power`.
-        """
-        if len(self.buffer) == 0 or len(self.buffer.shape) < 3:
-            return None, None
-        i0, i1 = self.visible_slice(t0, t1)
-        if i1 <= i0:
-            return None, None
-        block = channel_power(self.buffer[i0:i1], channel)
-        nf = max(1, block.shape[1] // 16)
-        with np.errstate(all="ignore"):
-            db = decibel(block)
-            zmin = np.percentile(db[:, -nf:], 95)
-            zmax = np.max(db)
-            zmin = max(zmin, np.median(db) + NOISE_FLOOR_MARGIN_DB)
-        if not np.isfinite(zmin) or not np.isfinite(zmax):
-            return None, None
-        zmax = zmin + 0.95 * (zmax - zmin)
-        if zmax - zmin < 20:
-            zmax = zmin + 20
-        if zmax - zmin > 80:
-            zmin = zmax - 80
-        return zmin, zmax
-
     def estimate_noiselevels(self, channel):
         """Colour ramp the whole buffer suggests, once, at start-up.
 

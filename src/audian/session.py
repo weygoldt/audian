@@ -393,18 +393,6 @@ def _floats(frame: pl.DataFrame, column: str) -> np.ndarray:
     return np.ascontiguousarray(frame[column].cast(pl.Float64).to_numpy(), np.float64)
 
 
-def _flags(frame: pl.DataFrame, column: str) -> np.ndarray:
-    """A nullable Boolean column as a bool array, null reading as False.
-
-    Only ever used where False and null mean the same thing to the caller --
-    ``radio_link_up`` null means the row was not a radio row at all, which is
-    not a fault, and neither is an explicit True.
-    """
-    if frame.height == 0 or column not in frame.columns:
-        return np.zeros(frame.height, dtype=bool)
-    return frame[column].fill_null(False).to_numpy().astype(bool, copy=False)
-
-
 def _inside(times: np.ndarray, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
     """Which of `times` fall in ``[start, end)`` of any of the spans.
 

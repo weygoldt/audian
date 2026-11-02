@@ -154,14 +154,8 @@ class Panel(object):
     def is_time(self):
         return self.x() in self.times
 
-    def is_xamplitude(self):
-        return self.x() in self.amplitudes
-
     def is_yamplitude(self):
         return self.y() in self.amplitudes
-
-    def is_xfrequency(self):
-        return self.x() in self.frequencies
 
     def is_yfrequency(self):
         return self.y() in self.frequencies
@@ -171,10 +165,6 @@ class Panel(object):
 
     def is_ypower(self):
         return self.y() in self.powers
-
-    def is_zpower(self):
-        z = self.z()
-        return z and z in self.powers
 
     def is_trace(self):
         return self.is_time() and self.is_yamplitude()
@@ -240,9 +230,6 @@ class Panel(object):
             return False
         for ax in self.axs:
             ax.set_grid((grids & 1) > 0, (grids & 2) > 0)
-
-    def is_cbar_visible(self, channel):
-        return self.axcs[channel].isVisible()
 
     def set_cbar_visible(self, visible):
         changed = False

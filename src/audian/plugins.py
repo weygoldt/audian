@@ -43,14 +43,8 @@ class Plugins(object):
     def add_trace_factory(self, factory_func):
         self.trace_factories.append(factory_func)
 
-    def clear_trace_factories(self):
-        self.trace_factories = []
-
     def add_analyzer_factory(self, factory_func):
         self.analyzer_factories.append(factory_func)
-
-    def clear_analyzer_factories(self):
-        self.analyzer_factories = []
 
     def add_panel_factory(self, factory_func):
         """Register a callable returning one side-panel tab.
@@ -67,9 +61,6 @@ class Plugins(object):
         """
         self.panel_factories.append(factory_func)
 
-    def clear_panel_factories(self):
-        self.panel_factories = []
-
     def add_denoiser_factory(self, factory_func):
         """Register a callable returning `denoise.Denoiser` objects.
 
@@ -84,9 +75,6 @@ class Plugins(object):
         Discovered by the same naming convention the others use.
         """
         self.denoiser_factories.append(factory_func)
-
-    def clear_denoiser_factories(self):
-        self.denoiser_factories = []
 
     def setup_denoisers(self) -> None:
         """Put every factory's denoisers in the registry.

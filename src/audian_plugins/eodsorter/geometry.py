@@ -33,7 +33,7 @@ full zoom-out of a million detections inside the 30 ms the design allows.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import NamedTuple, Optional
 
 import numpy as np
@@ -1103,10 +1103,6 @@ def ident_set(ts, rows: np.ndarray) -> np.ndarray:
         counts = np.bincount(ids.astype(np.int64))
         return np.flatnonzero(counts).astype(np.float64)
     return np.unique(ids)
-
-
-def with_view_size(view: View, w_px: float, h_px: float) -> View:
-    return replace(view, w_px=float(w_px), h_px=float(h_px))
 
 
 __all__ = [

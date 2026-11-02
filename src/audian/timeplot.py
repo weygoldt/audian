@@ -220,11 +220,6 @@ class TimePlot(RangePlot):
         self._update_caption()
         self._style_traces()
 
-    def set_caption(self, caption: str) -> None:
-        """Set the text shown after the channel number in the corner caption."""
-        self.caption = caption
-        self._update_caption()
-
     # --- the overlay panel -----------------------------------------------
 
     def own_traces(self) -> list:

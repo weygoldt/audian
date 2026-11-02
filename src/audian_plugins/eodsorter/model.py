@@ -821,9 +821,6 @@ class TrackSet:
         h = self.history
         return h.saved_position != h.position or self._meta_dirty
 
-    def frame_time(self, k) -> np.ndarray:
-        return self._times[np.asarray(k, dtype=np.int64)]
-
     def ids(self) -> np.ndarray:
         if self._ids_cache is None:
             self._ids_cache = _readonly(

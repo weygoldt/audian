@@ -199,19 +199,6 @@ class TimeAxisItem(pg.AxisItem):
             levels.append((pen, [QLineF(x, tick_start, x, y1) for x in xs.tolist()]))
         return self.pen(), span, levels
 
-    def set_left_margin(self, left_margin) -> None:
-        """Re-place the axis caption for a changed left-axis width.
-
-        The margin is a constructor argument, but the data plots decide their
-        left width at runtime (zero in dense lanes, `theme.AXIS_LEFT_WIDTH`
-        otherwise), so anything that wants its caption to line up with them
-        needs to be able to follow.
-        """
-        if left_margin == self._left_margin:
-            return
-        self._left_margin = left_margin
-        self.resizeEvent()
-
     def apply_theme(self) -> None:
         """Re-resolve pens and fonts from the current token table.
 

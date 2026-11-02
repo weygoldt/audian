@@ -134,12 +134,6 @@ class PlotRange(object):
     def is_time(self):
         return self.axspec in Panel.times
 
-    def is_amplitude(self):
-        return self.axspec in Panel.amplitudes
-
-    def is_frequency(self):
-        return self.axspec in Panel.frequencies
-
     def is_power(self):
         return self.axspec in Panel.powers
 
@@ -209,9 +203,6 @@ class PlotRange(object):
 
     def at_end(self, channel=0):
         return self.r1[channel] >= self.rmax
-
-    def at_home(self, channel=0):
-        return self.r0[channel] <= self.rmin
 
     def set_limits(self):
         if not self.is_used():
@@ -791,11 +782,6 @@ class PlotRanges(dict):
             if r is None:
                 continue
             r.auto(t0, t1, channels, do_set, headroom, respect_lock)
-
-    def clear_user_locks(self):
-        """Allow automatic fits on all ranges again."""
-        for r in self.values():
-            r.set_user_locked(False)
 
     def _apply(self, rfunc, axspec, *args, **kwargs):
         for s in axspec:

@@ -2345,9 +2345,6 @@ class DataBrowser(QWidget):
             else:
                 return Path(self.data.file_path).stem
 
-    def get_trace(self, name):
-        return self.data[name]
-
     def add_trace(self, trace):
         self.data.add_trace(trace)
 
@@ -2365,18 +2362,6 @@ class DataBrowser(QWidget):
 
     def add_analyzer(self, analyzer):
         self.analyzers.append(analyzer)
-
-    def remove_analyzer(self, name):
-        for k, a in enumerate(self.analyzers):
-            if name.lower() == a.name.lower():
-                del self.analyzers[k]
-
-    def clear_analyzer(self):
-        self.analyzers = []
-
-    def add_to_panel_trace(self, trace_name, channel, plot_item):
-        panel_name = self.data[trace_name].panel
-        self.panels[panel_name].add_item(plot_item, channel, False)
 
     def trace_plot_items(self, name):
         """Every plot item drawing trace `name`, over all panels and lanes.
