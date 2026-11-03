@@ -1,5 +1,9 @@
 """Base class for computed data."""
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+
 import numpy as np
 from audioio import BufferedArray
 from math import ceil, floor
@@ -27,6 +31,32 @@ def chunk_frames(source, chunk_bytes: int = CHUNK_BYTES) -> int:
     for n in source.shape[1:]:
         row *= n
     return max(1, chunk_bytes // max(1, row))
+
+
+class TransformPool:
+    """A few threads for transforming blocks of a buffer side by side.
+
+    numpy's ufuncs and scipy's FFT release the GIL, so independent blocks
+    really do run in parallel: the spectrogram's column blocks, and the
+    channels of a block click removal repairs.  Shared by every trace;
+    created on first use.  Only the transforms run here: the denoiser
+    chain, which is plugin code, stays on the calling thread.
+    """
+
+    lock = Lock()
+    executor = None
+    #: at four the curve flattens (60 s, 48 kHz, 2 channels: one thread
+    #: 42 ms, two 27 ms, four 18 ms, eight 17 ms)
+    threads = max(1, min(4, (os.cpu_count() or 1)))
+
+    @classmethod
+    def get(cls):
+        with cls.lock:
+            if cls.executor is None and cls.threads > 1:
+                cls.executor = ThreadPoolExecutor(
+                    cls.threads, thread_name_prefix="audian-dsp"
+                )
+            return cls.executor
 
 
 def _flat_copy(buffer, dst: int, src: int, n: int) -> None:
@@ -377,7 +407,9 @@ class BufferedData(BufferedArray):
         i0, i1, nbefore = self.source_window(
             offset, nframes, self.source.offset, len(self.source.buffer)
         )
-        extra = self.process(self.source.buffer[i0:i1], buffer, nbefore)
+        extra = self.process(
+            self.source.buffer[i0:i1], buffer, nbefore, start=self.source.offset + i0
+        )
         if extra:
             self.apply_extra(extra)
         self.after_load()

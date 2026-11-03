@@ -299,6 +299,42 @@ Switch the Y axis to per-channel and Reset, Center and the zoom steps apply
 only to the selected channels instead, which is what selecting a range of lanes
 with shift-click is for. Fit Y refits every visible channel.
 
+## Removing clicks
+
+Electrodes out of the water pick up static: clicks of a few milliseconds,
+thousands of times louder than the noise, several a second. In the water,
+weaker crackle smears grain over the whole spectrogram. **Remove clicks** on the
+side panel's *Filter* tab (also *Spectrogram ▸ Remove clicks*, <kbd>Alt</kbd>+<kbd>K</kbd>)
+repairs them in the filtered trace, and so in the spectrogram, which is computed
+from it. The raw trace is not changed, so you can compare the two.
+
+A click is found in the top of each channel's spectrum, above a fifth of the
+sampling rate, where a click reaches and a fish does not. It has to reach
+*Threshold* robust standard deviations of the noise there (12 by default; lower
+finds weaker clicks). Anything loud for longer than half a second, a boat or
+rain, is a signal and stays. In the repair, what stands out as a line in the
+spectrum (a fish, its harmonics, hum) is set aside. The click is bridged by a
+straight line in the rest, and the lines are added back. A fish therefore runs
+on through a repaired click instead of getting a hole. Samples outside a click
+are left exactly as they are, and so is a channel without clicks. This is the
+algorithm wavetracker uses before it tracks: on the same three field recordings,
+the two repair the same samples (an overlap of 0.998 to 1.000).
+
+The repair works in 2 s blocks fixed in time, each computed with half a second
+on either side. So a stretch looks the same whether you scrolled to it or
+jumped there. Like the cutoffs, it is off when a recording opens and follows
+*Link filter* across tabs.
+
+It costs nothing while it is off. While it is on, the raw buffer holds 2.5 s
+more on each side. Measured on a 16 channel, 48 kHz field recording with a 10 s
+view:
+
+- **switching on:** 315 ms, then 0.6 s in the background;
+- **panning:** 330 ms instead of 190 ms for a step that moves the buffers;
+- **jumping:** 870 ms instead of 360 ms.
+
+The cost grows with the number of channels and with the sampling rate.
+
 
 ## The frequency axis, and the band a spectrogram opens at
 

@@ -1495,6 +1495,7 @@ class CheatSheet(QDialog):
                 "highpass_down",
                 "lowpass_up",
                 "lowpass_down",
+                "remove_clicks",
             ),
         ),
         (
@@ -4091,14 +4092,45 @@ class Audian(QMainWindow):
         self.link_filter = not self.link_filter
 
     def dispatch_filter(self):
-        if self.link_filter and "filtered" in self.browser().data:
-            highpass_cutoff = self.browser().data["filtered"].highpass_cutoff
-            lowpass_cutoff = self.browser().data["filtered"].lowpass_cutoff
+        browser = self.browser()
+        if self.link_filter and "filtered" in browser.data:
+            filtered = browser.data["filtered"]
             for b in self.browsers:
-                if b is not self.browser():
+                if b is not browser:
                     bs = b.blockSignals(True)
-                    b.update_filter(highpass_cutoff, lowpass_cutoff)
+                    b.update_filter(
+                        filtered.highpass_cutoff,
+                        filtered.lowpass_cutoff,
+                        click_threshold=filtered.click_threshold,
+                    )
+                    b.set_click_removal(filtered.remove_clicks, dispatch=False)
                     b.blockSignals(bs)
+        self.sync_click_action(browser)
+
+    def choose_click_removal(self, on: bool) -> None:
+        """Spectrogram > Remove clicks was switched on or off."""
+        browser = self.browser()
+        if isinstance(browser, DataBrowser) and browser.data is not None:
+            browser.set_click_removal(on)
+        self.sync_click_action(browser)
+
+    def sync_click_action(self, browser) -> None:
+        """Tick Remove clicks for what `browser`'s filter does.
+
+        From `adapt_menu` as well, because the switch belongs to a browser:
+        a tab without a filtered trace has nothing to remove clicks from,
+        and its entry goes grey.
+        """
+        act = self.acts.remove_clicks
+        usable = (
+            isinstance(browser, DataBrowser)
+            and browser.data is not None
+            and "filtered" in browser.data
+        )
+        act.setEnabled(usable)
+        blocked = act.blockSignals(True)
+        act.setChecked(usable and browser.data["filtered"].remove_clicks)
+        act.blockSignals(blocked)
 
     def setup_spectrogram_actions(self, menu):
         self.acts.frequency_resolution_up = QAction("Increase &resolution", self)
@@ -4265,6 +4297,13 @@ class Audian(QMainWindow):
             lambda x: self.browser().lpfw.stepDown()
         )
 
+        self.acts.remove_clicks = QAction("Remove &clicks", self)
+        # K for clicK: C and Shift+C are taken, and so is X
+        self.acts.remove_clicks.setShortcut("Alt+K")
+        self.acts.remove_clicks.setCheckable(True)
+        self.acts.remove_clicks.setChecked(False)
+        self.acts.remove_clicks.toggled.connect(self.choose_click_removal)
+
         # Hover help for this page, written together rather than beside each
         # action, because it is prose and prose is easier to keep even when
         # it can be read in one place.  Measured before this went in: one of
@@ -4327,11 +4366,19 @@ class Audian(QMainWindow):
                 "min_power_down",
                 "Lower the bottom of the colour scale, showing more of the noise floor",
             ),
-            ("link_filter", "Hold every open recording at the same filter band"),
+            (
+                "link_filter",
+                "Hold every open recording at the same filter band and click removal",
+            ),
             ("highpass_up", "Raise the high-pass cutoff, drawn on the spectrogram"),
             ("highpass_down", "Lower the high-pass cutoff, drawn on the spectrogram"),
             ("lowpass_up", "Raise the low-pass cutoff, drawn on the spectrogram"),
             ("lowpass_down", "Lower the low-pass cutoff, drawn on the spectrogram"),
+            (
+                "remove_clicks",
+                "Repair clicks and crackle in the traces, and so in the "
+                "spectrogram, leaving tones and long events alone",
+            ),
         ):
             act = getattr(self.acts, name, None)
             if act is not None:
@@ -4379,6 +4426,7 @@ class Audian(QMainWindow):
         spec_menu.addAction(self.acts.highpass_down)
         spec_menu.addAction(self.acts.lowpass_up)
         spec_menu.addAction(self.acts.lowpass_down)
+        spec_menu.addAction(self.acts.remove_clicks)
 
         self.data_menus.append(spec_menu)
 
@@ -5417,6 +5465,7 @@ class Audian(QMainWindow):
             self.relabel_axis_actions(browser)
             self.sync_annotation_actions(browser)
             self.sync_denoise_actions(browser)
+            self.sync_click_action(browser)
             self.sync_side_panel(browser)
             browser.update()
         self.sync_toolbar(browser)

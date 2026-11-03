@@ -348,23 +348,91 @@ class Data(object):
         self.buffer_time = min(Data.max_buffer_time, max(Data.min_buffer_time, budget))
         self.back_time = self.buffer_time / 3
 
+    def expand_times(self, raw: int):
+        """What the raw buffer needs before and after the view [s].
+
+        Every derived trace adds what it reads around its own buffer to what
+        its dests read around theirs; `raw` is the entry of `sources` that
+        stands for the loader -- -1 in `open`, before the loader is put in
+        front of `traces`, and 0 after.  Each trace's own sums start from
+        zero again, so that this can run more than once.
+        """
+        tbefore = [0] * len(self.traces)
+        tafter = [0] * len(self.traces)
+        raw_before = 0
+        raw_after = 0
+        for k in reversed(range(len(self.traces))):
+            i = self.sources[k]
+            if i is None:
+                continue  # the loader itself
+            trace = self.traces[k]
+            trace.tbefore = 0
+            trace.tafter = 0
+            tb, ta = trace.expand_times(tbefore[k], tafter[k])
+            if i == raw:
+                raw_before = max(raw_before, tb)
+                raw_after = max(raw_after, ta)
+            else:
+                tbefore[i] = max(tbefore[i], tb)
+                tafter[i] = max(tafter[i], ta)
+        return raw_before, raw_after
+
+    def update_margins(self, t0=None, t1=None) -> bool:
+        """Resize the raw buffer for what the traces now read around it.
+
+        For a trace whose margins changed after `open` -- the filter claims
+        more source while it removes clicks.  True if they changed, and then
+        the buffers have to be placed again (`update_times`) before anything
+        is computed from them: until then the raw buffer may not reach as
+        far as a derived trace now reads, and `align_buffer` would place it
+        from margins the raw buffer was not placed with.
+
+        With the view `[t0, t1]`, margins that shrank also give the raw
+        buffer back: `place_buffer` keeps a buffer up to twice the view
+        rather than reallocate it, and would go on reading the reserve on
+        every jump.  Measured on iriri01-grid01-dev03 (16 channels, 48 kHz,
+        10 s view): after click removal was switched off again the raw
+        buffer held 18.8 s without this and 13.7 s with it -- 11.9 s at
+        `open`, and the rest the lead `place_buffer` adds around the view.
+        """
+        if self.data is None:
+            return False
+        tbefore, tafter = self.expand_times(0)
+        if (tbefore, tafter) == (self.tbefore, self.tafter):
+            return False
+        shrank = tbefore + tafter < self.tbefore + self.tafter
+        self.tbefore, self.tafter = tbefore, tafter
+        rate = self.data.rate
+        self.data.bufferframes = int((self.buffer_time + tbefore + tafter) * rate)
+        self.base_bufferframes = self.data.bufferframes
+        self.data.backframes = int((self.back_time + tbefore) * rate)
+        if shrank and t0 is not None and t1 is not None:
+            self.shrink_buffer(t0, t1)
+        return True
+
+    def shrink_buffer(self, t0: float, t1: float) -> None:
+        """Cut the raw buffer down to its base size around the view.
+
+        Placed the way `place_buffer` places a jump, `backframes` before
+        the view at most, and never shorter than the view and its margins.
+        """
+        loader = self.data
+        rate = loader.rate
+        frames = loader.frames
+        i0 = max(0, int((t0 - self.tbefore) * rate))
+        i1 = min(frames, int((t1 + self.tafter) * rate) + 1)
+        n = max(0, i1 - i0)
+        target = min(frames, max(self.base_bufferframes, n))
+        if len(loader.buffer) <= target:
+            return
+        back = min(loader.backframes, max(0, (target - n) // 2))
+        loader.move_buffer(max(0, min(i0 - back, frames - target)), target)
+
     def open(self, unwrap, unwrap_clip):
         if self.data is not None:
             self.data.close()
         # expand buffer times:
-        self.tbefore = 0
-        self.tafter = 0
-        tbefore = [0] * len(self.traces)
-        tafter = [0] * len(self.traces)
-        for k in reversed(range(len(self.traces))):
-            tb, ta = self.traces[k].expand_times(tbefore[k], tafter[k])
-            i = self.sources[k]
-            if i < 0:
-                self.tbefore = max(self.tbefore, tb)
-                self.tafter = max(self.tafter, ta)
-            else:
-                tbefore[i] = max(tbefore[i], tb)
-                tafter[i] = max(tafter[i], ta)
+        self.tbefore, self.tafter = self.expand_times(-1)
         # raw data:
         tbuffer = self.buffer_time + self.tbefore + self.tafter
         tback = self.back_time + self.tbefore

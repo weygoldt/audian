@@ -12,6 +12,9 @@ at v2.5. Install it from source; `pip install audian` gets upstream.
 - **Event detection plugin:** a few-shot detector that learns from the events
   you label.
 - **Denoiser plugins** for the spectrogram: mains hum and spatial coherence.
+- **Click removal** on the Filter tab (<kbd>Alt</kbd>+<kbd>K</kbd>): repairs
+  clicks and crackle in the filtered traces, and so in the spectrogram, and
+  leaves tones and long events alone. A port of wavetracker's.
 - **Plugin API:** `audian.pluginapi`, plugins bundled in `audian_plugins`, and
   an `audian.plugins` entry point group for installed ones.
 - **Labels:** editable labels drawn with the mouse into a CSV sidecar, beside

@@ -701,6 +701,16 @@
     "path": "Region",
     "text": "Rectangle zoom"
   },
+  "remove_clicks": {
+    "checkable": true,
+    "checked": false,
+    "in_menus": true,
+    "keys": [
+      "Alt+K"
+    ],
+    "path": "Spectrogram",
+    "text": "Remove clicks"
+  },
   "reset_amplitude": {
     "checkable": false,
     "checked": false,

@@ -1,9 +1,5 @@
 """Spectrogram of source data on the fly."""
 
-import os
-from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
-
 import numpy as np
 from scipy import fft as sp_fft
 from scipy.signal import get_window
@@ -11,7 +7,7 @@ from scipy.signal import get_window
 from thunderlab.powerspectrum import decibel
 
 from . import denoise
-from .buffereddata import BufferedData
+from .buffereddata import BufferedData, TransformPool
 from .tasks.tokens import NEVER
 
 
@@ -64,31 +60,6 @@ def fast_decibel(power, min_power=1e-20):
     out *= 10.0
     out[low] = -np.inf
     return out
-
-
-class _Pool:
-    """A few threads for transforming spectrogram blocks side by side.
-
-    numpy's ufuncs and scipy's FFT release the GIL, so independent column
-    blocks really do run in parallel.  Shared by every spectrogram; created
-    on first use.  Only the transform runs here: the denoiser chain, which
-    is plugin code, stays on the calling thread.
-    """
-
-    lock = Lock()
-    executor = None
-    #: at four the curve flattens (60 s, 48 kHz, 2 channels: one thread
-    #: 42 ms, two 27 ms, four 18 ms, eight 17 ms)
-    threads = max(1, min(4, (os.cpu_count() or 1)))
-
-    @classmethod
-    def get(cls):
-        with cls.lock:
-            if cls.executor is None and cls.threads > 1:
-                cls.executor = ThreadPoolExecutor(
-                    cls.threads, thread_name_prefix="audian-spec"
-                )
-            return cls.executor
 
 
 def power_spectra(source, rate, nfft, hop, window):
@@ -221,7 +192,7 @@ class BufferedSpectrogram(BufferedData):
     #: The point is interruptibility: a superseded spectrogram gives the CPU
     #: back within one chunk instead of after the whole buffer.  It is also
     #: faster, because a block this size stays in cache, and the blocks are
-    #: what `_Pool` hands out to its threads.
+    #: what `TransformPool` hands out to its threads.
     chunk_columns = None
 
     #: Samples (columns x channels x nfft) per chunk when `chunk_columns`
@@ -241,8 +212,11 @@ class BufferedSpectrogram(BufferedData):
         per_column = max(1, channels * self.nfft)
         return max(8, min(1024, self.chunk_samples // per_column))
 
-    def process(self, source, dest, nbefore, cancel=NEVER, progress=None):
+    def process(self, source, dest, nbefore, cancel=NEVER, progress=None, start=None):
         """Transform `source` into `dest`, in interruptible column blocks.
+
+        `start`, the frame of the recording `source[0]` is, is not needed:
+        a column depends only on its own samples.
 
         Returns the scalars it derived rather than assigning them, because
         this also runs on a worker thread and `frequencies` and `spec_rect`
@@ -276,8 +250,8 @@ class BufferedSpectrogram(BufferedData):
                     break
                 chunks.append((lo, hi, start, take))
                 start += take
-            pool = _Pool.get() if len(chunks) > 1 else None
-            batch = _Pool.threads if pool is not None else 1
+            pool = TransformPool.get() if len(chunks) > 1 else None
+            batch = TransformPool.threads if pool is not None else 1
 
             def transform(chunk):
                 lo, hi, at, take = chunk

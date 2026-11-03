@@ -1352,6 +1352,7 @@ def filter_is_active(
     highpass: float | None = None,
     lowpass: float | None = None,
     rate: float | None = None,
+    clicks: bool = False,
 ) -> bool:
     """Is a band filter with these cutoffs doing anything at all?
 
@@ -1359,8 +1360,11 @@ def filter_is_active(
     build an SOS section at all: a high pass below 0.1 % of Nyquist and a low
     pass at or above Nyquist together mean *pass through*.  Unknown values
     (``None``) count as "not filtering", so a trace that carries no cutoffs is
-    treated as raw rather than being mislabelled.
+    treated as raw rather than being mislabelled.  A filter that removes
+    `clicks` changes the samples whatever its cutoffs are.
     """
+    if clicks:
+        return True
     if rate is None or rate <= 0:
         return bool(highpass) or bool(lowpass)
     nyquist = rate / 2
@@ -1378,8 +1382,8 @@ def waveform_role(trace: Any = None, role: str | None = None) -> str:
     filtered trace reports ``'raw'`` until a cutoff is actually engaged.
 
     Duck typed on purpose: *trace* only has to expose ``name``,
-    ``highpass_cutoff``, ``lowpass_cutoff`` and ``rate``, any of which may be
-    missing.  Pass *role* explicitly to skip the name lookup.
+    ``highpass_cutoff``, ``lowpass_cutoff``, ``remove_clicks`` and ``rate``,
+    any of which may be missing.  Pass *role* explicitly to skip the name lookup.
 
     Every waveform in the application -- main plots and navigator alike --
     must take its colour from this one function, otherwise the two can and
@@ -1400,6 +1404,7 @@ def waveform_role(trace: Any = None, role: str | None = None) -> str:
         getattr(trace, "highpass_cutoff", None),
         getattr(trace, "lowpass_cutoff", None),
         getattr(trace, "rate", None),
+        bool(getattr(trace, "remove_clicks", False)),
     ):
         return "raw"
     return "filtered"

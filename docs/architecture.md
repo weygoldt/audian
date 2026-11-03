@@ -14,7 +14,13 @@ data sets, but holds only a small part in memory (a buffer).
 
 - `data.py`: `class Data` handles the raw and all derived traces.
 - `buffereddata.py`: `class BufferedData`, the base class for computed data.
-- `bufferedfilter.py`: `class BufferedFilter` filters source data on the fly.
+- `bufferedfilter.py`: `class BufferedFilter` filters source data on the fly,
+  and removes clicks from it first when asked.
+- `clicks.py`: Click removal, a numpy port of `wavetracker.clicks`, in blocks
+  fixed in absolute time so that a frame comes out the same however its buffer
+  was loaded. While it is on, the filter reads a block and a margin more of
+  the raw buffer on each side, and `Data.update_margins` resizes the raw buffer
+  for that.
 - `bufferedspectrogram.py`: `class BufferedSpectrogram` computes spectrograms of
   source data on the fly.
 - `compresseddata.py`: Compressed and cached data for the navigator.

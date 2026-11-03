@@ -110,7 +110,15 @@ def run_job(job: ComputeJob) -> ComputeResult:
             i0, i1, nbefore = trace.source_window(
                 step.offset, step.shape[0], source_offset, len(source_buffer)
             )
-            extra = trace.process(source_buffer[i0:i1], dest, nbefore, job.cancel)
+            # `start`: the frame of the recording the slice begins at, which
+            # click removal needs to place its blocks; see `audian.clicks`
+            extra = trace.process(
+                source_buffer[i0:i1],
+                dest,
+                nbefore,
+                job.cancel,
+                start=source_offset + i0,
+            )
             produced[id(trace)] = (dest, step.offset)
             updates.append(TraceUpdate(trace, dest, step.offset, extra or {}))
     except Cancelled:

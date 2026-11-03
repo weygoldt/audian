@@ -1967,6 +1967,10 @@ class DataBrowser(QWidget):
         self.lpsliderw = None
         self.linkbandw = None
         self.link_band = False
+        self.clicksw = None
+        self.clickthreshw = None
+        #: the threshold's caption and field, hidden while clicks stay in
+        self.click_rows = []
         # channel stack (scroll area, grid of rail rows and figures):
         self.splitter = None
         self.stack_area = None
@@ -1985,6 +1989,7 @@ class DataBrowser(QWidget):
         self.filter_timer.timeout.connect(self.apply_filter)
         self.pending_highpass = None
         self.pending_lowpass = None
+        self.pending_click_threshold = None
         self.resolution_timer = QTimer(self)
         self.resolution_timer.setSingleShot(True)
         self.resolution_timer.timeout.connect(self.apply_resolution)
@@ -3224,6 +3229,49 @@ class DataBrowser(QWidget):
             )
             self.linkbandw.toggled.connect(self.set_link_band)
             group.add_row("Band", "", self.linkbandw)
+
+            # On the Filter page and not with the spectrogram's denoisers:
+            # it repairs the traces themselves, and the spectrogram, which
+            # is computed from the filtered trace, follows.
+            self.clicksw = QToolButton(self.parambar)
+            self.clicksw.setText("Remove clicks")
+            self.clicksw.setCheckable(True)
+            self.clicksw.setChecked(filtered.remove_clicks)
+            self.clicksw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+            self.clicksw.setToolTip(
+                "Repair clicks and crackle -- impulses of a few milliseconds "
+                "-- in the traces and the spectrogram.  Tones, their harmonics "
+                "and long loud events stay as they are"
+            )
+            self.clicksw.toggled.connect(lambda on: self.set_click_removal(on))
+            group.add_row("Clicks", "", self.clicksw)
+            self.clickthreshw = pg.SpinBox(
+                self,
+                filtered.click_threshold,
+                bounds=self.CLICK_THRESHOLD_BOUNDS,
+                suffix="σ",
+                step=0.5,
+                decimals=3,
+            )
+            self.style_parameter_spinbox(self.clickthreshw)
+            # `pg.SpinBox` asks to expand without being asked to, and a lone
+            # field that wants width claims the stretch of the column the
+            # cutoff spin boxes are in -- which halved the cutoff sliders, 161
+            # px each in a 344 px row (see `add_narrow_row`).  It fills its
+            # row anyway: a lone field spans it.
+            policy = self.clickthreshw.sizePolicy()
+            policy.setHorizontalPolicy(QSizePolicy.Policy.Preferred)
+            self.clickthreshw.setSizePolicy(policy)
+            self.clickthreshw.setToolTip(
+                "What a click reaches, in robust standard deviations of each "
+                "channel's noise above a fifth of the sampling rate.  Lower "
+                "finds weaker clicks"
+            )
+            self.clickthreshw.sigValueChanged.connect(
+                lambda sb: self.update_filter(click_threshold=sb.value())
+            )
+            self.click_rows = group.add_row("Threshold", "", self.clickthreshw)
+            self.sync_click_widgets()
             groups.append(group)
         else:
             self.hpfw = None
@@ -3231,6 +3279,9 @@ class DataBrowser(QWidget):
             self.hpsliderw = None
             self.lpsliderw = None
             self.linkbandw = None
+            self.clicksw = None
+            self.clickthreshw = None
+            self.click_rows = []
             self.acts.link_filter.setEnabled(False)
             self.acts.highpass_up.setEnabled(False)
             self.acts.highpass_down.setEnabled(False)
@@ -9684,7 +9735,14 @@ class DataBrowser(QWidget):
             widget.setValue(value)
             widget.blockSignals(blocked)
 
-    def update_filter(self, highpass_cutoff=None, lowpass_cutoff=None):
+    #: what the click threshold may be set to [robust standard deviations]:
+    #: Gaussian noise passes 4 once in about 16000 samples, and above 100
+    #: nothing short of a click four orders above the noise is one
+    CLICK_THRESHOLD_BOUNDS = (4.0, 100.0)
+
+    def update_filter(
+        self, highpass_cutoff=None, lowpass_cutoff=None, click_threshold=None
+    ):
         """Called when filter cutoffs were changed by key shortcuts or handles
         in spectrum plots and when dispatching.
 
@@ -9701,6 +9759,9 @@ class DataBrowser(QWidget):
             self.pending_highpass = highpass_cutoff
         if lowpass_cutoff is not None:
             self.pending_lowpass = lowpass_cutoff
+        if click_threshold is not None:
+            lo, hi = self.CLICK_THRESHOLD_BOUNDS
+            self.pending_click_threshold = min(max(float(click_threshold), lo), hi)
         filtered = self.data["filtered"]
         if (
             self.link_band
@@ -9723,12 +9784,24 @@ class DataBrowser(QWidget):
         if "filtered" not in self.data:
             return
         filtered = self.data["filtered"]
+        cutoffs = self.pending_highpass is not None or self.pending_lowpass is not None
         if self.pending_highpass is not None:
             filtered.highpass_cutoff = self.pending_highpass
         if self.pending_lowpass is not None:
             filtered.lowpass_cutoff = self.pending_lowpass
+        threshold = self.pending_click_threshold
         self.pending_highpass = None
         self.pending_lowpass = None
+        self.pending_click_threshold = None
+        if threshold is not None:
+            changed = threshold != filtered.click_threshold
+            filtered.click_threshold = threshold
+            self.sync_click_widgets()
+            if not cutoffs and not (changed and filtered.remove_clicks):
+                # kept for when clicks are removed; nothing on screen moves
+                if changed:
+                    self.sigFilterChanged.emit()
+                return
         with self.updating():
             for ax in self.panels["spectrogram"].axs:
                 ax.set_filter_handles(filtered.highpass_cutoff, filtered.lowpass_cutoff)
@@ -9740,6 +9813,54 @@ class DataBrowser(QWidget):
         if hasattr(self.datafig, "refresh_colors"):
             self.datafig.refresh_colors()
         self.sigFilterChanged.emit()  # dispatch
+
+    def set_click_removal(self, on: bool, dispatch: bool = True) -> None:
+        """Repair the clicks in the filtered trace, or stop repairing them.
+
+        Not debounced, like `set_denoiser_enabled`: a switch is one event.
+        The buffers are placed again before the recompute, because the
+        filter reads `BufferedFilter.click_reserve` more of the raw buffer
+        on both sides while it removes clicks, and only then.
+        """
+        if self.setting or self.data is None or "filtered" not in self.data:
+            return
+        filtered = self.data["filtered"]
+        on = bool(on)
+        if filtered.remove_clicks != on:
+            # the margins move the loader's buffer, which a worker may be
+            # reading, and `process()` reads the switch
+            if self.tasks is not None:
+                self.tasks.cancel_and_wait()
+            filtered.set_click_removal(on)
+            trange = self.plot_ranges[Panel.times[0]]
+            t0, t1 = trange.r0[0], trange.r1[0]
+            if self.data.update_margins(t0, t1):
+                with self.updating():
+                    self.data.update_times(t0, t1)
+            with self.updating():
+                self.request_recompute(filtered)
+            # painted amber rather than cyan now: the samples differ from raw
+            if hasattr(self.datafig, "refresh_colors"):
+                self.datafig.refresh_colors()
+        self.sync_click_widgets()
+        if dispatch:
+            self.sigFilterChanged.emit()
+
+    def sync_click_widgets(self) -> None:
+        """Point the switch and the threshold at the filter, silently."""
+        if self.data is None or "filtered" not in self.data:
+            return
+        filtered = self.data["filtered"]
+        if self.clicksw is not None:
+            blocked = self.clicksw.blockSignals(True)
+            self.clicksw.setChecked(filtered.remove_clicks)
+            self.clicksw.blockSignals(blocked)
+        if self.clickthreshw is not None:
+            blocked = self.clickthreshw.blockSignals(True)
+            self.clickthreshw.setValue(filtered.click_threshold)
+            self.clickthreshw.blockSignals(blocked)
+        for w in self.click_rows:
+            w.setVisible(filtered.remove_clicks)
 
     def set_filter_widgets(self, highpass: float, lowpass: float) -> None:
         for widget, value in ((self.hpfw, highpass), (self.lpfw, lowpass)):
