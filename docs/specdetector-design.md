@@ -126,6 +126,37 @@ of time and drops any training tile that overlaps a held-out one. Below five suc
 stretches with an event in them there is nothing to hold out, so everything trains, and
 the panel says the score is a training score.
 
+A reader can hold out more often, as often as one stretch in two, which needs only two
+places labelled, or never. What cannot be offered is a split inside one stretch: its
+tiles overlap, and holding some out would put near-identical pictures on both sides,
+which is the very fault above. This came up on a real session: 13 chirps labelled in
+one 60 s view of a fish grid were one stretch, nothing was held out, and the model
+reported mAP50 0.995 after 200 epochs on its own 20 tiles.
+
+### The reader chooses how a model trains
+
+Under **Training settings**: the YOLO26 size (n to x), whether to start from pretrained
+weights or go on from the project's last model, epochs, batch, how often to hold out,
+and early stopping with its patience. Each "Auto" is the measured default: training
+length in batches (`epochs_for`), patience a third of the epochs and at least 10,
+batch 16 on a GPU. The settings are kept in the project.
+
+**Early stopping watches held-out tiles or nothing.** With nothing held out, Ultralytics
+would watch the score on the training tiles, which keeps rising, so stopping there would
+end training at an arbitrary point and call it the best. `train_detector` turns it off
+instead and says so, and the panel tells the reader how far apart to label for a
+stretch to be held out.
+
+**The curve is the run.** Each epoch's training loss, held-out loss and mAP50 go to the
+panel as they happen, and the whole curve is kept in `model.json`, with the epoch
+Ultralytics kept as `best.pt` (highest box mAP50-95). It is painted with `QPainter`: two
+pyqtgraph plots in the tab crashed the panel tests in 3 of 4 runs as tabs were torn
+down, and in none of 3 once painted.
+
+**Preview** runs the trained model on the view alone and replaces the candidates in it,
+keeping the rest of the queue: the quick look at how a model does before a Run over
+hours of recording.
+
 ## The measurements
 
 ### Ground truth
@@ -385,7 +416,7 @@ and add it to the project, rather than trust a model's first run.
 | Rewriting and redrawing 5000 candidates | 62 ms and 54 ms |
 
 CPU figures are 4 threads of a desktop, and a T470s will be slower. Training length is set in
-optimiser steps (`epochs_for`): fifteen epochs of 24 tiles were 30 steps, and left a model with
+batches (`epochs_for`): fifteen epochs of 24 tiles were 30 batches, and left a model with
 mAP50 0.06.
 
 ## What it cannot do

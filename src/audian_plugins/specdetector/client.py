@@ -48,6 +48,8 @@ class RunnerClient(QObject):
     sigState = Signal(str)
     sigHello = Signal(dict)
     sigProgress = Signal(str, str, int, int, str)
+    #: ``(job, point)`` after each epoch of a training: the numbers of its curve
+    sigMetrics = Signal(str, dict)
     sigResult = Signal(str, dict)
     sigError = Signal(str, str, str)
     sigLog = Signal(str, str)
@@ -256,6 +258,14 @@ class RunnerClient(QObject):
                 int(total if total is not None else -1),
                 str(message.get("text") or ""),
             )
+        elif kind == "metrics":
+            values = message.get("values")
+            if isinstance(values, dict):
+                point = {
+                    str(k): v for k, v in values.items() if isinstance(v, (int, float))
+                }
+                point["epochs"] = int(message.get("epochs") or 0)
+                self.sigMetrics.emit(str(message.get("id") or ""), point)
         elif kind == "log":
             self.sigLog.emit(
                 str(message.get("level") or "info"), str(message.get("text") or "")

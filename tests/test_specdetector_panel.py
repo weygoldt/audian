@@ -9,6 +9,7 @@ store, the view on the lane, the content of a request, the rows of a CSV.
 from __future__ import annotations
 
 import csv
+import itertools
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
-from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
+from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton, QWidget
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
@@ -53,6 +54,7 @@ class FakeClient(QObject):
     """A `RunnerClient` that remembers what it was asked and answers on command."""
 
     sigProgress = Signal(str, str, int, int, str)
+    sigMetrics = Signal(str, dict)
     sigResult = Signal(str, dict)
     sigError = Signal(str, str, str)
 
@@ -161,6 +163,7 @@ def panel(window):
     widget.batch.sigProgress.connect(widget._job_progress)
     widget.batch.sigResult.connect(widget._job_result)
     widget.batch.sigError.connect(widget._job_error)
+    widget.batch.sigMetrics.connect(widget._epoch_ended)
     # A category of the reader's, chosen as a reader does: on the chips.
     browser.labels.add_category(CLASS, KIND_SPAN)
     browser.current_category = CLASS
@@ -282,13 +285,62 @@ def test_it_is_offered_next_to_the_wavetracker_and_says_what_it_is_for(window):
     assert "Spectrogram detector" in labels and "Wavetracker" in labels
 
 
-def test_opening_it_does_not_widen_the_window(window):
-    """The T470s is the budget: a tab must not raise the window's floor."""
+def test_the_tab_fits_the_panel_and_does_not_widen_the_window(window):
+    """The T470s is the budget: a tab must not raise the window's floor, and must
+    fit inside the 220 px panel, margins taken off, as the Labels page does.
+
+    The second is the one that can fail: the panel scrolls, so a tab too wide for it
+    scrolls sideways and leaves the window's floor where it was.  Measured, the
+    Classes button's "every category with boxes" took the tab to 208 px against 204
+    before it was elided.  And with its training settings open and its curve shown:
+    hidden, a widget asks for no width at all, so only showing them measures them.
+    """
+    from audian import theme
+    from audian.databrowser import SidePanel
+
+    budget = SidePanel.MIN_WIDTH - 2 * theme.S8
     before = window.minimumSizeHint().width()
     browser = window.browser()
     assert browser.open_plugin_panel("Spectrogram detector")
     pump(0.3)
+    widget = browser.plugin_panels["Spectrogram detector"]
     assert window.minimumSizeHint().width() <= before
+    assert widget.minimumSizeHint().width() <= budget
+    widget.settingsw.setChecked(True)
+    widget.curvew.set_points(
+        [{"epoch": e, "train_loss": 1.0 / e, "map50": 0.1 * e} for e in range(1, 9)], 5
+    )
+    widget.curvew.setVisible(True)
+    widget.classesw.setFullText("chirp, rise, interruption, upward sweep (not noise)")
+    # what a training leaves, 259 characters: long enough that the label asks for
+    # more than the panel's width, and the tab's hint undercounts it
+    widget.statusw.setText(
+        "Trained in 30 s, 40 of 40 epochs, best at 40. Early stopping was off, with "
+        "nothing held out: label in at least 5 places more than 10 s apart, or hold "
+        "out more often. mAP50 0.995 on its own training data, which flatters it. "
+        "Preview shows how it does on screen."
+    )
+    pump(0.3)
+    assert not widget.modelw.isHidden() and not widget.curvew.isHidden()
+    assert window.minimumSizeHint().width() <= before
+    assert widget.minimumSizeHint().width() <= budget
+    # and as tall as it is at the width it got: held to that hint, the tab lost 64 px
+    # from its last rows and laid the curve's caption over the mAP50 chart -- seen in
+    # the screenshots, and nothing the widths above could catch
+    status = widget.statusw
+    assert status.sizeHint().height() < status.heightForWidth(status.width())
+    assert status.height() >= status.heightForWidth(status.width())
+    curve = widget.curvew
+    parts = [
+        part.geometry()
+        for part in curve.findChildren(
+            QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly
+        )
+        if not part.isHidden()
+    ]
+    assert parts
+    assert all(curve.rect().contains(part) for part in parts)
+    assert not any(a.intersects(b) for a, b in itertools.combinations(parts, 2))
 
 
 def test_opening_it_makes_no_window_of_its_own(window):
@@ -351,7 +403,7 @@ def test_a_label_drawn_with_audians_tool_is_a_class_and_an_example(panel):
         ("rise", 2.0),
     ]
     # and the tab says so at once, not after the next training
-    assert panel.classesw.text() == f"{CLASS}, rise"
+    assert panel.classesw.fullText() == f"{CLASS}, rise"
 
 
 def test_training_learns_every_boxed_category_and_nothing_else(panel):
@@ -384,7 +436,7 @@ def test_a_category_left_out_is_not_learnt_and_its_labels_are_hidden(panel):
     source = request["sources"][0]
     assert [b["t0"] for b in source["boxes"]] == [1.0]
     assert [2.0, 2.4, 100.0, 300.0] in [hidden[:4] for hidden in source["hidden"]]
-    assert "not noise" in panel.classesw.text()
+    assert "not noise" in panel.classesw.fullText()
     assert project_.Project.open(panel.project.directory).left_out == ["noise"]
     panel.set_class_learnt("noise", True)
     panel.train()
@@ -839,7 +891,14 @@ def trained(panel, held_out=True):
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "best.pt").write_bytes(b"x")
     (directory / "model.json").write_text(
-        json.dumps({"config": config().as_dict(), "threshold": 0.42, "names": [CLASS]})
+        json.dumps(
+            {
+                "config": config().as_dict(),
+                "threshold": 0.42,
+                "names": [CLASS],
+                "task": "detect",
+            }
+        )
     )
     panel.train()
     panel.batch.answer(
@@ -849,6 +908,229 @@ def trained(panel, held_out=True):
         held_out=held_out,
         val_events=22,
         seconds=47.0,
+    )
+
+
+def choose(combo, data):
+    """Pick an entry as a reader does, which is what `activated` reports."""
+    combo.setCurrentIndex(combo.findData(data))
+    combo.activated.emit(combo.currentIndex())
+
+
+def model_with_curve(panel, name, curve, **meta):
+    directory = Path(panel.project.directory) / "models" / name
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "best.pt").write_bytes(b"x")
+    values = {
+        "config": config().as_dict(),
+        "threshold": 0.3,
+        "names": [CLASS],
+        "task": "detect",
+        "curve": curve,
+    } | meta
+    (directory / "model.json").write_text(json.dumps(values))
+    return str(directory / "best.pt")
+
+
+def test_training_settings_go_to_training_and_stay_with_the_project(panel):
+    add_label(panel)
+    (panel.weights_dir / "yolo26s.pt").write_bytes(b"stand-in")
+    panel.settingsw.setChecked(True)
+    assert not panel.modelw.isHidden()
+    choose(panel.modelw, "s")
+    panel.epochsw.setValue(40)
+    panel.patiencew.setValue(12)
+    panel.batchw.setValue(8)
+    choose(panel.holdw, 2)
+    # kept as they are set, not only when a training starts: a reader who closes the
+    # tab after setting them up has not lost them
+    assert (
+        project_.Project.open(panel.project.directory).training_settings()["size"]
+        == "s"
+    )
+    panel.train()
+    request = panel.batch.requests[-1][1]
+    assert (
+        request["base"],
+        request["epochs"],
+        request["batch"],
+        request["patience"],
+        request["hold_out_every"],
+    ) == ("yolo26s.pt", 40, 8, 12, 2)
+    kept = project_.Project.open(panel.project.directory).training_settings()
+    assert kept == dict(
+        size="s",
+        start="pretrained",
+        epochs=40,
+        stop_early=True,
+        patience=12,
+        batch=8,
+        hold_out_every=2,
+    )
+    # and a tab opened on the project later shows them as they were left
+    fresh = SpectrogramDetectorPanel(panel.browser, weights_dir=panel.weights_dir)
+    fresh.batch = FakeClient()
+    fresh._ensure_project()
+    assert fresh.training_settings() == kept
+    fresh.about_to_flush_labels()
+    fresh.setParent(None)
+    fresh.deleteLater()
+
+
+def test_auto_and_off_are_what_training_is_told(panel):
+    add_label(panel)
+    panel.train()
+    request = panel.batch.requests[-1][1]
+    assert (
+        request["base"],
+        request["epochs"],
+        request["batch"],
+        request["patience"],
+        request["hold_out_every"],
+    ) == ("yolo26n.pt", None, None, None, 5)
+    panel.batch.job = None
+    panel.stopearlyw.setChecked(False)
+    assert not panel.patiencew.isEnabled()
+    panel.train()
+    assert panel.batch.requests[-1][1]["patience"] == 0
+
+
+def test_a_model_size_not_downloaded_yet_is_fetched_first(panel):
+    add_label(panel)
+    choose(panel.modelw, "m")
+    panel.train()
+    assert panel.batch.requests == []
+    assert "yolo26m.pt" in panel.statusw.text()
+    assert "Get models" in panel.statusw.text()
+    panel.fetch_models()
+    assert "yolo26m.pt" in panel.batch.requests[-1][1]["names"]
+
+
+def test_training_can_go_on_from_the_last_model(panel):
+    """Fine-tuning: the model that was, on what was labelled since."""
+    choose(panel.startw, "last")
+    add_label(panel)
+    panel.train()
+    assert panel.batch.requests == []
+    assert "no model to go on from" in panel.statusw.text()
+    choose(panel.startw, "pretrained")
+    trained(panel)
+    choose(panel.startw, "last")
+    panel.batch.job = None
+    panel.train()
+    assert panel.batch.requests[-1][1]["base"] == panel.project.model_path()
+    # one that draws boxes is no start for one that draws outlines
+    panel.trainonw.setCurrentIndex(panel.trainonw.findData(True))
+    asked = len(panel.batch.requests)
+    panel.train()
+    assert len(panel.batch.requests) == asked
+    assert "draws boxes" in panel.statusw.text()
+
+
+def test_the_curve_follows_training_and_stays_with_its_model(panel):
+    add_label(panel)
+    panel.train()
+    job = panel.batch.job
+    for epoch in (1, 2, 3):
+        point = {"epoch": epoch, "train_loss": 3.0 - epoch, "epochs": 30}
+        panel.batch.sigMetrics.emit(job, point | {"map50": 0.2 * epoch})
+    assert panel.curvew.series("train_loss") == ([1, 2, 3], [2.0, 1.0, 0.0])
+    assert not panel.curvew.isHidden()
+    curve = [
+        {"epoch": 1, "map50": 0.2},
+        {"epoch": 2, "map50": 0.6},
+        {"epoch": 3, "map50": 0.5},
+    ]
+    path = model_with_curve(
+        panel, "c", curve, best_epoch=2, held_out=True, val_events=7
+    )
+    panel.batch.answer(
+        model=path,
+        threshold=0.3,
+        metrics={"map50": 0.6},
+        held_out=True,
+        val_events=7,
+        seconds=5.0,
+        epochs=30,
+        epochs_run=3,
+        best_epoch=2,
+        early_stopping="on",
+        hold_out_every=5,
+        curve=curve,
+    )
+    assert panel.curvew.series("map50") == ([1, 2, 3], [0.2, 0.6, 0.5])
+    assert panel.curvew.best == 2
+    assert "3 of 30 epochs, stopped early, best at 2" in panel.statusw.text()
+    assert "held out: 7 events" in panel.curvew.caption()
+    # a tab opened later draws the curve of the model in use
+    fresh = SpectrogramDetectorPanel(panel.browser, weights_dir=panel.weights_dir)
+    fresh.batch = FakeClient()
+    fresh._ensure_project()
+    assert fresh.curvew.series("map50") == ([1, 2, 3], [0.2, 0.6, 0.5])
+    assert fresh.curvew.best == 2
+    fresh.about_to_flush_labels()
+    fresh.setParent(None)
+    fresh.deleteLater()
+
+
+def test_with_nothing_held_out_the_tab_says_how_to_get_early_stopping(panel):
+    add_label(panel)
+    panel.project.config = config()
+    panel.train()
+    curve = [{"epoch": 1, "map50": 0.99}]
+    path = model_with_curve(panel, "n", curve, held_out=False)
+    panel.batch.answer(
+        model=path,
+        threshold=0.3,
+        metrics={"map50": 0.99},
+        held_out=False,
+        seconds=5.0,
+        epochs=200,
+        epochs_run=200,
+        early_stopping="off: nothing was held out to watch",
+        hold_out_every=2,
+        curve=curve,
+    )
+    text = panel.statusw.text()
+    gap = 4 * panel.project.config.tile_s
+    assert "Early stopping was off" in text
+    assert f"at least 2 places more than {gap:.0f} s apart" in text
+    assert "nothing held out" in panel.curvew.caption()
+
+
+# ------------------------------------------------------------------- preview
+
+
+def test_preview_needs_a_model(panel):
+    add_label(panel)
+    panel._sync_controls()
+    assert not panel.previeww.isEnabled()
+    panel.preview_view()
+    assert panel.batch.requests == []
+    assert "Train a model first" in panel.statusw.text()
+
+
+def test_preview_looks_only_at_the_view_and_keeps_the_rest(panel):
+    trained(panel)
+    assert panel.previeww.isEnabled()
+    propose(panel, [box(5.0, 0.9), box(12.0, 0.8)], "model")
+    panel.threshold = 0.3
+    panel._write_found()
+    panel.goto(4.0, 6.0, 200.0, 3000.0)
+    pump(0.1)
+    panel.batch.job = None
+    panel.preview_view()
+    op, request = panel.batch.requests[-1]
+    assert op == "propose" and request["model"] == panel.project.model_path()
+    assert request["windows"] == [[pytest.approx(4.0), pytest.approx(6.0)]]
+    # what it found on screen replaces what was there; off screen nothing changes
+    panel.batch.answer(
+        boxes=[box(4.5, 0.9), box(5.5, 0.4), box(7.0, 0.9)], source="model"
+    )
+    assert sorted(b.t0 for b in panel.candidates.values()) == [4.5, 5.5, 12.0]
+    assert sorted(la.t0 for la in found_labels(panel)) == [4.5, 5.5, 12.0]
+    assert "Preview: 2 events above the cut on screen, of 2 found" in (
+        panel.statusw.text()
     )
 
 

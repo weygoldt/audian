@@ -49,6 +49,21 @@ VERSION = 1
 KEY_TIME_DECIMALS = 6
 KEY_FREQ_DECIMALS = 3
 
+#: How a model is trained when the reader has not said: the smallest YOLO26, from its
+#: pretrained weights, for as many epochs as `models.epochs_for` chooses, stopping
+#: after `models`' own patience when held-out data allows, at the batch the device
+#: suits, holding out one stretch of time in five.  0 is "choose for me" for the
+#: three numbers.
+TRAINING_DEFAULTS = {
+    "size": "n",
+    "start": "pretrained",
+    "epochs": 0,
+    "stop_early": True,
+    "patience": 0,
+    "batch": 0,
+    "hold_out_every": 5,
+}
+
 
 def default_directory(first_path) -> Path:
     """``<dir of first file>/<stem of first file>-specdetector``."""
@@ -141,6 +156,16 @@ class Project:
     threshold: float = 0.25
     #: whether new models are trained on outlines rather than boxes
     segment: bool = False
+    #: how the reader asked for models to be trained; `training_settings` reads it
+    training: dict = field(default_factory=dict)
+
+    def training_settings(self) -> dict:
+        """`training`, completed with `TRAINING_DEFAULTS` and kept to known keys."""
+        settings = dict(TRAINING_DEFAULTS)
+        for key, value in (self.training or {}).items():
+            if key in settings and isinstance(value, type(settings[key])):
+                settings[key] = value
+        return settings
 
     # -- paths ---------------------------------------------------------
 
@@ -242,6 +267,7 @@ class Project:
             "model": self.model,
             "threshold": float(self.threshold),
             "segment": bool(self.segment),
+            "training": self.training_settings(),
         }
 
     def save(self) -> None:
@@ -302,4 +328,6 @@ class Project:
         project.model = values.get("model")
         project.threshold = float(values.get("threshold", 0.25))
         project.segment = bool(values.get("segment", False))
+        training = values.get("training")
+        project.training = dict(training) if isinstance(training, dict) else {}
         return project

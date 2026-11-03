@@ -15,6 +15,10 @@ at v2.5. Install it from source; `pip install audian` gets upstream.
   a class. It replaces the template matcher that shipped under **Plugins > Event
   detection**, which matched on the waveform as well; this one works on the
   spectrogram only.
+- **Detector training settings:** the YOLO26 size, pretrained or go on from the
+  last model, epochs, batch, hold-out and early stopping, kept per project; a
+  live training curve kept with each model; and **Preview**, the trained model
+  run on the current view only.
 - **SAM in the label tool:** with the detector plugin installed, a **SAM**
   toggle in the Labels tab tightens each box you drag and outlines the event in
   it. Labels carry the outline in a new last column of the sidecar.
@@ -48,6 +52,9 @@ at v2.5. Install it from source; `pip install audian` gets upstream.
 - The playback speed is a multiplier: 2 plays twice as fast and an octave up.
 - Python 3.11 to 3.14, with dependencies locked by uv.
 - The UI font, Inter, ships with audian.
+- A plugin tab is as tall as its rows need at the panel's width. Before, it got
+  the height its layout guessed at a wider panel, and a long word-wrapped status
+  line cost the rows under it: the detector's curve caption landed on its chart.
 
 ### Removed
 

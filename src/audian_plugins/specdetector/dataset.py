@@ -57,13 +57,16 @@ JITTER_COPIES = 8
 #: The step of a sweep over a long reviewed rectangle, as a fraction of a tile.
 SWEEP_FRACTION = 0.25
 
-#: Every this-many block of tiles is validation.
+#: Every this-many block of tiles is validation, unless the reader asks otherwise.
 VALIDATION_EVERY = 5
 #: The length of a block of tiles, in tiles.  A block is what is split.
 BLOCK_LENGTHS = 4
 #: Below this many blocks with an event in them, a held-out split would leave too
 #: little to train on and validate nothing: training reports on itself and says so.
+#: It is `VALIDATION_EVERY`, and a reader holding out more often lowers both.
 MIN_BLOCKS_TO_SPLIT = 5
+#: The least that can be split at all: one block to train on, one to hold out.
+FEWEST_BLOCKS_TO_SPLIT = 2
 
 #: Two labels of one class this similar are one event drawn on two lanes.
 SAME_EVENT_IOU = 0.5
@@ -219,8 +222,18 @@ def plan_tiles(
     return sorted(starts)
 
 
-def split_tiles(tiles: Sequence[tuple], grids, has_event: Sequence[bool]) -> list:
+def split_tiles(
+    tiles: Sequence[tuple],
+    grids,
+    has_event: Sequence[bool],
+    every: int = VALIDATION_EVERY,
+) -> list:
     """``"train"`` or ``"val"`` per tile of ``(source, s0)``; None drops it.
+
+    `every` is how often a block is held out: every fifth by default, as often as
+    every second for a reader with few places labelled, and 0 for never.  Holding
+    out every `every`-th block needs that many blocks with an event, and never
+    fewer than two.
 
     What is split is **stretches of time**, not tiles: tiles are gathered into
     blocks at most `BLOCK_LENGTHS` tiles long, every `VALIDATION_EVERY`-th block
@@ -259,13 +272,10 @@ def split_tiles(tiles: Sequence[tuple], grids, has_event: Sequence[bool]) -> lis
         else:
             blocks.append([i])
     eventful = [b for b in blocks if any(has_event[i] for i in b)]
-    if len(eventful) < MIN_BLOCKS_TO_SPLIT:
+    every = int(every)
+    if every <= 0 or len(eventful) < max(every, FEWEST_BLOCKS_TO_SPLIT):
         return everything
-    held = [
-        b
-        for index, b in enumerate(eventful)
-        if index % VALIDATION_EVERY == VALIDATION_EVERY // 2
-    ]
+    held = [b for index, b in enumerate(eventful) if index % every == every // 2]
     splits: list = list(everything)
     kept = []
     for block in held:
@@ -411,8 +421,11 @@ def build_dataset(
     progress: Optional[Callable] = None,
     check: Optional[Callable] = None,
     masking: bool = True,
+    hold_out_every: int = VALIDATION_EVERY,
 ) -> DatasetReport:
     """Write the tiles, the labels and the yaml Ultralytics reads.
+
+    `hold_out_every` is `split_tiles`' `every`: 0 holds nothing out.
 
     `directory` is rebuilt from nothing: a dataset is a cache of the sources, and
     leftover tiles of a label since deleted would be silently trained on.
@@ -457,7 +470,7 @@ def build_dataset(
                 planned.append((index, s0, bool(lines)))
     tiles = [(index, s0) for index, s0, _ in planned]
     events = [has for _, _, has in planned]
-    splits = split_tiles(tiles, grids, events) if tiles else []
+    splits = split_tiles(tiles, grids, events, hold_out_every) if tiles else []
     held_out = "val" in splits
     total = sum(split is not None for split in splits)
 

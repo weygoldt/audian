@@ -576,7 +576,8 @@ about as well as those trained from careful boxes.
 ### Find more, and review
 
 **Find more** proposes more events: from your labels with no training if you have
-no model yet, otherwise with the last model you trained. **Look in** sets how much
+no model yet, otherwise with the last model you trained. With no model it uses
+YOLOE, prompted with your boxes; SAM plays no part in it. **Look in** sets how much
 of the recording it searches. Candidates appear as labels in `<class> (found)`.
 Move **Cut** to show more or fewer of them, which runs nothing.
 
@@ -612,6 +613,32 @@ about a minute or two on a GPU. The tab reports the score and says what it was
 measured on. With few labels there is nothing to hold out, so the score is a
 training score and the tab says so.
 
+While it trains, a curve under **Train** shows each epoch: the loss on the
+training tiles and on the held-out ones, and mAP50 on the held-out ones. A dashed
+line marks the epoch kept as the model, which is the best one and not always the
+last. Each model keeps its curve, and opening the tab later shows the curve of the
+model in use. YOLO updates its weights once per 64 tiles, so with fewer training
+tiles than that the held-out numbers stay flat for an epoch or more between
+updates; the steps in the curve are real.
+
+**Training settings** opens the choices behind it:
+
+| Setting | What it does |
+| --- | --- |
+| Model | YOLO26 from n, the smallest and fastest, to x. Any but n is downloaded the first time, with **Get models** |
+| Start | **Pretrained** starts from YOLO's own weights. **Last model** goes on from the model this project trained last, to fine-tune it on what you labelled since |
+| Epochs | How many passes over the training tiles. **Auto** trains for a fixed number of batches (400), whatever the number of labels |
+| Patience | With **Stop early**, training stops after this many epochs without a better held-out score. **Auto** is a third of the epochs, at least 10 |
+| Batch | Tiles per batch. **Auto** is 16 on a GPU and 4 on the CPU |
+| Hold out | How often a labelled stretch of time is set aside to judge the model by |
+
+Early stopping and an honest score both need something held out. A stretch is
+everything within four tiles' length of other labels, so all the labels of one
+view are one stretch. **1 stretch in 5** needs labels in five separate places,
+**1 in 2** needs two. With nothing held out, training runs all its epochs, and
+the tab says how far apart to label to change that. The settings are kept with
+the project.
+
 Only what you have looked at reaches the model. That means your reviewed views, a
 small area around each label, and each rejection. Everything else on an image is
 masked, so an event you have not labelled is never taught as background. The more
@@ -620,6 +647,10 @@ windows you finish, the more the detector learns about what is not an event.
 A label with no frequency band, such as one drawn on a trace, cannot be trained
 on, and the tab says how many it left out. Labels in a category called
 `labeled_region` count as exhaustively reviewed rectangles.
+
+**Preview**, beside **Find more**, runs the trained model on what is on screen and
+nothing else: a look at how it does here, in seconds. Its answers replace the
+candidates in view, the rest stay, and you can review them as any others.
 
 **Run** detects over the whole recording in the background. All scores go to a CSV
 in the project, and what is above the cut is shown as candidates. **Export CSV**

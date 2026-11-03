@@ -652,12 +652,58 @@ def sweep(
 def epochs_for(tiles: int, batch: int) -> int:
     """How long to train, so that the reader is not asked.
 
-    Set in optimiser steps, since an epoch means nothing on its own.  Fifteen epochs of
-    24 tiles at batch 16 are 30 steps, and left a model scoring mAP50 0.06 with no
-    detection above 0.03; the runs that worked on real chirps had taken 360-400 steps.
+    Set in batches, since an epoch means nothing on its own.  Fifteen epochs of
+    24 tiles at batch 16 are 30 batches, and left a model scoring mAP50 0.06 with no
+    detection above 0.03; the runs that worked on real chirps had taken 360-400.
+
+    Batches and not weight updates: Ultralytics accumulates gradients to a nominal
+    batch of 64 tiles, so at batch 16 the weights change once in four batches.  With
+    fewer than 64 training tiles an epoch is less than an update, and a curve repeats
+    its held-out numbers between updates -- measured, in pairs, on a run of 20 tiles.
     """
     per_epoch = max(tiles / max(batch, 1), 1.0)
     return int(np.clip(np.ceil(TRAIN_STEPS / per_epoch), MIN_EPOCHS, MAX_EPOCHS))
+
+
+#: Ultralytics' names for what a training curve shows, and the names used here.  The
+#: box loss is the one every task has; the scores are on the held-out tiles, or on
+#: the training tiles when nothing was held out.
+CURVE_KEYS = {
+    "train/box_loss": "train_loss",
+    "val/box_loss": "val_loss",
+    "metrics/mAP50(B)": "map50",
+    "metrics/mAP50-95(B)": "map50_95",
+}
+
+
+def epoch_point(trainer) -> dict:
+    """One epoch of a run, as plain numbers: what `CURVE_KEYS` names, and the epoch."""
+    values = dict(getattr(trainer, "metrics", None) or {})
+    try:
+        values.update(trainer.label_loss_items(trainer.tloss, prefix="train"))
+    except Exception:  # noqa: BLE001 - a trainer of another shape loses the losses
+        pass
+    point = {"epoch": int(trainer.epoch) + 1}
+    for key, name in CURVE_KEYS.items():
+        if key in values:
+            try:
+                point[name] = round(float(values[key]), 5)
+            except (TypeError, ValueError):
+                pass
+    return point
+
+
+def best_epoch(curve: Sequence[dict]) -> Optional[int]:
+    """The epoch Ultralytics keeps as best: highest mAP50-95, or mAP50 without it.
+
+    That is its fitness for boxes, ``0 * P + 0 * R + 0 * mAP50 + 1 * mAP50-95`` in
+    8.4.  A segmenting model adds its masks' mAP50-95, which the curve does not keep,
+    so for one of those this is the box half of the choice.
+    """
+    scored = [p for p in curve if "map50_95" in p or "map50" in p]
+    if not scored:
+        return None
+    return max(scored, key=lambda p: p.get("map50_95", p.get("map50", 0.0)))["epoch"]
 
 
 def train_detector(
@@ -676,11 +722,24 @@ def train_detector(
     progress: Optional[Callable] = None,
     open_recording: Callable = Recording,
     augment: Optional[dict] = None,
+    patience: Optional[int] = None,
+    hold_out_every: int = dataset_.VALIDATION_EVERY,
+    on_epoch_end: Optional[Callable] = None,
 ) -> dict:
     """Build the dataset, train, and leave a usable model in `directory`.
 
     The result is ``directory/best.pt`` with a `MODEL_META` beside it: everything
     the model needs to read another recording, so a model can leave its project.
+
+    `epochs`, `batch` and `patience` are chosen here when None.  `base` is a weights
+    file: a pretrained one by name, or a model trained before, by path, to go on
+    from.  `patience` stops training after that many epochs without a better score
+    on the **held-out** tiles, and 0 never stops early.  With nothing held out there
+    is nothing honest to watch -- the score would be the training score, which goes
+    on rising -- so early stopping is off, and the result says so.
+
+    `on_epoch_end` is handed ``(epoch, epochs, values)`` after every epoch, with the
+    losses and scores that also end up in the result's ``curve``.
     """
     from ultralytics import YOLO
 
@@ -698,6 +757,7 @@ def train_detector(
         progress=None
         if progress is None
         else lambda done, total: progress("tiles", done, total, ""),
+        hold_out_every=hold_out_every,
     )
     if report.train_events == 0:
         raise ValueError("no labelled events to train on")
@@ -706,23 +766,48 @@ def train_detector(
         batch = 16 if device != "cpu" else 4
     if epochs is None:
         epochs = epochs_for(report.train_tiles, batch)
+    epochs, batch = int(epochs), int(batch)
+    if patience is None:
+        patience = max(epochs // 3, 10)
+    stopping = "on" if patience > 0 else "off"
+    if not report.held_out and patience > 0:
+        patience, stopping = 0, "off: nothing was held out to watch"
     weights = base or (SEGMENT_WEIGHTS if segment else DETECT_WEIGHTS)
     model = YOLO(weights_path(weights))
     started = time.perf_counter()
+    curve: list = []
+
+    # Ultralytics calls `on_fit_epoch_end` once more after training, validating
+    # best.pt under the number one past the last epoch: measured, 201 points for a
+    # run of 200.  Those are the best model's numbers and not an epoch's, and after an
+    # early stop the number looks like an ordinary next epoch.  What tells them apart
+    # is that only a real epoch has run `on_train_epoch_end` first.
+    trained = {"epoch": False}
+
+    def on_train_epoch(_trainer):
+        trained["epoch"] = True
 
     def on_epoch(trainer):
+        if not trained["epoch"]:
+            return
+        trained["epoch"] = False
+        point = epoch_point(trainer)
+        curve.append(point)
+        if on_epoch_end is not None:
+            on_epoch_end(point["epoch"], int(trainer.epochs), point)
         if progress is None:
             return
-        values = getattr(trainer, "metrics", None) or {}
-        score = values.get("metrics/mAP50(B)")
+        score = point.get("map50")
         text = f"mAP50 {score:.3f}" if score is not None else ""
-        progress("train", int(trainer.epoch) + 1, int(trainer.epochs), text)
+        progress("train", point["epoch"], int(trainer.epochs), text)
 
+    model.add_callback("on_train_epoch_end", on_train_epoch)
     model.add_callback("on_fit_epoch_end", on_epoch)
     model.train(
         data=report.yaml,
         epochs=epochs,
-        patience=max(epochs // 3, 10),
+        # Ultralytics reads 0 as "never stop"
+        patience=patience,
         batch=batch,
         imgsz=config.image_size,
         project=os.fspath(directory),
@@ -779,6 +864,13 @@ def train_detector(
         "val_events": report.val_events,
         "background_tiles": report.background_tiles,
         "epochs": epochs,
+        "epochs_run": len(curve),
+        "best_epoch": best_epoch(curve),
+        "batch": batch,
+        "patience": patience,
+        "early_stopping": stopping,
+        "hold_out_every": int(hold_out_every),
+        "curve": curve,
         "base": weights,
         "seconds": round(time.perf_counter() - started, 1),
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),

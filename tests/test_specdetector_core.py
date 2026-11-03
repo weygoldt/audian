@@ -285,6 +285,23 @@ def test_the_split_is_per_recording():
     assert splits.count("val") >= 2
 
 
+def test_a_reader_can_hold_out_more_often_or_never():
+    """Two places labelled are enough to hold one out, if the reader asks."""
+    grid = grid_for()
+    length = grid.frames * grid.hop
+    two = [(0, i * 10 * length) for i in range(2)]
+    assert Counter(dataset.split_tiles(two, grid, [True] * 2)) == {"train": 2}
+    assert Counter(dataset.split_tiles(two, grid, [True] * 2, every=2)) == {
+        "train": 1,
+        "val": 1,
+    }
+    ten = [(0, i * 10 * length) for i in range(10)]
+    assert "val" in dataset.split_tiles(ten, grid, [True] * 10)
+    assert "val" not in dataset.split_tiles(ten, grid, [True] * 10, every=0)
+    one = [(0, 0)]
+    assert dataset.split_tiles(one, grid, [True], every=2) == ["train"]
+
+
 class FakeRecording:
     """The interface a dataset reads: a tone at 1 kHz, in noise."""
 
@@ -358,6 +375,145 @@ def test_a_dataset_is_what_ultralytics_reads_and_only_what_was_looked_at(tmp_pat
     x_label = int(geometry_.x_of(5.1))
     x_far = 2 if geometry_.x_of(5.1) > 32 else 61
     assert image[row, x_label] > 2 * image[row, x_far] + 10
+
+
+class FakeYOLO:
+    """Ultralytics' `YOLO`, as `train_detector` uses it: three epochs, then done.
+
+    Three whatever `epochs` says, as an early stop would end it.  The best of them by
+    mAP50-95 is the second, so a test can tell "best" from "last".  Then
+    `on_fit_epoch_end` once more, numbered one past the last epoch and with no
+    `on_train_epoch_end` before it, because the real one does exactly that when it
+    validates best.pt (`BaseTrainer.final_eval`, 8.4).
+    """
+
+    made: list = []
+
+    def __init__(self, path):
+        self.path = path
+        self.callbacks = {}
+        self.kwargs = None
+        FakeYOLO.made.append(self)
+
+    def add_callback(self, name, fn):
+        self.callbacks[name] = fn
+
+    def train(self, **kwargs):
+        from types import SimpleNamespace
+
+        self.kwargs = kwargs
+        for epoch, (score, strict) in enumerate(((0.2, 0.1), (0.6, 0.5), (0.7, 0.3))):
+            trainer = SimpleNamespace(
+                epoch=epoch,
+                epochs=kwargs["epochs"],
+                metrics={
+                    "metrics/mAP50(B)": score,
+                    "metrics/mAP50-95(B)": strict,
+                    "val/box_loss": 2.0 - epoch * 0.5,
+                },
+                tloss=None,
+                label_loss_items=lambda tloss, prefix, e=epoch: {
+                    f"{prefix}/box_loss": 3.0 - e
+                },
+            )
+            self.callbacks["on_train_epoch_end"](trainer)
+            self.callbacks["on_fit_epoch_end"](trainer)
+        trainer.epoch += 1
+        trainer.metrics = {"metrics/mAP50(B)": 0.6, "metrics/mAP50-95(B)": 0.5}
+        self.callbacks["on_fit_epoch_end"](trainer)
+        weights = Path(kwargs["project"]) / kwargs["name"] / "weights"
+        weights.mkdir(parents=True, exist_ok=True)
+        (weights / "best.pt").write_bytes(b"model")
+
+    def val(self, **_kwargs):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(box=SimpleNamespace(map50=0.6, map=0.5, mp=0.7, mr=0.8))
+
+
+@pytest.fixture
+def fake_ultralytics(monkeypatch, tmp_path):
+    import types
+
+    module = types.ModuleType("ultralytics")
+    module.YOLO = FakeYOLO
+    FakeYOLO.made = []
+    monkeypatch.setitem(sys.modules, "ultralytics", module)
+    base = tmp_path / "pretrained.pt"
+    base.write_bytes(b"weights")
+    return base
+
+
+def training(tmp_path, base, boxes, **kwargs):
+    from audian_plugins.specdetector import models
+
+    config = tiling.SpecConfig(
+        window_s=0.02,
+        hop_s=0.005,
+        tile_s=2.0,
+        overlap_s=0.5,
+        image_size=64,
+        fmax_hz=2000.0,
+        representation="db",
+    )
+    epochs = []
+    result = models.train_detector(
+        [dataset.Source(["a.wav"], boxes=boxes)],
+        config,
+        ["chirp"],
+        tmp_path / "model",
+        device="cpu",
+        base=str(base),
+        open_recording=FakeRecording,
+        jitter_copies=2,
+        on_epoch_end=lambda epoch, total, point: epochs.append((epoch, total, point)),
+        **kwargs,
+    )
+    return result, epochs, FakeYOLO.made[0].kwargs
+
+
+def test_training_takes_the_readers_model_epochs_batch_and_patience(
+    tmp_path, fake_ultralytics
+):
+    # two places, a minute apart: one to train on and one to hold out
+    boxes = [Box(5.0, 5.2, 800.0, 1200.0), Box(60.0, 60.2, 800.0, 1200.0)]
+    result, epochs, kwargs = training(
+        tmp_path,
+        fake_ultralytics,
+        boxes,
+        epochs=40,
+        batch=8,
+        patience=12,
+        hold_out_every=2,
+    )
+    assert FakeYOLO.made[0].path == str(fake_ultralytics)
+    assert (kwargs["epochs"], kwargs["batch"], kwargs["patience"]) == (40, 8, 12)
+    assert result["held_out"] is True
+    assert result["early_stopping"] == "on"
+    assert (result["epochs"], result["epochs_run"], result["best_epoch"]) == (40, 3, 2)
+    assert result["curve"][1] == {
+        "epoch": 2,
+        "train_loss": 2.0,
+        "val_loss": 1.5,
+        "map50": 0.6,
+        "map50_95": 0.5,
+    }
+    assert [(e, total) for e, total, _ in epochs] == [(1, 40), (2, 40), (3, 40)]
+    meta = json.loads((tmp_path / "model" / "model.json").read_text())
+    assert meta["curve"] == result["curve"] and meta["base"] == str(fake_ultralytics)
+
+
+def test_with_nothing_held_out_there_is_nothing_for_early_stopping_to_watch(
+    tmp_path, fake_ultralytics
+):
+    """It would watch the training score, which goes on rising."""
+    boxes = [Box(5.0, 5.2, 800.0, 1200.0)]
+    result, _epochs, kwargs = training(
+        tmp_path, fake_ultralytics, boxes, epochs=40, patience=12
+    )
+    assert result["held_out"] is False
+    assert kwargs["patience"] == 0
+    assert result["early_stopping"].startswith("off: nothing")
 
 
 def test_a_dataset_is_rebuilt_from_nothing(tmp_path):

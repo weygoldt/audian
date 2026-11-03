@@ -263,6 +263,18 @@ class Runner:
 
         config, names, directory = _require(req, "config", "names", "directory")
         sources = [_source_of(s, Box, dataset) for s in _require(req, "sources")[0]]
+
+        def epoch_ended(epoch, epochs, values):
+            send(
+                {
+                    "type": "metrics",
+                    "id": job,
+                    "epoch": int(epoch),
+                    "epochs": int(epochs),
+                    "values": values,
+                }
+            )
+
         return models.train_detector(
             sources,
             tiling.SpecConfig.from_dict(config),
@@ -271,8 +283,12 @@ class Runner:
             segment=bool(req.get("segment")),
             epochs=req.get("epochs"),
             batch=req.get("batch"),
+            base=req.get("base"),
+            patience=req.get("patience"),
+            hold_out_every=int(req.get("hold_out_every", dataset.VALIDATION_EVERY)),
             device=req.get("device", "auto"),
             progress=self.reporter(job),
+            on_epoch_end=epoch_ended,
         )
 
     def _detect(self, req, job, device):

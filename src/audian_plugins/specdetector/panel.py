@@ -52,6 +52,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -59,7 +60,9 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSlider,
+    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -84,7 +87,8 @@ from . import project as project_
 from . import review, tiling
 from .boxes import Box, auto_cut, iou_matrix, as_array
 from .client import RunnerClient, RunnerError
-from .dataset import Rect
+from .curve import TrainingCurve
+from .dataset import BLOCK_LENGTHS, Rect
 from .tools import KEY_HELP, KeyRouter, LaneSurface, lane_channels
 
 #: Appended to a class to name where a machine's guesses go.  Never the class itself:
@@ -125,6 +129,69 @@ SAMPLE_WINDOWS = 100
 #: How long after a rejection the candidates are written, so that a run of clicks is
 #: one write: with 20000 outlined candidates, a write takes more than a second.
 PERSIST_MS = 500
+
+#: The YOLO26 sizes a detector can start from, each in a box and an outline kind.
+#: Only the smallest ships with Get models' first download; the others are fetched
+#: when chosen (measured sizes of the box kind: n 5.5 MB; the rest are larger).
+MODEL_SIZES = (
+    ("n", "fastest"),
+    ("s", "small"),
+    ("m", "medium"),
+    ("l", "large"),
+    ("x", "largest"),
+)
+
+#: How often a labelled stretch of time is held out, and what the setting says.
+HOLD_OUT_CHOICES = (
+    (5, "1 stretch in 5"),
+    (3, "1 in 3"),
+    (2, "1 in 2"),
+    (0, "nothing"),
+)
+
+
+class ElidedToolButton(QToolButton):
+    """A tool button whose text is cut to its width, with all of it in the tip.
+
+    For the Classes button, whose text is the list of classes and can be as long as
+    the reader's vocabulary.  Measured, "every category with boxes" alone asked for
+    192 px and took the tab to 208, past the 204 a 220 px panel has inside its margins;
+    the panel scrolls sideways then rather than widening the window, so nothing else
+    would have said so.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self._tip = ""
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(theme.S24 * 2)
+
+    def setFullText(self, text: str) -> None:  # noqa: N802 - Qt's style
+        self._full = text
+        self._elide()
+
+    def fullText(self) -> str:  # noqa: N802 - Qt's style
+        return self._full
+
+    def setToolTip(self, tip: str) -> None:  # noqa: N802 - Qt's spelling
+        self._tip = tip
+        self._elide()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's spelling
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        room = max(self.width() - 2 * theme.S8 - theme.S12, theme.S12)
+        shown = self.fontMetrics().elidedText(
+            self._full, Qt.TextElideMode.ElideRight, room
+        )
+        super().setText(shown)
+        tip = self._tip
+        if shown != self._full:
+            tip = f"{self._full}\n\n{tip}" if tip else self._full
+        super().setToolTip(tip)
 
 
 def weights_directory() -> Path:
@@ -175,8 +242,11 @@ class SpectrogramDetectorPanel(QWidget):
         self.batch.sigProgress.connect(self._job_progress)
         self.batch.sigResult.connect(self._job_result)
         self.batch.sigError.connect(self._job_error)
+        self.batch.sigMetrics.connect(self._epoch_ended)
         self._job_kind = ""
         self._job_id = ""
+        #: the seconds a Preview was asked about
+        self._preview_window = (0.0, 0.0)
         #: None chooses from the number of labels; a test sets a small number
         self.train_epochs: Optional[int] = None
 
@@ -241,7 +311,7 @@ class SpectrogramDetectorPanel(QWidget):
         group.add_span_row(self.fetchw)
 
         # -- classes: audian's own label categories --
-        self.classesw = QToolButton(self)
+        self.classesw = ElidedToolButton(self)
         self.classesw.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.classesw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.classesw.setToolTip(
@@ -277,8 +347,15 @@ class SpectrogramDetectorPanel(QWidget):
             "otherwise from your labels, with no training.",
             self.find_more,
         )
+        self.previeww = self._button(
+            "Preview",
+            "Run the trained model on what is on screen, and nothing else: a quick "
+            "look at how it does here. Its answers replace the candidates in view, "
+            "and can be reviewed as any others. Needs a trained model.",
+            self.preview_view,
+        )
         group.add_row("Look in", "", ParameterGroup.expanding(self.scopew))
-        group.add_span_row(self.findw)
+        self._row(group, self.findw, self.previeww)
 
         self.threshw = QSlider(Qt.Orientation.Horizontal, self)
         self.threshw.setRange(0, 1000)
@@ -328,6 +405,7 @@ class SpectrogramDetectorPanel(QWidget):
         )
         self.trainonw.activated.connect(self._train_on_picked)
         group.add_row("Learn", "", ParameterGroup.expanding(self.trainonw))
+        self._build_training_settings(group)
         self.trainw = self._button(
             "Train",
             "Train a detector on your labels. Only what you have looked at reaches "
@@ -341,6 +419,9 @@ class SpectrogramDetectorPanel(QWidget):
             self.run_detection,
         )
         self._row(group, self.trainw, self.runw)
+        self.curvew = TrainingCurve(self)
+        self.curvew.setVisible(False)
+        group.add_span_row(self.curvew)
         self.exportw = self._button(
             "Export CSV",
             "Write what is above the cut beside the recording, as a label CSV.",
@@ -372,6 +453,165 @@ class SpectrogramDetectorPanel(QWidget):
         box.addWidget(group)
         box.addStretch(1)
         self._sync_controls()
+
+    # ------------------------------------------------------------ training settings
+
+    def _build_training_settings(self, group) -> None:
+        """How a model is trained, folded away under one button until asked for."""
+        self.settingsw = QToolButton(self)
+        self.settingsw.setText("Training settings")
+        self.settingsw.setCheckable(True)
+        self.settingsw.setArrowType(Qt.ArrowType.RightArrow)
+        self.settingsw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.settingsw.setToolTip(
+            "The model, how long it trains, when it stops, and what is held out to "
+            "judge it by."
+        )
+        self.settingsw.toggled.connect(self._settings_toggled)
+        group.add_span_row(self.settingsw)
+
+        # Rows of the tab's own group, shown and hidden together.  A group nested
+        # inside it cost a second frame and its margins: measured, the tab went to
+        # 210 px with them open, past the 204 the panel has.
+        self.settings_rows = []
+        box = self
+        self.modelw = narrow_combo(QComboBox(box))
+        for size, name in MODEL_SIZES:
+            self.modelw.addItem(f"YOLO26{size} ({name})", size)
+        self.modelw.setToolTip(
+            "Larger models learn more and train slower. Any but the smallest is "
+            "downloaded the first time, with Get models."
+        )
+        self.settings_rows += group.add_row(
+            "Model", "", ParameterGroup.expanding(self.modelw)
+        )
+        self.startw = narrow_combo(QComboBox(box))
+        self.startw.addItem("Pretrained", "pretrained")
+        self.startw.addItem("Last model", "last")
+        self.startw.setToolTip(
+            "Pretrained starts from YOLO's own weights. Last model goes on from the "
+            "model this project trained last, to fine-tune it on what was labelled "
+            "since; it keeps that model's size and kind."
+        )
+        self.settings_rows += group.add_row(
+            "Start", "", ParameterGroup.expanding(self.startw)
+        )
+        self.epochsw = QSpinBox(box)
+        self.epochsw.setRange(0, 2000)
+        self.epochsw.setSpecialValueText("Auto")
+        self.epochsw.setToolTip(
+            "How many passes over the training tiles. Auto trains for a fixed "
+            f"number of batches ({models_.TRAIN_STEPS}), whatever the number "
+            "of labels."
+        )
+        self.settings_rows += group.add_row(
+            "Epochs", "", ParameterGroup.expanding(self.epochsw)
+        )
+        self.stopearlyw = QCheckBox("Stop early", box)
+        self.patiencew = QSpinBox(box)
+        self.patiencew.setRange(0, 1000)
+        self.patiencew.setSpecialValueText("Auto")
+        self.patiencew.setToolTip(
+            "Stop after this many epochs without a better score on the held-out "
+            "tiles. Auto is a third of the epochs, and at least 10. Needs something "
+            "held out: with nothing to watch, training runs to the end."
+        )
+        self.stopearlyw.setToolTip(self.patiencew.toolTip())
+        self.settings_rows += group.add_row(
+            "Patience", "", self.stopearlyw, ParameterGroup.expanding(self.patiencew)
+        )
+        self.batchw = QSpinBox(box)
+        self.batchw.setRange(0, 256)
+        self.batchw.setSpecialValueText("Auto")
+        self.batchw.setToolTip(
+            "Tiles per batch. Auto is 16 on a GPU and 4 on the CPU; a "
+            "larger model may need less to fit on the card."
+        )
+        self.settings_rows += group.add_row(
+            "Batch", "", ParameterGroup.expanding(self.batchw)
+        )
+        self.holdw = narrow_combo(QComboBox(box))
+        for every, name in HOLD_OUT_CHOICES:
+            self.holdw.addItem(name, every)
+        self.holdw.setToolTip(
+            "Labelled stretches of time set aside to judge the model by, and for "
+            "early stopping to watch. A stretch is everything within four tiles' "
+            "length of other labels, so labels in one view are one stretch: label "
+            "in several places to have something to hold out."
+        )
+        self.settings_rows += group.add_row(
+            "Hold out", "", ParameterGroup.expanding(self.holdw)
+        )
+        for widget in (self.modelw, self.startw, self.holdw):
+            widget.activated.connect(self._settings_changed)
+        for widget in (self.epochsw, self.patiencew, self.batchw):
+            widget.valueChanged.connect(self._settings_changed)
+        self.stopearlyw.toggled.connect(self._settings_changed)
+        for widget in self.settings_rows:
+            widget.setVisible(False)
+
+    def _settings_toggled(self, on: bool) -> None:
+        self.settingsw.setArrowType(
+            Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow
+        )
+        for widget in self.settings_rows:
+            widget.setVisible(on)
+
+    def training_settings(self) -> dict:
+        """What the settings say, in the project's terms."""
+        return {
+            "size": self.modelw.currentData() or "n",
+            "start": self.startw.currentData() or "pretrained",
+            "epochs": int(self.epochsw.value()),
+            "stop_early": bool(self.stopearlyw.isChecked()),
+            "patience": int(self.patiencew.value()),
+            "batch": int(self.batchw.value()),
+            "hold_out_every": int(self.holdw.currentData() or 0),
+        }
+
+    def _show_training_settings(self, settings: dict) -> None:
+        widgets = (
+            self.modelw,
+            self.startw,
+            self.epochsw,
+            self.stopearlyw,
+            self.patiencew,
+            self.batchw,
+            self.holdw,
+        )
+        blocked = [w.blockSignals(True) for w in widgets]
+        try:
+            for combo, key in (
+                (self.modelw, "size"),
+                (self.startw, "start"),
+                (self.holdw, "hold_out_every"),
+            ):
+                index = combo.findData(settings[key])
+                combo.setCurrentIndex(max(index, 0))
+            self.epochsw.setValue(settings["epochs"])
+            self.stopearlyw.setChecked(settings["stop_early"])
+            self.patiencew.setValue(settings["patience"])
+            self.patiencew.setEnabled(settings["stop_early"])
+            self.batchw.setValue(settings["batch"])
+        finally:
+            for widget, was in zip(widgets, blocked):
+                widget.blockSignals(was)
+
+    def _settings_changed(self, *_args) -> None:
+        self.patiencew.setEnabled(self.stopearlyw.isChecked())
+        project = self._ensure_project()
+        if project is None:
+            return
+        project.training = self.training_settings()
+        self._save_project()
+        self._sync_controls()
+
+    def _base_weights(self, settings: dict) -> str:
+        """The pretrained weights a new model starts from, by file name."""
+        return f"yolo26{settings['size']}{'-seg' if self._segment() else ''}.pt"
+
+    def _segment(self) -> bool:
+        return bool(self.trainonw.currentData())
 
     # ------------------------------------------------------------ small things
 
@@ -559,6 +799,8 @@ class SpectrogramDetectorPanel(QWidget):
         self.project.add_recording(paths)
         self.threshold = self.project.threshold
         self._write_threshold()
+        self._show_training_settings(self.project.training_settings())
+        self._show_model_curve()
         return self.project
 
     def _save_project(self) -> None:
@@ -570,11 +812,15 @@ class SpectrogramDetectorPanel(QWidget):
             self._notify("error", f"could not save the detector project: {exc}")
 
     def _missing_weights(self) -> list:
-        return [
-            name
-            for name in models_.ALL_WEIGHTS
-            if not (self.weights_dir / name).is_file()
-        ]
+        """What Get models would fetch: the usual files and the size chosen to train."""
+        wanted = list(models_.ALL_WEIGHTS)
+        if hasattr(self, "modelw"):
+            settings = self.training_settings()
+            if settings["start"] == "pretrained":
+                base = self._base_weights(settings)
+                if base not in wanted:
+                    wanted.append(base)
+        return [name for name in wanted if not (self.weights_dir / name).is_file()]
 
     def _sync_controls(self) -> None:
         running = self.batch.busy() if hasattr(self, "batch") else False
@@ -583,6 +829,7 @@ class SpectrogramDetectorPanel(QWidget):
         for widget in (self.findw, self.trainw, self.fetchw):
             widget.setEnabled(not running)
         self.runw.setEnabled(has_model and not running)
+        self.previeww.setEnabled(has_model and not running)
         self.exportw.setEnabled(bool(self.candidates))
         self.clearw.setEnabled(bool(self.candidates))
         self.nextw.setEnabled(bool(self.candidates))
@@ -662,13 +909,13 @@ class SpectrogramDetectorPanel(QWidget):
         """Name what is learnt on the Classes button."""
         project = self.project
         if project is None:
-            self.classesw.setText("every category with boxes")
+            self.classesw.setFullText("every category with boxes")
             return
         learnt = [name for name in project.names if name not in self._left_out()]
         text = ", ".join(learnt) if learnt else "none yet: label some events"
         if project.left_out:
             text += f" (not {', '.join(project.left_out)})"
-        self.classesw.setText(text)
+        self.classesw.setFullText(text)
 
     def _fill_classes_menu(self) -> None:
         """One tick per category that could be a class."""
@@ -991,6 +1238,7 @@ class SpectrogramDetectorPanel(QWidget):
             "find": self._find_done,
             "train": self._train_done,
             "run": self._run_done,
+            "preview": self._preview_done,
         }.get(kind)
         if handler is not None:
             handler(message)
@@ -1116,15 +1364,33 @@ class SpectrogramDetectorPanel(QWidget):
         as rejected, so the store has to be read before its candidates are forgotten.
         """
         self._sync_from_labels()
-        paths = self._paths()
-        project = self.project
-        reviewed = self._reviewed_here()
-        labelled, _regions, _unusable = self.labelled_boxes()
         edited = {
             uid: self.candidates[uid] for uid in self._edited if uid in self.candidates
         }
+        kept = self._unanswered(boxes, edited)
+        self.candidates = dict(edited)
+        self._edited = set(edited)
+        self._label_of = {}
+        self._last_action = None
+        for box in kept:
+            self.candidates[self._next_id] = box
+            self._next_id += 1
+        self.candidate_source = source
+        return kept
+
+    def _unanswered(self, boxes, edited: dict) -> list:
+        """`boxes` without what the reader has already answered.
+
+        Inside a reviewed view, the same as a label, a rejection, or a candidate the
+        reader moved: each of those is an answer, and proposing it again asks the
+        same question twice.
+        """
+        reviewed = self._reviewed_here()
+        labelled, _regions, _unusable = self.labelled_boxes()
         answered = as_array(
-            labelled + project.rejected_boxes(paths) + list(edited.values())
+            labelled
+            + self.project.rejected_boxes(self._paths())
+            + list(edited.values())
         )
         kept = []
         for box in boxes:
@@ -1135,15 +1401,61 @@ class SpectrogramDetectorPanel(QWidget):
                 if overlap.max() > ANSWERED_IOU:
                     continue
             kept.append(box)
-        self.candidates = dict(edited)
-        self._edited = set(edited)
-        self._label_of = {}
+        return kept
+
+    # -- preview --
+
+    def preview_view(self, *_args) -> None:
+        """Run the trained model on what is on screen, and on nothing else."""
+        project = self._ensure_project()
+        if project is None or not project.model_path():
+            self._say("Train a model first: Preview shows what it finds on screen.")
+            return
+        lanes = self._shown_lanes()
+        if not lanes:
+            return
+        t0, t1, _f0, _f1 = self._view_of(lanes[0])
+        if t1 <= t0:
+            return
+        self._preview_window = (t0, t1)
+        self._say("Looking on screen with the trained model...")
+        self._start(
+            "preview",
+            "propose",
+            paths=self._paths(),
+            model=project.model_path(),
+            windows=[[t0, t1]],
+        )
+
+    def _preview_done(self, message: dict) -> None:
+        """The model's answers replace the candidates on screen; the rest stay."""
+        t0, t1 = self._preview_window
+        found = [project_.box_from_json(v) for v in message.get("boxes", [])]
+        inside = [b for b in found if t0 <= b.centre_t <= t1]
+        self._sync_from_labels()
+        edited = {
+            uid: box for uid, box in self.candidates.items() if uid in self._edited
+        }
+        kept = {
+            uid: box
+            for uid, box in self.candidates.items()
+            if uid in edited or not (t0 <= box.centre_t <= t1)
+        }
+        new = self._unanswered(inside, edited)
+        self.candidates = kept
         self._last_action = None
-        for box in kept:
+        for box in new:
             self.candidates[self._next_id] = box
             self._next_id += 1
-        self.candidate_source = source
-        return kept
+        if self.candidate_source in ("", "examples"):
+            self.candidate_source = "model"
+        self._write_found()
+        self._persist_candidates()
+        above = sum(1 for b in new if b.score >= self.threshold)
+        self._say(
+            f"Preview: {above} events above the cut on screen, of {len(new)} found. "
+            "Move Cut to see more or fewer; click what is wrong and Enter, as in review."
+        )
 
     def _reviewed_here(self) -> list:
         paths = self._paths()
@@ -1627,13 +1939,20 @@ class SpectrogramDetectorPanel(QWidget):
         if not boxes:
             self._say("Label some events first, in label mode (b).")
             return
+        settings = self.training_settings()
+        base = self._start_weights(settings)
+        if base is None:
+            return
         config = self._config_for(boxes)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         directory = project.models_directory() / stamp
-        project.segment = bool(self.trainonw.currentData())
+        project.segment = self._segment()
+        project.training = settings
         self._save_project()
         note = f" {unusable} labels have no band and are left out." if unusable else ""
         self._say(f"Training on {len(boxes)} labels...{note}")
+        self.curvew.clear("training...")
+        self.curvew.setVisible(True)
         self._start(
             "train",
             "train",
@@ -1642,8 +1961,96 @@ class SpectrogramDetectorPanel(QWidget):
             directory=os.fspath(directory),
             sources=self._sources(),
             segment=project.segment,
-            epochs=self.train_epochs,
+            base=base,
+            epochs=self.train_epochs or settings["epochs"] or None,
+            batch=settings["batch"] or None,
+            # None lets the runner choose, 0 never stops early
+            patience=(settings["patience"] or None) if settings["stop_early"] else 0,
+            hold_out_every=settings["hold_out_every"],
         )
+
+    def _start_weights(self, settings: dict) -> Optional[str]:
+        """The weights a new model starts from, or None after saying why there are none.
+
+        A pretrained file goes by name, since the runner finds it in its weights
+        directory; the project's last model goes by path.  Going on from a model that
+        draws something else than Learn asks for would train one kind on top of the
+        other, so that is refused rather than guessed at.
+        """
+        if settings["start"] == "last":
+            base = self.project.model_path() if self.project is not None else None
+            if not base:
+                self._say("There is no model to go on from yet: start from Pretrained.")
+                return None
+            try:
+                task = models_.read_meta(base).get("task")
+            except ValueError:
+                task = None
+            wanted = "segment" if self._segment() else "detect"
+            if task != wanted:
+                drawn = "outlines" if task == "segment" else "boxes"
+                self._say(
+                    f"The last model draws {drawn}: set Learn to match it, or start "
+                    "from Pretrained."
+                )
+                return None
+            return base
+        base = self._base_weights(settings)
+        if not (self.weights_dir / base).is_file():
+            self.fetchw.setVisible(True)
+            self._say(f"{base} is not here yet: press Get models once while online.")
+            return None
+        return base
+
+    def _epoch_ended(self, _job: str, point: dict) -> None:
+        if self._job_kind == "train":
+            self.curvew.add(point)
+            self.curvew.setVisible(True)
+
+    def _curve_note(self, meta: dict) -> str:
+        if meta.get("held_out"):
+            return f"held out: {meta.get('val_events', 0)} events"
+        return "nothing held out: these are scores on the training tiles"
+
+    def _show_model_curve(self) -> None:
+        """The curve of the model in use, kept beside it."""
+        path = self.project.model_path() if self.project is not None else None
+        if not path:
+            return
+        try:
+            meta = models_.read_meta(path)
+        except ValueError:
+            return
+        if meta.get("curve"):
+            self.curvew.set_points(
+                meta["curve"], meta.get("best_epoch"), self._curve_note(meta)
+            )
+            self.curvew.setVisible(True)
+
+    def _how_long(self, message: dict) -> str:
+        """How the training ended, and what to do when early stopping could not act."""
+        run = int(message.get("epochs_run") or 0)
+        planned = int(message.get("epochs") or 0)
+        text = f"{run} of {planned} epochs" if run else f"{planned} epochs"
+        if run and run < planned:
+            text += ", stopped early"
+        best = message.get("best_epoch")
+        if best:
+            text += f", best at {best}"
+        stopping = str(message.get("early_stopping") or "")
+        if stopping.startswith("off: nothing"):
+            every = int(message.get("hold_out_every") or 0)
+            config = self.project.config if self.project is not None else None
+            gap = BLOCK_LENGTHS * config.tile_s if config is not None else 0.0
+            if every <= 0:
+                text += ". Hold out is set to nothing, so early stopping had no data"
+            else:
+                text += (
+                    ". Early stopping was off, with nothing held out: label in at "
+                    f"least {max(every, 2)} places more than {gap:.0f} s apart, or "
+                    "hold out more often"
+                )
+        return text
 
     def _train_done(self, message: dict) -> None:
         project = self.project
@@ -1653,11 +2060,16 @@ class SpectrogramDetectorPanel(QWidget):
         self.threshold = threshold
         self._write_threshold()
         self._save_project()
+        self.curvew.set_points(
+            message.get("curve") or self.curvew.points,
+            message.get("best_epoch"),
+            self._curve_note(message),
+        )
         metrics = message.get("metrics", {})
         where = (
             f"on {message.get('val_events', 0)} held-out events"
             if message.get("held_out")
-            else "on its own training data: too little labelled to hold any out"
+            else "on its own training data, which flatters it"
         )
         counts = message.get("events_per_class") or []
         missing = [
@@ -1673,9 +2085,9 @@ class SpectrogramDetectorPanel(QWidget):
             else ""
         )
         self._say(
-            f"Trained in {message.get('seconds', 0):.0f} s. mAP50 "
-            f"{metrics.get('map50', 0):.3f} {where}. Find more shows what it still "
-            f"gets wrong.{warning}"
+            f"Trained in {message.get('seconds', 0):.0f} s, {self._how_long(message)}. "
+            f"mAP50 {metrics.get('map50', 0):.3f} {where}. Preview shows how it does "
+            f"on screen.{warning}"
         )
 
     # -- run --

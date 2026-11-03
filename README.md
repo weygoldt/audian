@@ -85,9 +85,13 @@ over the whole recording.
 3. **Review.** It takes you to the windows it is least sure of. Click what is
    wrong, drag what was missed, and press <kbd>Enter</kbd>.
 4. **Train.** A YOLO detector on everything you have looked at. Events you have
-   not labelled are masked out, so they are never taught as background.
+   not labelled are masked out, so they are never taught as background. Choose
+   the model size, epochs, early stopping and what is held out; watch the curve;
+   **Preview** what it finds on screen.
 5. **Run.** The whole recording, in the background. Results arrive as ordinary
    editable labels, with every score in a CSV.
+
+![training](docs/shots/specdetector-train.png)
 
 Your labels stay in the ordinary sidecar beside the recording. The models run in
 a process of their own and need a network once, for **Get models**.

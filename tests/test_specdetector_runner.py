@@ -293,6 +293,11 @@ for line in sys.stdin:
     if req["op"] == "work":
         send({"type": "progress", "id": req["id"], "stage": "train", "done": 1, "total": 2, "text": "x"})
         send({"type": "result", "id": req["id"], "answer": req["value"] * 2})
+    elif req["op"] == "epochs":
+        for epoch in (1, 2):
+            values = {"epoch": epoch, "train_loss": 2.0 / epoch, "map50": 0.4 * epoch, "note": "x"}
+            send({"type": "metrics", "id": req["id"], "epoch": epoch, "epochs": 30, "values": values})
+        send({"type": "result", "id": req["id"]})
     elif req["op"] == "slow":
         time.sleep(60)
     elif req["op"] == "die":
@@ -331,6 +336,20 @@ def record(client):
     client.sigError.connect(lambda job, kind, text: errors.append((job, kind, text)))
     client.sigProgress.connect(lambda *values: progress.append(values))
     return results, errors, progress
+
+
+def test_each_epoch_arrives_as_the_numbers_of_its_curve(client):
+    """What the training curve is drawn from: numbers only, with the run's length."""
+    points = []
+    client.sigMetrics.connect(lambda job, point: points.append((job, point)))
+    results, errors, _progress = record(client)
+    job = client.submit("epochs")
+    assert pump_until(lambda: results or errors)
+    assert errors == []
+    assert [p for j, p in points if j == job] == [
+        {"epoch": 1, "train_loss": 2.0, "map50": 0.4, "epochs": 30},
+        {"epoch": 2, "train_loss": 1.0, "map50": 0.8, "epochs": 30},
+    ]
 
 
 def test_a_job_sent_before_hello_is_delivered_after_it(client):

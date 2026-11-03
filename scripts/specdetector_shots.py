@@ -6,7 +6,8 @@
 Walks the loop on a copy of the cricket recording, offscreen, from empty settings,
 with the real panel and the real models: a box dragged in audian's label mode and
 outlined by SAM, candidates proposed from the hand labels in
-`tests/data/gryllus-fewshot-labels.csv`, and a window under review.  It stops with an error if a step produces nothing to show.  `--weights` is a
+`tests/data/gryllus-fewshot-labels.csv`, a window under review, and a training with
+its settings open and its curve.  It stops with an error if a step produces nothing to show.  `--weights` is a
 directory holding the model files, which the panel's Get models button would download.
 """
 
@@ -158,6 +159,28 @@ def main() -> None:
     panel.next_window()
     pump(app, 1.5)
     save(window, args.out, "specdetector-review")
+    print(panel.statusw.text())
+
+    # A training with its settings open, and the curve it drew, scrolled into view.
+    from PySide6.QtWidgets import QScrollArea
+
+    panel.settingsw.setChecked(True)
+    panel.epochsw.setValue(40)
+    panel.train()
+    pump(app, 0.2)
+    wait(app, panel.batch, "training")
+    if not panel.curvew.points:
+        raise SystemExit(f"training drew no curve: {panel.statusw.text()}")
+    # the tab grows by the finished training's note and status first: scrolled before
+    # that, the curve's last caption line ended up under the viewport's edge
+    pump(app, 0.5)
+    holder = panel.parentWidget()
+    while holder is not None and not isinstance(holder, QScrollArea):
+        holder = holder.parentWidget()
+    if holder is not None:
+        holder.ensureWidgetVisible(panel.curvew)
+    pump(app, 0.5)
+    save(window, args.out, "specdetector-train")
     print(panel.statusw.text())
     panel.about_to_flush_labels()
     window.close()

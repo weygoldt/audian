@@ -232,6 +232,60 @@ def test_export_writes_what_is_above_the_cut(panel):
     assert all(r["category"] == CLASS for r in rows)
 
 
+def test_a_preview_finds_the_events_on_screen_and_nowhere_else(panel):
+    start, end = 20.0, 26.0
+    panel.goto(start, end, 500.0, 2000.0)
+    pump(0.3)
+    elsewhere = {
+        uid: box
+        for uid, box in panel.candidates.items()
+        if not start <= box.centre_t <= end
+    }
+    panel.preview_view()
+    wait_for(lambda: not panel.batch.busy(), panel.batch)
+    assert "Preview:" in panel.statusw.text(), panel.statusw.text()
+    here = [
+        b
+        for b in panel.candidates.values()
+        if start <= b.centre_t <= end and b.score >= panel.threshold
+    ]
+    # An event already labelled -- accepted in review -- is an answer and is not
+    # proposed again, so on screen the events are its candidates and its labels.
+    labelled, _regions, _unusable = panel.labelled_boxes()
+    labelled = [b for b in labelled if start <= b.centre_t <= end]
+    wanted = [b for b in truth() if start <= b.centre_t <= end]
+    match = match_events(here + labelled, wanted)
+    assert match.recall > 0.8 and match.precision > 0.8, (match, panel.statusw.text())
+    assert match_events(here, wanted).fp == 0
+    # off screen, the queue is as it was
+    for uid, box in elsewhere.items():
+        assert panel.candidates.get(uid) == box
+
+
+def test_the_readers_settings_train_and_the_curve_shows_it(panel):
+    """A short run with early stopping: the curve is the run, epoch by epoch."""
+    panel.epochsw.setValue(6)
+    panel.stopearlyw.setChecked(True)
+    panel.patiencew.setValue(2)
+    try:
+        panel.train()
+        wait_for(lambda: not panel.batch.busy(), panel.batch)
+    finally:
+        panel.epochsw.setValue(0)
+        panel.patiencew.setValue(0)
+    meta = json.loads(
+        (Path(panel.project.model_path()).parent / "model.json").read_text()
+    )
+    assert meta["epochs"] == 6
+    assert 1 <= meta["epochs_run"] <= 6
+    epochs = list(range(1, meta["epochs_run"] + 1))
+    assert [p["epoch"] for p in meta["curve"]] == epochs
+    assert panel.curvew.series("train_loss")[0] == epochs
+    assert panel.curvew.series("map50")[0] == epochs
+    assert meta["best_epoch"] in epochs
+    assert "of 6 epochs" in panel.statusw.text(), panel.statusw.text()
+
+
 def test_a_detector_trained_on_outlines_finds_events_with_outlines(panel):
     panel.trainonw.setCurrentIndex(panel.trainonw.findData(True))
     panel._train_on_picked()
