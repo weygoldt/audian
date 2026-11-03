@@ -551,30 +551,27 @@ needs no network.
 
 ### Label a few events
 
-Choose or add a class, press **Label**, and drag a box around an event on the
-spectrogram. SAM draws an outline inside your box. Press <kbd>Enter</kbd> to
-accept it. The label goes into the current category, in the same sidecar as every
-other label.
+Label the way you always do: press <kbd>b</kbd> for label mode, pick a category
+on the chips or with its digit key, and drag a box around an event on the
+spectrogram. The tab has no labelling of its own. Every span category with boxes
+on the spectrogram is something the detector learns; **Classes** names them, and
+unticking one there leaves it out. New categories come from the Labels tab
+(<kbd>Ctrl</kbd>+<kbd>L</kbd>).
 
-A rough box is enough: detectors trained from rough boxes did about as well as
-those trained from careful ones. A single click is not. It finds only the blob
-under the pointer, such as one harmonic of a pulse, and labels made that way
-trained much worse detectors. Use clicks to adjust an outline.
+With the plugin installed, the Labels tab has a **SAM** toggle beside **Show**.
+With it on, the box you drag is stored at once, as always, and SAM then tightens
+it onto the event and draws the event's outline inside it, a moment later. There
+is nothing to accept. <kbd>Shift</kbd>+<kbd>B</kbd> still takes the whole label
+back, and if you move or resize the box before SAM answers, your box is kept.
+Turn SAM off to keep exactly the box you drew; the choice is remembered.
 
-| Input | What it does |
-| --- | --- |
-| Drag | Box the event |
-| Click | Add this part to the outline |
-| <kbd>Ctrl</kbd>+click | Remove this part from the outline |
-| Click a candidate | Reject it |
-| <kbd>Enter</kbd> | Accept the outline, or if there is none, accept what is left in view and go to the next window |
-| <kbd>Shift</kbd>+<kbd>Enter</kbd> | Reject what is left in view and go to the next window |
-| <kbd>Backspace</kbd> | Undo the last click or rejection |
-| <kbd>Esc</kbd> | Drop the outline |
+The outline is part of the label: it is drawn over the spectrogram and kept in the
+sidecar, in a column of its own. Moving or resizing a box with its grips drops the
+outline, since the box it described is gone. The first time SAM is used, the
+Detector tab's **Get models** must have fetched it.
 
-These keys belong to the tool only while **Label** is on, and never while you are
-typing in a field. The right mouse button and the wheel still move the view.
-Labels you draw the usual way, with **Label** off, count too.
+A rough box is enough: detectors trained from SAM's answers to rough drags did
+about as well as those trained from careful boxes.
 
 ### Find more, and review
 
@@ -583,12 +580,24 @@ no model yet, otherwise with the last model you trained. **Look in** sets how mu
 of the recording it searches. Candidates appear as labels in `<class> (found)`.
 Move **Cut** to show more or fewer of them, which runs nothing.
 
-**Next window** goes to the window worth looking at next and turns on **Label**.
-Click the wrong candidates to reject them, drag around any event that was missed,
-then press <kbd>Enter</kbd>. Everything still shown in view is accepted, and the
-view counts as reviewed. You can also resize a candidate with its grips, with
-**Label** off, or delete it with the ordinary label tools, which counts as a
+**Next window** goes to the window worth looking at next, in label mode. Click
+the wrong candidates to reject them, drag around any event that was missed, as you
+would label anything, then press <kbd>Enter</kbd>. Everything still shown in view
+is accepted, and the view counts as reviewed. You can also resize a candidate
+with its grips, or delete it with the ordinary label tools, which counts as a
 rejection.
+
+| Input | What it does |
+| --- | --- |
+| Click a candidate | Reject it |
+| Drag | Label an event the model missed, as always in label mode |
+| <kbd>Enter</kbd> | Accept what is left in view and go to the next window |
+| <kbd>Shift</kbd>+<kbd>Enter</kbd> | Reject what is left in view and go to the next window |
+| <kbd>Backspace</kbd> | Take back the last rejection or finished view |
+
+These belong to review only in label mode, while candidates are drawn in view,
+and never while you are typing in a field. Otherwise a click, <kbd>Enter</kbd>
+and <kbd>Backspace</kbd> do what they do everywhere else in Audian.
 
 Candidates never stay in the sidecar: they are taken off when you close the file,
 and come back next time.
@@ -621,8 +630,9 @@ writes what is above the cut beside the recording as `<stem>-detections.csv`.
 ### Where things are kept
 
 The project is the directory `<stem>-specdetector` beside the recording. It holds
-what you reviewed and rejected, SAM's outlines, the last candidates, the trained
-models and the results. Each model's `model.json` records the image settings it
+what you reviewed and rejected, which categories you left out, the last
+candidates, the trained models and the results. Your labels and their outlines
+stay in the sidecar beside the recording. Each model's `model.json` records the image settings it
 needs.
 
 Delete the `dataset` directory inside a model freely: it is rebuilt from the

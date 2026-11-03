@@ -78,10 +78,12 @@ over the whole recording.
 
 **Plugins → Spectrogram detector** is the whole loop, in one tab:
 
-1. **Label.** Drag a rough box around an event and SAM outlines it.
+1. **Label.** With audian's own label tool: <kbd>b</kbd>, a category, a rough
+   box. Turn on **SAM** in the Labels tab and it tightens the box onto the event
+   and outlines it.
 2. **Find more.** See right away what your labels suggest, with no training.
 3. **Review.** It takes you to the windows it is least sure of. Click what is
-   wrong and press <kbd>Enter</kbd>.
+   wrong, drag what was missed, and press <kbd>Enter</kbd>.
 4. **Train.** A YOLO detector on everything you have looked at. Events you have
    not labelled are masked out, so they are never taught as background.
 5. **Run.** The whole recording, in the background. Results arrive as ordinary

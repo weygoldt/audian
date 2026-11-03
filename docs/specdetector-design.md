@@ -12,7 +12,7 @@ decision. Everything here is reproduced by `tests/measure_specdetector.py` and
 ## The loop
 
 ```
-Label       drag a box around an event; SAM outlines it
+Label       audian's own label mode: a category, a rough box; SAM tightens and outlines it
 Find more   candidates, from the labels (YOLOE) or from the last trained model
 Review      go through windows; reject what is wrong; the rest is accepted
 Train       YOLO26n on what has been looked at, about a minute on a GPU
@@ -21,6 +21,20 @@ Run         the whole recording, in the background
 
 Everything after labelling can repeat. Labelling goes on during training, because SAM
 has a runner process of its own.
+
+**There is one way to label, and it is audian's.** The plugin first had a label tool of
+its own: a Label button, a class picker, a SAM prompt that took clicks and waited for
+Enter. That was a second scheme beside the one every other label is made with, and the
+user asked for it to go. SAM is now an *assistant* of audian's label tool
+(`audian.labelassist`): a drag in label mode stores the label as always, and SAM then
+answers it with a tighter box and the event's outline, written onto the same label. It is
+a toggle in the Labels tab, and with it off a box is exactly what was drawn. Every span
+category with boxes on the spectrogram is a class, unless the reader leaves it out; a
+category left out is masked rather than taught as background.
+
+SAM's click prompts went with the old tool. A detector trained on click outlines scored
+0.569 on chirps against 0.895 from rough drags (below), so the gesture worth keeping was
+the drag.
 
 ## How it is built
 
@@ -35,7 +49,8 @@ recording.py     reading a recording without audian        thunderlab
 models.py        everything that touches Ultralytics       child process only
 modelrunner.py   JSON lines on stdin and stdout            child process only
 client.py        the runner as Qt signals                  QtCore
-tools.py         mouse and keys on the lanes               Qt
+assistant.py     SAM as audian's label assistant           QtCore
+tools.py         review's click and keys on the lanes      Qt
 panel.py         the tab                                   Qt
 ```
 
@@ -47,7 +62,8 @@ nothing on the runner's side can import audian or Qt. The protocol matches wavet
 runner. Cancelling kills the process, so a `detect` writes nothing until it finishes,
 and then to a `.partial` file first.
 
-**The panel holds two runners,** one for what takes minutes and one for SAM.
+**There are two runners,** the panel's for what takes minutes and the label assistant's
+for SAM, which starts on the first drag with SAM on.
 
 **Ultralytics is kept home and offline.** Left alone it writes under `~/.config`,
 installs requirements with pip at run time, sends analytics, and downloads weights and a
@@ -59,7 +75,8 @@ only the model files present.
 
 A reader's labels are ordinary editable labels, in the ordinary sidecar. A box drawn for
 this plugin is a label everywhere else in audian, and a label drawn long before it
-existed is already a training example.
+existed is already a training example. SAM's outline is part of the label, in the
+sidecar's last column, and audian draws it; moving the box drops it.
 
 A machine's guesses are labels too, in `<class> (found)`, so the code that draws and
 edits everything else draws and edits them. That category is **transient**
@@ -68,8 +85,9 @@ the digit keys or in the settings. Taking guesses out before each save cannot wo
 because the autosave runs on every edit and a crash leaves whatever was last written.
 
 The project directory (`<stem>-specdetector`, beside the recording) holds what a label
-cannot say: reviewed rectangles, rejections, SAM's outlines, the last candidates, the
-image settings and the models. It can span several recordings, whose labels stay in their
+cannot say: reviewed rectangles, rejections, the classes and those left out, the last
+candidates, the image settings and the models. Outlines it kept before labels could
+carry them move onto their labels when a recording is opened. It can span several recordings, whose labels stay in their
 own sidecars.
 
 ### The one rule: only what a person has looked at reaches the model

@@ -28,7 +28,9 @@ Two kinds of label, kept apart:
 
 - `labels.py`: The **editable labels**: the store, and the
   `<stem>-editable-labels.csv` sidecar beside the recording. Pure data, no Qt.
-  These are the ones a reader draws afterwards.
+  These are the ones a reader draws afterwards, each with an optional outline.
+- `labelassist.py`: The hook a plugin's label assistant fills, such as SAM: the
+  browser stores a drawn label, then writes the assistant's answer onto it.
 - `session.py`, `alignment.py`, `layers.py`: The **fixed labels**: a fakefish
   session bundle, the fit that places it in the recording and how far to trust
   it, and what the bundle offers the browser to switch on. Audian never writes
@@ -107,8 +109,9 @@ Everything else on screen:
 - `statisticsanalyzer.py`: Compute basic descriptive statistics.
 
 Plugins are found in three places, and all three bind the same way: a module
-exposing callables named `audian_*panel`, `audian_*analyzer`, `audian_*traces`
-or `audian_*denoisers`:
+exposing callables named `audian_*panel`, `audian_*analyzer`, `audian_*traces`,
+`audian_*denoisers` or `audian_*label_assistant` (`labelassist.py`: help with
+drawing a label, which answers each drag with a better box and a shape):
 
 1. **Bundled**, by walking `src/audian_plugins/`. These ship with audian and
    need no installing.
@@ -120,8 +123,10 @@ or `audian_*denoisers`:
 Bundled plugins:
 
 - `audian_plugins/specdetector/`: Trains a detector on the recording from a few
-  labels, at **Plugins > Spectrogram detector**: SAM to label, YOLOE to propose,
-  YOLO to detect, all through Ultralytics in a child process. `tiling.py` turns
+  labels, at **Plugins > Spectrogram detector**: SAM as audian's label assistant
+  (`assistant.py`), YOLOE to propose, YOLO to detect, all through Ultralytics in
+  a child process. The tab has no label tool of its own; it reads audian's
+  labels, and every labelled span category is a class. `tiling.py` turns
   samples into images and pixels back into seconds and hertz. `dataset.py`,
   `review.py`, `boxes.py` and `project.py` are the rest of the logic and import no
   Qt. `models.py` and `modelrunner.py` run out of process and are the only files
