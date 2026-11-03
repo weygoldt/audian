@@ -26,7 +26,7 @@ The CSV
 
 ::
 
-    category,kind,channel,t_start_s,t_end_s,f_low_hz,f_high_hz,note
+    category,kind,channel,t_start_s,t_end_s,f_low_hz,f_high_hz,note,outline
 
 * Times are **seconds from the first frame of the first file**, the timebase
   every other number in this application is in: the bundle's
@@ -47,6 +47,12 @@ The CSV
   channel", which is what a label drawn on the mean spectrogram writes: that
   panel is an average over the array and is no channel at all.  A reader must
   treat the column as nullable.
+* ``outline`` is the event's own shape inside its box, when a label assistant
+  such as SAM drew one: ``t f`` vertices joined by ``;``, at the precision of
+  the columns before it.  Empty for most labels.  The column was added last,
+  so a file without it reads as before, and a reader that does not know it
+  loses only the shapes.  Moving or resizing the box drops the shape, because
+  the reader just said the box was wrong.
 
 Read and written with the standard library's `csv`, not with polars, which is
 this repository's reader everywhere else.  Two reasons, both about this file
@@ -91,6 +97,7 @@ COLUMNS = (
     "f_low_hz",
     "f_high_hz",
     "note",
+    "outline",
 )
 
 #: Suffix appended to the recording's stem.
@@ -151,6 +158,51 @@ def _cell(value: Optional[float], decimals: int) -> str:
     return f"{float(value):.{decimals}f}"
 
 
+def _outline(points) -> Optional[tuple]:
+    """`points` as ``((t, f), ...)``, or None when they cannot enclose anything.
+
+    Three vertices are the least that has an inside.  Anything that is not a
+    finite pair costs the whole outline rather than one vertex: a shape with a
+    vertex quietly missing is a different shape.
+    """
+    if not points:
+        return None
+    out = []
+    for point in points:
+        try:
+            t, f = (float(v) for v in point)
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(t) and math.isfinite(f)):
+            return None
+        out.append((t, f))
+    return tuple(out) if len(out) >= 3 else None
+
+
+def _outline_cell(outline: Optional[tuple]) -> str:
+    """An outline for the file: ``t f`` pairs joined by ``;``."""
+    if not outline:
+        return ""
+    return ";".join(f"{t:.6f} {f:.3f}" for t, f in outline)
+
+
+def _outline_of(text: Optional[str]) -> Optional[tuple]:
+    """The outline cell, or None when it is empty or cannot be read.  Never raises."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    pairs = []
+    for pair in text.split(";"):
+        cells = pair.split()
+        if len(cells) != 2:
+            return None
+        t, f = _number(cells[0]), _number(cells[1])
+        if t is None or f is None:
+            return None
+        pairs.append((t, f))
+    return _outline(pairs)
+
+
 @dataclass(frozen=True)
 class LabelCategory:
     """One entry of the reader's vocabulary.
@@ -187,7 +239,9 @@ class Label:
 
     `t1` is None for a point.  `f0` and `f1` are None whenever frequency is
     not meaningful -- on a trace, always, because that y axis is amplitude.
-    `channel` is None for a label made on the mean spectrogram.
+    `channel` is None for a label made on the mean spectrogram.  `outline` is
+    the event's shape inside the box, as ``(t, f)`` vertices, when something
+    drew one; only a span with a band can have it.
     """
 
     category: str
@@ -198,6 +252,7 @@ class Label:
     f0: Optional[float] = None
     f1: Optional[float] = None
     note: str = ""
+    outline: Optional[tuple] = None
 
     def is_point(self) -> bool:
         return self.kind == KIND_POINT or self.t1 is None
@@ -229,7 +284,7 @@ class Label:
         return self.channel is None or self.channel == channel
 
     def row(self) -> list[str]:
-        """This label as the eight cells of `COLUMNS`.
+        """This label as the cells of `COLUMNS`.
 
         Six decimals of seconds is 1 us, well under one frame at any rate
         audian opens; three decimals of Hz is far under one spectrogram bin.
@@ -245,6 +300,7 @@ class Label:
             _cell(self.f0, 3),
             _cell(self.f1, 3),
             self.note,
+            _outline_cell(self.outline),
         ]
 
     @staticmethod
@@ -275,6 +331,11 @@ class Label:
         f1 = _number(row.get("f_high_hz", ""))
         if f0 is not None and f1 is not None and f1 < f0:
             f0, f1 = f1, f0
+        # A shape needs a box to be the shape of: a point, or a row with no
+        # band, keeps the row and loses the cell.
+        outline = None
+        if kind == KIND_SPAN and f0 is not None and f1 is not None:
+            outline = _outline_of(row.get("outline"))
         return Label(
             category=category,
             kind=kind,
@@ -284,6 +345,7 @@ class Label:
             f0=f0,
             f1=f1,
             note=(row.get("note") or "").strip(),
+            outline=outline,
         )
 
 
@@ -565,6 +627,11 @@ class LabelSet:
           that has no frequency at all -- a trace, whose y axis is
           amplitude -- passes None for both and must get None back.
 
+        A change drops the label's **outline**.  The reader has just said the
+        box was wrong, and the shape inside it came from the same answer; one
+        drawn for a box that is no longer there would be trained on as the
+        shape of something it is not.  `undo` puts it back with the box.
+
         Returns False for a geometry that is the one already stored, and
         that is not an optimisation.  `QGraphicsScene` calls a press a drag
         after five device pixels of travel **or after any travel at all once
@@ -577,6 +644,7 @@ class LabelSet:
             return False
         label = self.labels[index]
         before = (label.t0, label.t1, label.f0, label.f1)
+        outline = label.outline
         t0 = float(t0)
         if label.is_point():
             t1 = None
@@ -596,7 +664,41 @@ class LabelSet:
         label.t1 = t1
         label.f0 = f0
         label.f1 = f1
-        self._undo = ("geometry", label, before)
+        label.outline = None
+        self._undo = ("geometry", label, before, outline)
+        self.revision += 1
+        self.dirty = True
+        return True
+
+    def refine(
+        self,
+        label: Label,
+        t0: float,
+        t1: float,
+        f0: float,
+        f1: float,
+        outline=None,
+    ) -> bool:
+        """Give a label a machine's better box, and the shape inside it.
+
+        For a label assistant answering the drag that made `label`.  It
+        records no undo and keeps the reader's: the reader drew the label,
+        and the answer is part of drawing it, so Shift+B still takes back
+        the label and not just the tightening -- a reader who drew a box
+        on the wrong thing wants the box gone, not made smaller.
+
+        False when the label has left the store, or is not a span with a
+        band, which is the only thing a box and a shape can be given to.
+        """
+        if self.index_of(label) < 0 or label.is_point() or not label.has_frequency():
+            return False
+        t0, t1, f0, f1 = float(t0), float(t1), float(f0), float(f1)
+        if t1 < t0:
+            t0, t1 = t1, t0
+        if f1 < f0:
+            f0, f1 = f1, f0
+        label.t0, label.t1, label.f0, label.f1 = t0, t1, f0, f1
+        label.outline = _outline(outline)
         self.revision += 1
         self.dirty = True
         return True
@@ -660,8 +762,9 @@ class LabelSet:
             _kind, at, label = change
             self.labels.insert(min(at, len(self.labels)), label)
         elif kind == "geometry":
-            _kind, label, (t0, t1, f0, f1) = change
+            _kind, label, (t0, t1, f0, f1), outline = change
             label.t0, label.t1, label.f0, label.f1 = t0, t1, f0, f1
+            label.outline = outline
         self.revision += 1
         self.dirty = True
         return kind

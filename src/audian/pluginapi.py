@@ -85,7 +85,21 @@ Reading labels
 `LabelSet` is the store a browser holds as ``browser.labels``, and
 `sidecar_path(recording)` is where a recording keeps its own.  A plugin that
 learns from several recordings reads the others' with
-``LabelSet().read(sidecar_path(path))``; writing to them is the browser's.
+``LabelSet().read(sidecar_path(path))``; writing to them is the browser's.  A
+plugin writing a file of its own in the same shape uses `LABEL_COLUMNS` as the
+header and `Label.row` for each row.
+
+Helping draw a label
+--------------------
+
+An ``audian_*label_assistant`` callable takes the browser and returns a
+`LabelAssistant`, or None.  The browser then offers a toggle with the
+assistant's `name` in the Labels tab, and each box a reader drags on a
+spectrogram in label mode is stored as usual and then handed to `refine` as a
+`Drawn`.  Call `done` once with an `Answer` -- a tighter box and the shape
+inside it -- and the browser writes it onto that label, unless the reader has
+changed the box since.  `audian.labelassist` has the whole contract; the
+spectrogram detector's SAM is one.
 
 Working off the GUI thread
 --------------------------
@@ -103,6 +117,8 @@ from .audian import save_setting, settings
 from .data import open_files
 from .databrowser import ParameterGroup, caption_label, narrow_combo
 from .denoise import Denoiser, Parameter
+from .labelassist import Answer, Drawn, LabelAssistant
+from .labels import COLUMNS as LABEL_COLUMNS
 from .labels import KIND_POINT, KIND_SPAN, Label, LabelCategory, LabelSet, sidecar_path
 from .tasks.tokens import Cancelled, CancelToken
 
@@ -116,6 +132,8 @@ PLUGIN_BROWSER_ATTRS = (
     "redraw_labels",  # after changing the label set
     "schedule_label_save",
     "spectrogram_axes",  # the lanes, for a plugin that draws in frequency
+    "recording_paths",  # every file behind the timeline, absolute, in order
+    "current_category",  # the category the next drag writes
 )
 
 
@@ -144,11 +162,15 @@ def data_path():
 __all__ = [
     "KIND_POINT",
     "KIND_SPAN",
+    "LABEL_COLUMNS",
     "PLUGIN_BROWSER_ATTRS",
+    "Answer",
     "CancelToken",
     "Cancelled",
     "Denoiser",
+    "Drawn",
     "Label",
+    "LabelAssistant",
     "LabelCategory",
     "LabelSet",
     "Parameter",

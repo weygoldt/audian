@@ -33,6 +33,7 @@ class Plugins(object):
         self.analyzer_factories = []
         self.panel_factories = []
         self.denoiser_factories = []
+        self.label_assistant_factories = []
         #: module names already bound, so overlapping discovery paths do
         #: not put the same plugin in the menu twice
         self._bound = set()
@@ -75,6 +76,35 @@ class Plugins(object):
         Discovered by the same naming convention the others use.
         """
         self.denoiser_factories.append(factory_func)
+
+    def add_label_assistant_factory(self, factory_func):
+        """Register a callable returning a `labelassist.LabelAssistant`, or None.
+
+        Called with the browser, once per browser, like a panel factory::
+
+            def audian_sam_label_assistant(browser):
+                return SamAssistant(browser)
+
+        A browser uses one assistant: the first factory to return one.  Two
+        would be two answers to one drag, and nothing to choose between them.
+        """
+        self.label_assistant_factories.append(factory_func)
+
+    def setup_label_assistant(self, browser) -> None:
+        """Give `browser` the first assistant a factory offers.
+
+        One bad factory costs its own assistant, as one bad denoiser does.
+        """
+        for factory in self.label_assistant_factories:
+            try:
+                assistant = factory(browser)
+            except Exception as exc:  # noqa: BLE001 - one bad plugin, not all
+                log.exception("label assistant factory %r failed", factory)
+                print(f"could not add a label assistant from {factory}: {exc}")
+                continue
+            if assistant is not None:
+                browser.offer_label_assistant(assistant)
+                return
 
     def setup_denoisers(self) -> None:
         """Put every factory's denoisers in the registry.
@@ -130,6 +160,8 @@ class Plugins(object):
                 self.add_analyzer_factory(value)
             elif key.endswith("denoisers"):
                 self.add_denoiser_factory(value)
+            elif key.endswith("label_assistant"):
+                self.add_label_assistant_factory(value)
             elif key.endswith("panel"):
                 self.add_panel_factory(value)
             else:
