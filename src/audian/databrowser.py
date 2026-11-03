@@ -1034,11 +1034,22 @@ class SidePanel(QWidget):
         top made both worse.  Scrolled, the region can be any size the
         reader drags it to and the plugin keeps the height it asked for.
 
-        The same shape `ParameterTabs` uses for the built-in pages: a
-        stretch under the widget so the layout has somewhere to put slack
-        rather than spreading it through the rows, and a **Fixed** vertical
-        policy on the widget itself, which is what makes the content keep
-        its size hint and the viewport scroll instead of compressing it.
+        A stretch under the widget gives the layout somewhere to put slack
+        rather than spreading it through the rows, and a **Minimum** vertical
+        policy on the widget makes its size hint a floor, so the viewport
+        scrolls instead of compressing it.
+
+        A floor and not, as the built-in pages have it, a fixed height: a
+        plugin's hint is not the height it needs.  A layout sums its rows'
+        hints, and a word-wrapped label hints at the width it would like --
+        up to 80 characters once its text runs to four lines at that width
+        -- so a long status line is counted as if the panel were wider than
+        it is.  Fixed, that hint was a ceiling as well: measured
+        after a detector's training, the content was laid out 1078 px tall
+        at the panel's 333 px, the plugin was held to its 1014 px hint, and
+        the 64 px went missing from its last rows, which laid the training
+        curve's caption over its chart.  With a floor, the column asks the
+        plugin for its height at the width it has, and gets it.
         Horizontal scrolling stays off: the panel has a 220 px floor and a
         control that needs more width than that is a control to rebuild,
         not one to put on a slider.
@@ -1049,7 +1060,7 @@ class SidePanel(QWidget):
         column.setSpacing(0)
         column.addWidget(widget, 0)
         column.addStretch(1)
-        widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         area = QScrollArea(self)
         area.setWidgetResizable(True)
         area.setFrameShape(QFrame.Shape.NoFrame)
