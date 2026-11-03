@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PySide6.QtCore import QRectF
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
@@ -26,7 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_panelsplitter import RATE, build_window, pump  # noqa: E402
 
-from audian.labels import KIND_SPAN  # noqa: E402
+from audian.databrowser import DataBrowser  # noqa: E402
+from audian.labels import KIND_SPAN, LabelSet  # noqa: E402
 from audian_plugins.specdetector import panel as panel_module  # noqa: E402
 from audian_plugins.specdetector.boxes import Box, match_events  # noqa: E402
 from audian_plugins.specdetector.panel import (  # noqa: E402
@@ -126,44 +128,36 @@ def panel(app, weights, tmp_path_factory):
             QSettings.setPath(fmt, scope, os.fspath(home))
 
 
-def test_a_click_outlines_only_the_event_under_it(panel):
-    panel.add_class(CLASS)
+def test_a_drag_in_label_mode_is_tightened_and_outlined_by_sam(panel):
+    """audian's own label tool, with the SAM assistant: no label scheme of the tab's.
+
+    A rough box around each of three pips is stored as drawn, and SAM's answer then
+    moves it onto the pip -- the claim a visible overlay could not make.
+    """
+    browser = panel.browser
+    browser.labels.add_category(CLASS, KIND_SPAN)
+    browser.current_category = CLASS
+    browser.sync_category_state()
+    browser.set_label_assist(True)
+    panel.window().set_region_mode(DataBrowser.MODE_LABEL)
     panel.goto(FIRST_S - 0.5, FIRST_S + 2.5, 500.0, 2000.0)
-    panel.arm(True)
     pump(0.5)
-    ax = panel._lanes()[0]
-    wait_for(lambda: not panel.interactive.busy(), panel.interactive)
-    onset = pip_times()[0]
-    panel.lane_clicked(ax, onset + PIP_S / 2, 0.5 * (F_LOW + F_HIGH), False)
-    wait_for(lambda: panel.mask is not None, panel.interactive)
-    t0, t1, _f0, _f1 = panel.mask["box"]
-    # SAM's mask reached the next pip until the click was held to its own part.
-    assert onset - 0.1 <= t0 <= t1 <= onset + PIP_S + 0.1
-    panel.clear_prompt()
-    wait_for(lambda: not panel.interactive.busy(), panel.interactive)
-
-
-def test_a_drag_around_an_event_outlines_it_and_enter_labels_it(panel):
+    assistant = browser.label_assistant
+    client = assistant._client()
     ax = panel._lanes()[0]
     for onset in pip_times()[:3]:
-        panel.lane_boxed(
-            ax, onset - 0.03, onset + PIP_S + 0.03, F_LOW - 150.0, F_HIGH + 150.0
-        )
-        wait_for(lambda: panel.mask is not None, panel.interactive)
-        t0, t1, f0, f1 = panel.mask["box"]
-        # The outline is on the event, not on the lane: this is the claim a visible
-        # overlay could not make.
-        assert onset - 0.04 <= t0 <= t1 <= onset + PIP_S + 0.04
-        assert f0 >= F_LOW - 300.0 and f1 <= F_HIGH + 300.0
-        assert panel.prompts[ax].outline.isVisible()
-        assert len(panel.mask["polygon"]) >= 3
-        assert panel.accept_mask()
-        wait_for(lambda: not panel.interactive.busy(), panel.interactive)
-    labels = [la for la in panel.browser.labels if la.category == CLASS]
+        drawn = (onset - 0.03, onset + PIP_S + 0.03, F_LOW - 150.0, F_HIGH + 150.0)
+        rect = QRectF(drawn[0], drawn[2], drawn[1] - drawn[0], drawn[3] - drawn[2])
+        assert browser.label_from_region(ax.channel, ax.getViewBox(), rect)
+        label = browser.labels.labels[-1]
+        wait_for(lambda: label.outline is not None, client)
+        assert onset - 0.04 <= label.t0 <= label.t1 <= onset + PIP_S + 0.04
+        assert F_LOW - 300.0 <= label.f0 <= label.f1 <= F_HIGH + 300.0
+        assert (label.t1 - label.t0) < (drawn[1] - drawn[0])
+        assert len(label.outline) >= 3
+    labels = [la for la in browser.labels if la.category == CLASS]
     assert len(labels) == 3
-    assert all(la.kind == KIND_SPAN and la.has_frequency() for la in labels)
-    assert len(panel.project.masks) == 3
-    panel.arm(False)
+    assert all(la.kind == KIND_SPAN and la.outline for la in labels)
 
 
 def test_find_more_proposes_the_events_it_was_shown_a_few_of(panel):
@@ -184,7 +178,7 @@ def test_find_more_proposes_the_events_it_was_shown_a_few_of(panel):
 
 def test_review_answers_a_window_and_goes_to_another(panel):
     panel.next_window()
-    assert panel.armed
+    assert panel.browser.region_mode == DataBrowser.MODE_LABEL
     lane = panel._lanes()[0]
     first = panel._view_of(lane)
     before = len(panel.candidates)
@@ -194,7 +188,6 @@ def test_review_answers_a_window_and_goes_to_another(panel):
     assert panel.project.reviewed_rects(panel._paths())
     for _ in range(4):
         panel.accept_view()
-    panel.arm(False)
     labels = [la for la in panel.browser.labels if la.category == CLASS]
     assert len(labels) > 3
 
@@ -259,8 +252,9 @@ def test_a_detector_trained_on_outlines_finds_events_with_outlines(panel):
         bands = [p[1] for p in box.polygon]
         assert box.t0 - 0.05 <= min(times) <= max(times) <= box.t1 + 0.05
         assert box.f0 - 200.0 <= min(bands) <= max(bands) <= box.f1 + 200.0
-    drawn = panel.outlines[0]
-    assert len(drawn.polygons) >= min(len(panel._label_of), 1)
+    # drawn by audian, as the outlines on the labels standing for them
+    shown = [la for la in panel._label_of.values() if la.outline]
+    assert shown
 
 
 def test_guesses_never_reach_the_hand_authored_sidecar(panel):
@@ -271,3 +265,7 @@ def test_guesses_never_reach_the_hand_authored_sidecar(panel):
         categories = {row["category"] for row in csv.DictReader(fp)}
     assert CLASS in categories
     assert not any(name.endswith(FOUND_SUFFIX) for name in categories)
+    # SAM's outlines are kept in the sidecar, with the labels they belong to.
+    read = LabelSet()
+    read.read(sidecar)
+    assert sum(1 for la in read if la.outline) >= 3

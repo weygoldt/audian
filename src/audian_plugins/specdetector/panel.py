@@ -1,22 +1,25 @@
-"""The Detector tab: from a few clicks to a whole recording detected.
+"""The Detector tab: from a few labels to a whole recording detected.
 
 The loop is the whole interface, and it runs top to bottom::
 
-    Label       click events on the spectrogram; SAM outlines each one
+    Label       audian's own label mode (b): pick a category, drag a box.  With SAM
+                on in the Labels tab, it tightens the box and outlines the event
     Find more   candidates, from the examples or from the last trained model
     Review      go through the windows the model is least sure of
     Train       a detector on everything reviewed, in about a minute
     Run         the whole recording, in the background
 
 Everything but the first step can repeat, and labelling goes on while a model trains:
-SAM has a runner process of its own for that reason.  The design and the numbers are
-in ``docs/specdetector-design.md``.
+SAM has a runner process of its own for that reason (`assistant`).  The design and the
+numbers are in ``docs/specdetector-design.md``.
 
 What goes where
 ---------------
 
-A reader's labels are ordinary editable labels, in the current category, in the
-sidecar beside the recording.  A machine's guesses are labels too, in a category of
+This tab has no way of labelling of its own.  A reader's labels are ordinary editable
+labels, drawn with audian's label tool, in the sidecar beside the recording, outlines
+included; every span category with boxes on the spectrogram is a class, unless the
+reader leaves it out under **Classes**.  A machine's guesses are labels too, in a category of
 their own, ``<class> (found)``, so they are drawn and edited by the code that draws
 and edits everything else: there is no second renderer to disagree with the first.
 But they are a loan.  `about_to_flush_labels` takes them back off before the sidecar
@@ -26,6 +29,12 @@ a guess; the candidates live in the project and come back next time.
 A candidate deleted with audian's own label tools counts as rejected, and one moved
 with its grips keeps the new geometry when it is accepted.  So the label store stays
 the truth about what a candidate looks like now (`_sync_from_labels`).
+
+Review shares the lanes with the label tool rather than taking them over.  In label
+mode a click on a candidate rejects it, and every other click and every drag goes on
+to audian, so an event the model missed is labelled the ordinary way.  Enter and
+Shift+Enter finish a view only while candidates are drawn in it; otherwise they are
+not this tab's keys.
 
 Nothing here touches ``browser.data.buffer``, which is a window that moves.  The
 runner opens the recording itself, from the browser's full file list.
@@ -43,21 +52,22 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
+    QMenu,
     QProgressBar,
     QPushButton,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from audian.pluginapi import (
     KIND_SPAN,
+    LABEL_COLUMNS,
     Label,
     LabelSet,
     ParameterGroup,
@@ -75,8 +85,7 @@ from . import review, tiling
 from .boxes import Box, auto_cut, iou_matrix, as_array
 from .client import RunnerClient, RunnerError
 from .dataset import Rect
-from .tools import KEY_HELP, KeyRouter, LaneSurface, OutlineOverlay, PromptOverlay
-from .tools import lane_channels
+from .tools import KEY_HELP, KeyRouter, LaneSurface, lane_channels
 
 #: Appended to a class to name where a machine's guesses go.  Never the class itself:
 #: a reader must always be able to tell their own marks from a model's.
@@ -97,9 +106,6 @@ FOUND_LIMIT = 5000
 #: How long a moved control is left alone before the labels are rewritten.
 DEBOUNCE_MS = 150
 
-#: How long the view has to rest before SAM encodes it ahead of the next click.
-VIEW_REST_MS = 250
-
 #: The slider is logarithmic, because scores that matter range from 0.01 from a
 #: prompted YOLOE to 0.9 from a trained model.
 THRESHOLD_FLOOR = 0.01
@@ -115,11 +121,6 @@ ANSWERED_IOU = 0.5
 #: sweep between clicks.  Each window can take in the tiles either side of it, so this
 #: reads about three times as many tiles.
 SAMPLE_WINDOWS = 100
-
-#: The largest view SAM is asked to read, in samples over all channels: 800 MB of
-#: float32.  Fully zoomed out on an hour of 16 channels at 20 kHz is 1.15e9 samples,
-#: 4.3 GiB before any windows are cut from it, and the job cannot be stopped midway.
-MAX_VIEW_SAMPLES = 2e8
 
 #: How long after a rejection the candidates are written, so that a run of clicks is
 #: one write: with 20000 outlined candidates, a write takes more than a second.
@@ -166,28 +167,14 @@ class SpectrogramDetectorPanel(QWidget):
         #: what Backspace takes back: a rejection, or a whole finished view
         self._last_action: Optional[tuple] = None
 
-        #: the prompt being built
-        self.prompt_ax = None
-        self.points: list = []
-        self.prompt_box: Optional[tuple] = None
-        self.mask: Optional[dict] = None
-        self._generation = 0
-        self._segment_generation = -1
-        self._segment_again = False
-
+        #: one per lane, taking a click on a candidate and nothing else
         self.surfaces: list = []
-        self.prompts: dict = {}
-        self.outlines: list = []
-        self.armed = False
 
-        self.router = KeyRouter(self._keys_live, self.run_key)
+        self.router = KeyRouter(self._claims_key, self.run_key)
         self.batch = RunnerClient(self.weights_dir, self)
-        self.interactive = RunnerClient(self.weights_dir, self)
         self.batch.sigProgress.connect(self._job_progress)
         self.batch.sigResult.connect(self._job_result)
         self.batch.sigError.connect(self._job_error)
-        self.interactive.sigResult.connect(self._segment_result)
-        self.interactive.sigError.connect(self._segment_error)
         self._job_kind = ""
         self._job_id = ""
         #: None chooses from the number of labels; a test sets a small number
@@ -199,16 +186,10 @@ class SpectrogramDetectorPanel(QWidget):
         self._write_timer.setSingleShot(True)
         self._write_timer.setInterval(DEBOUNCE_MS)
         self._write_timer.timeout.connect(self._threshold_settled)
-        self._view_timer = QTimer(self)
-        self._view_timer.setSingleShot(True)
-        self._view_timer.setInterval(VIEW_REST_MS)
-        self._view_timer.timeout.connect(self._view_rested)
         self._persist_timer = QTimer(self)
         self._persist_timer.setSingleShot(True)
         self._persist_timer.setInterval(PERSIST_MS)
         self._persist_timer.timeout.connect(self._persist_candidates)
-        if hasattr(browser, "sigRangesChanged"):
-            browser.sigRangesChanged.connect(self._view_changed)
 
     # ------------------------------------------------------------ the interface
 
@@ -237,7 +218,9 @@ class SpectrogramDetectorPanel(QWidget):
         self.group = group
 
         self.statusw = QLabel(
-            "Turn on Label, and drag a box around a few events to begin.", self
+            "In label mode (b), drag a box around a few events, in the category to "
+            "learn. With SAM on in the Labels tab, it outlines each one.",
+            self,
         )
         self.statusw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         theme.tint(self.statusw, "fg.muted")
@@ -257,36 +240,20 @@ class SpectrogramDetectorPanel(QWidget):
         )
         group.add_span_row(self.fetchw)
 
-        # -- label --
-        self.classw = narrow_combo(QComboBox(self))
-        self.classw.setToolTip("The class new labels go into, and that Find looks for")
-        self.classw.activated.connect(self._class_picked)
-        self.addclassw = self._button("+", "Add a new class", self._add_class_clicked)
-        group.add_row(
-            "Class", "", ParameterGroup.expanding(self.classw), self.addclassw
+        # -- classes: audian's own label categories --
+        self.classesw = QToolButton(self)
+        self.classesw.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.classesw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.classesw.setToolTip(
+            "What the detector learns: every label category with boxes on the "
+            "spectrogram. Untick one to leave it out; its labels are then kept off "
+            "the training images rather than taught as background. New categories "
+            "come from the Labels tab (Ctrl+L)."
         )
-        keys = "\n".join(f"{key}: {meaning}" for key, meaning in KEY_HELP)
-        self.labelw = self._button(
-            "Label",
-            "Drag a box around an event and SAM outlines it. A rough box is enough: "
-            "detectors trained on these did as well as on careful ones. A single "
-            "click only finds the blob under it, so use it to refine an outline.\n"
-            + keys,
-            self._label_toggled,
-            checkable=True,
-        )
-        self.donew = self._button(
-            "View done",
-            "Everything in view is labelled. Accepts the candidates still in it, "
-            "marks the view as reviewed, and goes to the next window.",
-            lambda: self.accept_view(),
-        )
-        self._row(group, self.labelw, self.donew)
-        self.outlinew = QCheckBox("Show outlines", self)
-        self.outlinew.setChecked(True)
-        self.outlinew.setToolTip("Draw SAM's outlines over the boxes they belong to")
-        self.outlinew.toggled.connect(self._outlines_toggled)
-        group.add_span_row(self.outlinew)
+        self.classes_menu = QMenu(self.classesw)
+        self.classes_menu.aboutToShow.connect(self._fill_classes_menu)
+        self.classesw.setMenu(self.classes_menu)
+        group.add_row("Classes", "", ParameterGroup.expanding(self.classesw))
 
         # -- find more --
         self.scopew = narrow_combo(QComboBox(self))
@@ -328,19 +295,28 @@ class SpectrogramDetectorPanel(QWidget):
         )
 
         # -- review --
+        keys = "\n".join(f"{key}: {meaning}" for key, meaning in KEY_HELP)
         self.nextw = self._button(
             "Next window",
-            "Go to the window whose answer would teach the model most, and turn "
-            "on Label.",
+            "Go to the window whose answer would teach the model most, in label "
+            "mode.\n" + keys,
             self.next_window,
         )
+        self.donew = self._button(
+            "View done",
+            "Everything in view is labelled. Accepts the candidates still in it, "
+            "marks the view as reviewed, and goes to the next window. Enter, while "
+            "candidates are drawn in view.",
+            lambda: self.accept_view(),
+        )
+        self._row(group, self.nextw, self.donew)
         self.rejectw = self._button(
             "Reject view",
             "Nothing still proposed in view is an event. Marks the view as "
-            "reviewed and goes on. Shift+Enter with Label on.",
+            "reviewed and goes on. Shift+Enter, while candidates are drawn in view.",
             lambda: self.reject_view(),
         )
-        self._row(group, self.nextw, self.rejectw)
+        group.add_span_row(self.rejectw)
 
         # -- train --
         self.trainonw = narrow_combo(QComboBox(self))
@@ -407,13 +383,32 @@ class SpectrogramDetectorPanel(QWidget):
         if notify is not None:
             notify(level, message)
 
-    def _keys_live(self) -> bool:
+    def _label_mode(self) -> bool:
+        mode = getattr(type(self.browser), "MODE_LABEL", None)
+        return mode is not None and getattr(self.browser, "region_mode", None) == mode
+
+    def _reviewing(self) -> bool:
+        """Whether review has the lanes' clicks and keys: in label mode, in this
+        browser's active window, with this tab still open."""
         return (
-            self.armed
+            bool(self.surfaces)
             and not self._closed
+            and self._label_mode()
             and bool(self.browser.isVisible())
             and QApplication.activeWindow() is self.browser.window()
         )
+
+    def _claims_key(self, name: str) -> bool:
+        """Only the keys review can act on now; everything else stays audian's.
+
+        Backspace zooms back everywhere else in audian, so it is taken only while
+        there is a review step to take back.
+        """
+        if not self._reviewing():
+            return False
+        if name == "backspace":
+            return self._last_action is not None
+        return self._drawn_in_view()
 
     def _paths(self) -> list:
         """The complete ordered file list behind the browser's timeline.
@@ -597,65 +592,114 @@ class SpectrogramDetectorPanel(QWidget):
 
     # ------------------------------------------------------------ classes
 
-    def refresh_classes(self) -> None:
-        """Offer every span category that is the reader's own."""
-        labels = self.browser.labels
-        wanted = self.current_class()
-        names = [
-            c.name
-            for c in labels.lasting_categories
-            if c.kind == KIND_SPAN
-            and not c.name.endswith(FOUND_SUFFIX)
-            and c.name != REGION_CATEGORY
-        ]
-        blocked = self.classw.blockSignals(True)
-        self.classw.clear()
-        for name in names:
-            self.classw.addItem(name, name)
-        index = self.classw.findData(wanted)
-        if index >= 0:
-            self.classw.setCurrentIndex(index)
-        self.classw.blockSignals(blocked)
+    @staticmethod
+    def learnable(labels: LabelSet, name: str) -> bool:
+        """Whether category `name` can be a class at all: a span of the reader's own.
 
-    def current_class(self) -> str:
-        """What a new label is.  The browser's current category, when that can be one:
-        the digit keys and the chips already choose it, and one choice is enough."""
-        current = getattr(self.browser, "current_category", "") or ""
-        category = self.browser.labels.category(current) if current else None
-        if (
+        Not a point, which has no box; not a machine's guesses; not the rectangles a
+        reader marks as labelled throughout, which say where and not what.
+        """
+        category = labels.category(name)
+        return (
             category is not None
             and category.kind == KIND_SPAN
-            and not current.endswith(FOUND_SUFFIX)
-            and current != REGION_CATEGORY
+            and not name.endswith(FOUND_SUFFIX)
+            and name != REGION_CATEGORY
+        )
+
+    def _left_out(self) -> set:
+        return set(self.project.left_out) if self.project is not None else set()
+
+    def _label_sets(self) -> list:
+        """The label store of every recording of the project, this one's live."""
+        project = self.project
+        here = project.recording_key(self._paths())
+        sets = [self.browser.labels]
+        for paths in project.recording_paths():
+            if project.recording_key(paths) == here:
+                continue
+            labels = LabelSet()
+            labels.read(sidecar_path(paths[0]))
+            sets.append(labels)
+        return sets
+
+    def sync_classes(self, label_sets=None) -> list:
+        """Make every category with boxes a class, and return the classes learnt now.
+
+        Classes are appended in the order they are met, never reordered: a trained
+        model's class indices are positions in that list.  A category left out keeps
+        its place, and only stops being taught.
+        """
+        project = self._ensure_project()
+        if project is None:
+            return []
+        left_out = self._left_out()
+        for labels in label_sets if label_sets is not None else self._label_sets():
+            for label in labels:
+                if (
+                    label.has_frequency()
+                    and not label.is_point()
+                    and label.category not in left_out
+                    and self.learnable(labels, label.category)
+                ):
+                    project.class_index(label.category)
+        # The button says what is learnt, and this is where that changes.
+        self.refresh_classes()
+        return [name for name in project.names if name not in left_out]
+
+    def current_class(self) -> str:
+        """The browser's current category, when it is a class Find can look for."""
+        current = getattr(self.browser, "current_category", "") or ""
+        if (
+            current
+            and self.learnable(self.browser.labels, current)
+            and current not in self._left_out()
         ):
             return current
-        return self.classw.currentData() or ""
+        return ""
 
-    def _class_picked(self, *_args) -> None:
-        name = self.classw.currentData()
-        if name:
-            self.browser.current_category = name
-            sync = getattr(self.browser, "sync_category_state", None)
-            if sync is not None:
-                sync()
+    def refresh_classes(self) -> None:
+        """Name what is learnt on the Classes button."""
+        project = self.project
+        if project is None:
+            self.classesw.setText("every category with boxes")
+            return
+        learnt = [name for name in project.names if name not in self._left_out()]
+        text = ", ".join(learnt) if learnt else "none yet: label some events"
+        if project.left_out:
+            text += f" (not {', '.join(project.left_out)})"
+        self.classesw.setText(text)
 
-    def add_class(self, name: str) -> bool:
-        name = (name or "").strip()
-        if not name or name.endswith(FOUND_SUFFIX):
-            return False
+    def _fill_classes_menu(self) -> None:
+        """One tick per category that could be a class."""
+        self.classes_menu.clear()
         labels = self.browser.labels
-        labels.add_category(name, KIND_SPAN)
-        self.browser.current_category = name
-        sync = getattr(self.browser, "sync_category_state", None)
-        if sync is not None:
-            sync()
-        self.refresh_classes()
-        return True
+        left_out = self._left_out()
+        names = [
+            c.name for c in labels.lasting_categories if self.learnable(labels, c.name)
+        ]
+        if self.project is not None:
+            names += [n for n in self.project.names if n not in names]
+        for name in names:
+            action = self.classes_menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name not in left_out)
+            action.toggled.connect(
+                lambda on, name=name: self.set_class_learnt(name, on)
+            )
 
-    def _add_class_clicked(self, *_args) -> None:
-        name, ok = QInputDialog.getText(self, "New class", "Name of the class:")
-        if ok:
-            self.add_class(name)
+    def set_class_learnt(self, name: str, on: bool) -> None:
+        """Teach category `name`, or leave it out."""
+        project = self._ensure_project()
+        if project is None:
+            return
+        left_out = [n for n in project.left_out if n != name]
+        if not on:
+            left_out.append(name)
+        project.left_out = left_out
+        self._save_project()
+        self.refresh_classes()
+        self._update_summary()
 
     def _train_on_picked(self, *_args) -> None:
         project = self._ensure_project()
@@ -666,67 +710,30 @@ class SpectrogramDetectorPanel(QWidget):
     # ------------------------------------------------------------ lanes
 
     def attach(self) -> None:
-        """Put a surface and overlays on every lane, once, as lanes come and go."""
+        """Put a review surface on every lane, once, as lanes come and go."""
         lanes = self._lanes()
         known = {surface.ax for surface in self.surfaces}
-        if known == set(lanes):
+        if known == set(lanes) and (self.surfaces or not lanes):
             return
         self.detach()
         for ax in lanes:
-            surface = LaneSurface(ax, self)
-            surface.arm(self.armed)
-            self.surfaces.append(surface)
-            self.prompts[ax] = PromptOverlay(ax)
-            outline = OutlineOverlay(ax)
-            outline.set_visible(self.outlinew.isChecked())
-            self.outlines.append(outline)
-        self._update_outlines()
+            self.surfaces.append(LaneSurface(ax, self))
+        if self.surfaces:
+            self.router.install()
 
     def detach(self) -> None:
         for surface in self.surfaces:
             surface.detach()
-        for overlay in self.prompts.values():
-            overlay.detach()
-        for overlay in self.outlines:
-            overlay.detach()
         self.surfaces = []
-        self.prompts = {}
-        self.outlines = []
-
-    def _outlines_toggled(self, on: bool) -> None:
-        for overlay in self.outlines:
-            overlay.set_visible(on)
-
-    def _update_outlines(self) -> None:
-        """Every outline that belongs to something still there, on every lane."""
-        if not self.outlines:
-            return
-        polygons = []
-        project = self.project
-        if project is not None and project.masks:
-            for label in self.browser.labels:
-                if not label.has_frequency() or label.is_point():
-                    continue
-                key = project_.mask_key(
-                    label.category, label.t0, label.t1, label.f0, label.f1
-                )
-                polygon = project.masks.get(key)
-                if polygon:
-                    polygons.append(polygon)
-        for uid in self._label_of:
-            box = self.candidates.get(uid)
-            if box is not None and box.polygon:
-                polygons.append(box.polygon)
-        for overlay in self.outlines:
-            overlay.set_outlines(polygons)
+        self.router.uninstall()
 
     def showEvent(self, event):  # noqa: N802 - Qt's spelling
         super().showEvent(event)
         if self._closed:
             return
-        self.refresh_classes()
         self.attach()
         self._restore()
+        self.refresh_classes()
         self._sync_controls()
 
     def _restore(self) -> None:
@@ -743,35 +750,44 @@ class SpectrogramDetectorPanel(QWidget):
         if project is None:
             return
         self.trainonw.setCurrentIndex(1 if project.segment else 0)
+        self._adopt_masks()
         boxes, meta = project.load_candidates(paths)
         if boxes:
             self._set_candidates(boxes, str(meta.get("source", "")))
             self._write_found()
         self._update_summary()
 
-    # ------------------------------------------------------------ labelling
+    def _adopt_masks(self) -> None:
+        """Move outlines kept in the project onto the labels they belong to.
 
-    def _label_toggled(self, *_args) -> None:
-        self.arm(self.labelw.isChecked())
+        Before labels could carry an outline, this tab kept SAM's in the project,
+        keyed by the box.  The labels of this recording take theirs back, so that
+        audian draws them and the sidecar keeps them; a recording not open keeps its
+        own in the project until it is, and `labelled_boxes` still finds them there.
+        """
+        project = self.project
+        if not project.masks:
+            return
+        labels = self.browser.labels
+        adopted = []
+        for label in list(labels):
+            if label.outline or not label.has_frequency() or label.is_point():
+                continue
+            key = project_.mask_key(
+                label.category, label.t0, label.t1, label.f0, label.f1
+            )
+            polygon = project.masks.get(key)
+            if polygon and labels.refine(
+                label, label.t0, label.t1, label.f0, label.f1, polygon
+            ):
+                adopted.append(key)
+        if adopted:
+            for key in adopted:
+                del project.masks[key]
+            self._save_project()
+            self._labels_changed(save=True)
 
-    def arm(self, on: bool) -> None:
-        if on and (self.weights_dir / models_.SAM_WEIGHTS).is_file() is False:
-            self._say(f"{models_.SAM_WEIGHTS} is missing: press Get models.")
-            self.labelw.setChecked(False)
-            self.fetchw.setVisible(True)
-            on = False
-        self.armed = bool(on)
-        self.labelw.setChecked(self.armed)
-        if self.armed:
-            self.attach()
-            self.router.install()
-            self._ensure_project()
-            self._view_timer.start()
-        else:
-            self.router.uninstall()
-            self.clear_prompt()
-        for surface in self.surfaces:
-            surface.arm(self.armed)
+    # ------------------------------------------------------------ review clicks
 
     def _view_of(self, ax) -> tuple:
         """What a lane shows, inside the recording."""
@@ -781,148 +797,19 @@ class SpectrogramDetectorPanel(QWidget):
         f0, f1 = max(f0, 0.0), min(f1, nyquist)
         return float(t0), float(t1), float(f0), float(f1)
 
-    def _channel_request(self, ax) -> dict:
-        channels = lane_channels(ax)
-        if isinstance(channels, int):
-            return {"channels": None, "reduction": str(channels)}
-        return {"channels": channels, "reduction": "mean"}
+    def claims_click(self, ax, t: float, f: float) -> bool:
+        """Whether a plain click here is review's: one on a drawn candidate, in label
+        mode.  Every other click, and every drag, goes on to audian."""
+        return self._reviewing() and self._candidate_at(t, f, ax) is not None
 
-    def lane_clicked(self, ax, t: float, f: float, negative: bool) -> None:
-        """A click: reject the candidate under it, or add a prompt."""
-        if not negative and not self.points and self.prompt_box is None:
-            uid = self._candidate_at(t, f)
-            if uid is not None:
-                self.reject_candidate(uid)
-                return
-        if ax is not self.prompt_ax:
-            self.clear_prompt()
-            self.prompt_ax = ax
-        self.points.append((t, f, not negative))
-        self._prompt_changed()
-
-    def lane_boxed(self, ax, t0: float, t1: float, f0: float, f1: float) -> None:
-        """A drag: box the event, replacing whatever was being built."""
-        self.clear_prompt()
-        self.prompt_ax = ax
-        self.prompt_box = (min(t0, t1), max(t0, t1), min(f0, f1), max(f0, f1))
-        self._prompt_changed()
-
-    def _prompt_changed(self) -> None:
-        self._generation += 1
-        self.mask = None
-        self._draw_prompt()
-        self._request_segment()
-
-    def _color_of_class(self) -> int:
-        return self.browser.labels.color_of(self.current_class())
-
-    def _draw_prompt(self) -> None:
-        overlay = self.prompts.get(self.prompt_ax)
-        if overlay is None:
-            return
-        polygon = None if self.mask is None else self.mask["polygon"]
-        overlay.show(polygon, self.points, self._color_of_class())
-
-    def clear_prompt(self) -> None:
-        self._generation += 1
-        self.points = []
-        self.prompt_box = None
-        self.mask = None
-        for overlay in self.prompts.values():
-            overlay.clear()
-        self.prompt_ax = None
-
-    def _request_segment(self, encode_only: bool = False) -> None:
-        """Ask SAM, or note that it must be asked again once it answers.
-
-        One request in flight and the newest prompt waiting.  A reader clicking
-        faster than SAM answers wants the answer to their last click, not a queue.
-        """
-        if self._closed:
-            return
-        if self.interactive.busy():
-            self._segment_again = not encode_only or self._segment_again
-            return
-        ax = self.prompt_ax
-        if ax is None:
-            lanes = self._shown_lanes()
-            if not lanes:
-                return
-            ax = lanes[0]
-        t0, t1, f0, f1 = self._view_of(ax)
-        if t1 <= t0 or f1 <= f0:
-            return
-        if (t1 - t0) * self._rate() * self._channels() > MAX_VIEW_SAMPLES:
-            if not encode_only:
-                self.clear_prompt()
-                self._say("Zoom in to label: this view is too long for SAM to read.")
-            return
-        request = dict(
-            paths=self._paths(),
-            view=dict(t0=t0, t1=t1, f0=f0, f1=f1),
-            **self._channel_request(ax),
-        )
-        if not encode_only:
-            request["points"] = [list(p) for p in self.points]
-            request["box"] = self.prompt_box
-        self._segment_generation = self._generation
-        self.interactive.submit("segment", **request)
-
-    def _segment_result(self, _job: str, message: dict) -> None:
-        if self._segment_generation == self._generation:
-            mask = message.get("mask")
-            if mask is not None:
-                self.mask = mask
-                self._draw_prompt()
-                self._say(
-                    "Enter accepts. Click to add a part, Ctrl+click to remove one."
-                    if self.armed
-                    else self.statusw.text()
-                )
-        if self._segment_again and not self._closed:
-            self._segment_again = False
-            self._request_segment()
-
-    def _segment_error(self, _job: str, kind: str, text: str) -> None:
-        self._segment_again = False
-        if kind == "cancelled":
-            return
-        self._say(f"SAM failed: {text}")
-        self._notify("error", f"SAM failed: {text}")
-        self.fetchw.setVisible(bool(self._missing_weights()))
-
-    def _view_changed(self, *_args) -> None:
-        if self.armed and not self._closed:
-            self._view_timer.start()
-
-    def _view_rested(self) -> None:
-        """Encode the view ahead of the click, unless there is a click to answer."""
-        if self.armed and not self._closed:
-            self._request_segment(encode_only=not (self.points or self.prompt_box))
-
-    def accept_mask(self) -> bool:
-        """Turn the outline into a label.  False when there is none yet."""
-        if self.mask is None:
+    def candidate_clicked(self, ax, t: float, f: float) -> bool:
+        """Reject the candidate under a click.  False when there is none."""
+        if not self._reviewing():
             return False
-        category = self.current_class()
-        if not category:
-            self._say("Add a class first, with the + button.")
+        uid = self._candidate_at(t, f, ax)
+        if uid is None:
             return False
-        project = self._ensure_project()
-        if project is None:
-            return False
-        t0, t1, f0, f1 = self.mask["box"]
-        channels = lane_channels(self.prompt_ax) if self.prompt_ax is not None else None
-        channel = channels if isinstance(channels, int) else None
-        self.browser.labels.add(Label(category, KIND_SPAN, channel, t0, t1, f0, f1, ""))
-        project.class_index(category)
-        project.masks[project_.mask_key(category, t0, t1, f0, f1)] = self.mask[
-            "polygon"
-        ]
-        self._save_project()
-        self.clear_prompt()
-        self._labels_changed(save=True)
-        self._update_summary()
+        self.reject_candidate(uid)
         return True
 
     def _labels_changed(self, save: bool = False) -> None:
@@ -941,43 +828,15 @@ class SpectrogramDetectorPanel(QWidget):
             schedule = getattr(self.browser, "schedule_label_save", None)
             if schedule is not None:
                 schedule()
-        self._update_outlines()
 
     def run_key(self, name: str) -> None:
+        """A key `_claims_key` gave to review."""
         if name == "enter":
-            # One key, and two things it can mean.  It only finishes a view holding
-            # candidates to answer: an Enter too many after an outline used to mark the
-            # whole view as reviewed, which teaches every unlabelled event in it as
-            # background, in silence.  With nothing proposed, that takes **View done**.
-            if self.mask is not None:
-                self.accept_mask()
-            elif self.points or self.prompt_box:
-                self._say("Waiting for SAM's outline.")
-            elif self._drawn_in_view():
-                self.accept_view()
-            else:
-                self._say(
-                    "Nothing is proposed in view. Press View done when everything "
-                    "here is labelled."
-                )
+            self.accept_view()
         elif name == "shift_enter":
-            if self._drawn_in_view():
-                self.reject_view()
-            else:
-                self._say("Nothing is proposed in view.")
-        elif name == "escape":
-            self.clear_prompt()
+            self.reject_view()
         elif name == "backspace":
-            if self.points:
-                self.points.pop()
-                if self.points:
-                    self._prompt_changed()
-                else:
-                    self.clear_prompt()
-            elif self.prompt_box is not None:
-                self.clear_prompt()
-            else:
-                self.undo_last()
+            self.undo_last()
 
     def _drawn_in_view(self) -> bool:
         rect = self._current_rect()
@@ -995,9 +854,15 @@ class SpectrogramDetectorPanel(QWidget):
 
         A label with no band, a point, is not a box and cannot be trained on as one.
         They are counted, for the reader to be told, and never given an invented band.
+        A category left out is not a class here, and its labels are hidden instead
+        (`_unusable_spans`).
+
+        The outline is the label's own.  One kept in the project from before labels
+        could carry it is still found there, for a recording not yet opened since.
         """
         labels = self.browser.labels if labels is None else labels
         project = self.project
+        left_out = self._left_out()
         boxes, regions, unusable = [], [], 0
         for label in labels:
             if label.category == REGION_CATEGORY:
@@ -1006,12 +871,12 @@ class SpectrogramDetectorPanel(QWidget):
                 continue
             if label.category.endswith(FOUND_SUFFIX):
                 continue
-            if label.category not in project.names:
+            if label.category not in project.names or label.category in left_out:
                 continue
             if label.is_point() or not label.has_frequency():
                 unusable += 1
                 continue
-            polygon = project.masks.get(
+            polygon = label.outline or project.masks.get(
                 project_.mask_key(
                     label.category, label.t0, label.t1, label.f0, label.f1
                 )
@@ -1037,12 +902,21 @@ class SpectrogramDetectorPanel(QWidget):
         is to say a lesson that events are background, so it is kept off the images.
         It has no band, so that means every frequency for as long as it lasts, and a
         point is given a little time either side.
+
+        A label of a category the reader left out is the same lesson: they did not say
+        it is not an event, only that this detector is not to learn it.  It is hidden
+        by its own box.
         """
         labels = self.browser.labels if labels is None else labels
         half = config.tile_s / 32.0
+        left_out = self._left_out()
         spans = []
         for label in labels:
-            if label.category not in self.project.names:
+            if label.category in left_out and self.learnable(labels, label.category):
+                if label.has_frequency() and not label.is_point():
+                    spans.append(Rect(label.t0, label.t1, label.f0, label.f1))
+                    continue
+            elif label.category not in self.project.names:
                 continue
             if label.is_point():
                 spans.append(Rect(label.t0 - half, label.t0 + half))
@@ -1051,13 +925,11 @@ class SpectrogramDetectorPanel(QWidget):
         return spans
 
     def _shots_of_class(self) -> list:
-        """The boxes Find learns from: every class that has some."""
+        """The boxes Find learns from: every class that has some, in this recording."""
         project = self._ensure_project()
         if project is None:
             return []
-        current = self.current_class()
-        if current:
-            project.class_index(current)
+        self.sync_classes([self.browser.labels])
         return self.labelled_boxes()[0]
 
     def _config_for(self, boxes) -> Optional[tiling.SpecConfig]:
@@ -1391,6 +1263,7 @@ class SpectrogramDetectorPanel(QWidget):
                     box.f0,
                     box.f1,
                     f"score={box.score:.4f}",
+                    box.polygon,
                 )
                 labels.add(label)
                 self._label_of[uid] = label
@@ -1425,12 +1298,30 @@ class SpectrogramDetectorPanel(QWidget):
 
     # -- review --
 
-    def _candidate_at(self, t: float, f: float) -> Optional[int]:
-        """The candidate on screen under a click.  The smallest, as with labels."""
+    def _candidate_at(self, t: float, f: float, ax=None) -> Optional[int]:
+        """The candidate drawn under a click on lane `ax`.  The smallest, as with labels.
+
+        Only one drawn on that lane: a candidate of channel 3 is not on channel 5's
+        lane, and a click there is about something else.
+        """
+        channels = None if ax is None else lane_channels(ax)
+        shown = (
+            None
+            if channels is None
+            else {channels}
+            if isinstance(channels, int)
+            else set(channels)
+        )
         best, best_area = None, None
         for uid in self._label_of:
             box = self.candidates.get(uid)
             if box is None:
+                continue
+            if (
+                shown is not None
+                and box.channel is not None
+                and box.channel not in shown
+            ):
                 continue
             if box.t0 <= t <= box.t1 and box.f0 <= f <= box.f1:
                 area = (box.t1 - box.t0) * (box.f1 - box.f0)
@@ -1466,7 +1357,7 @@ class SpectrogramDetectorPanel(QWidget):
             self.candidates[uid] = box
             self._say("Took back the rejection.")
         else:
-            _kind, rect, labels, gone, removed, masks = action
+            _kind, rect, labels, gone, removed = action
             reviewed = self.project.reviewed.get(key, [])
             if rect in reviewed:
                 reviewed.remove(rect)
@@ -1479,8 +1370,6 @@ class SpectrogramDetectorPanel(QWidget):
             for box in gone:
                 if box in rejected:
                     rejected.remove(box)
-            for mask in masks:
-                self.project.masks.pop(mask, None)
             self.candidates.update(removed)
             self._labels_changed(save=True)
             self._say("Took back the last view.")
@@ -1540,24 +1429,16 @@ class SpectrogramDetectorPanel(QWidget):
         rect = self._current_rect()
         if project is None or rect is None:
             return
-        # An outline waiting is an event the reader has just found.  Marking the view
-        # around it without it would teach that very event as background.
-        if self.mask is not None and not self.accept_mask():
-            return
-        if self.points or self.prompt_box is not None:
-            self._say("Waiting for SAM's outline.")
-            return
-        current = self.current_class()
-        if current:
-            project.class_index(current)
-        if not project.names:
-            self._say("Add a class first, with the + button.")
+        # The view is reviewed for the classes known now, which must include a
+        # category the reader started labelling in it a moment ago.
+        if not self.sync_classes([self.browser.labels]):
+            self._say("Label some events first, in label mode (b).")
             return
         if not self._can_finish_view(rect):
             return
         self._sync_from_labels()
         labels = self.browser.labels
-        made, masks, removed = [], [], {}
+        made, removed = [], {}
         for uid, box in list(self.candidates.items()):
             if not self._in_rect(box, rect):
                 continue
@@ -1574,13 +1455,10 @@ class SpectrogramDetectorPanel(QWidget):
                     box.f0,
                     box.f1,
                     f"accepted score={box.score:.4f}",
+                    box.polygon,
                 )
                 labels.add(label)
                 made.append(label)
-                if box.polygon:
-                    key = project_.mask_key(name, box.t0, box.t1, box.f0, box.f1)
-                    project.masks[key] = [list(p) for p in box.polygon]
-                    masks.append(key)
             removed[uid] = self.candidates.pop(uid)
             self._label_of.pop(uid, None)
         # The reader's own act, and too large to take back with audian's one undo: that
@@ -1589,7 +1467,7 @@ class SpectrogramDetectorPanel(QWidget):
         labels.forget_undo()
         reviewed = self._reviewed_rect(rect)
         project.mark_reviewed(self._paths(), reviewed)
-        self._last_action = ("view", reviewed, made, [], removed, masks)
+        self._last_action = ("view", reviewed, made, [], removed)
         self._finish_view(f"Accepted {len(made)}.", save=True)
 
     def reject_view(self) -> None:
@@ -1598,12 +1476,7 @@ class SpectrogramDetectorPanel(QWidget):
         rect = self._current_rect()
         if project is None or rect is None:
             return
-        if self.mask is not None or self.points or self.prompt_box is not None:
-            self._say("Accept or drop the outline first.")
-            return
-        current = self.current_class()
-        if current:
-            project.class_index(current)
+        self.sync_classes([self.browser.labels])
         if not self._can_finish_view(rect):
             return
         self._sync_from_labels()
@@ -1618,11 +1491,10 @@ class SpectrogramDetectorPanel(QWidget):
         project.reject(self._paths(), rejected)
         reviewed = self._reviewed_rect(rect)
         project.mark_reviewed(self._paths(), reviewed)
-        self._last_action = ("view", reviewed, [], rejected, removed, [])
+        self._last_action = ("view", reviewed, [], rejected, removed)
         self._finish_view(f"Rejected {len(rejected)}.", save=False)
 
     def _finish_view(self, message: str, save: bool) -> None:
-        self.clear_prompt()
         self._save_project()
         self._write_found()
         self._persist_timer.start()
@@ -1632,7 +1504,7 @@ class SpectrogramDetectorPanel(QWidget):
         self.next_window(prefix=f"{message} Backspace takes it back.")
 
     def next_window(self, *_args, prefix: str = "") -> None:
-        """Go to the window worth looking at next, and turn on the tool."""
+        """Go to the window worth looking at next, in label mode."""
         project = self._ensure_project()
         if project is None:
             return
@@ -1656,8 +1528,7 @@ class SpectrogramDetectorPanel(QWidget):
             self._say(f"{prefix} Nothing left to review. Train, or Find more.".strip())
             return
         self.goto(window.t0, window.t1, grid.f_low, grid.f_high)
-        if not self.armed:
-            self.arm(True)
+        self.enter_label_mode()
         # What is on screen, and not what the window holds below the cut: a count the
         # reader cannot find on the lane reads as boxes that failed to draw.
         drawn = sum(ids[i] in self._label_of for i in window.candidates)
@@ -1665,6 +1536,23 @@ class SpectrogramDetectorPanel(QWidget):
             f"{prefix} {len(ranked)} windows to go, {drawn} candidates here. "
             "Click what is wrong, then Enter.".strip()
         )
+
+    def enter_label_mode(self) -> None:
+        """Label mode, where a click rejects and a drag labels what was missed.
+
+        Through the window's own Label action when there is one, so that the tool
+        bar, the mode chip and every other tab follow, as when the reader presses b.
+        """
+        if self._label_mode():
+            return
+        acts = getattr(self.browser.window(), "acts", None)
+        action = getattr(acts, "label_region", None)
+        if action is not None:
+            action.trigger()
+        if not self._label_mode():
+            set_mode = getattr(self.browser, "set_region_mode", None)
+            if set_mode is not None:
+                set_mode(type(self.browser).MODE_LABEL)
 
     def goto(self, t0: float, t1: float, f0: float, f1: float) -> None:
         """Show this rectangle."""
@@ -1682,6 +1570,7 @@ class SpectrogramDetectorPanel(QWidget):
     def _update_summary(self) -> None:
         if self.project is not None:
             self.summaryw.setText(self.summary())
+        self.refresh_classes()
 
     def summary(self) -> str:
         project = self.project
@@ -1731,12 +1620,12 @@ class SpectrogramDetectorPanel(QWidget):
         project = self._ensure_project()
         if project is None:
             return
-        current = self.current_class()
-        if current:
-            project.class_index(current)
+        # Every recording's categories, before any box is given a class index.
+        self.sync_classes()
+        self.refresh_classes()
         boxes, _regions, unusable = self.labelled_boxes()
         if not boxes:
-            self._say("Label some events first.")
+            self._say("Label some events first, in label mode (b).")
             return
         config = self._config_for(boxes)
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -1771,7 +1660,11 @@ class SpectrogramDetectorPanel(QWidget):
             else "on its own training data: too little labelled to hold any out"
         )
         counts = message.get("events_per_class") or []
-        missing = [name for name, count in zip(project.names, counts) if not count]
+        missing = [
+            name
+            for name, count in zip(project.names, counts)
+            if not count and name not in self._left_out()
+        ]
         warning = (
             f" No event of {', '.join(missing)} fits its images, so it cannot find "
             "them: they are outside the band or too long for the tiles your first "
@@ -1837,32 +1730,23 @@ class SpectrogramDetectorPanel(QWidget):
         )
         try:
             with open(out, "w", newline="", encoding="utf-8") as fp:
+                # The sidecar's own columns and cells, outline included, so the file
+                # opens as labels anywhere audian reads them.
                 writer = csv.writer(fp)
-                writer.writerow(
-                    [
-                        "category",
-                        "kind",
-                        "channel",
-                        "t_start_s",
-                        "t_end_s",
-                        "f_low_hz",
-                        "f_high_hz",
-                        "note",
-                    ]
-                )
+                writer.writerow(LABEL_COLUMNS)
                 for box in rows:
-                    writer.writerow(
-                        [
-                            self.project.names[box.cls],
-                            KIND_SPAN,
-                            "" if box.channel is None else box.channel,
-                            f"{box.t0:.6f}",
-                            f"{box.t1:.6f}",
-                            f"{box.f0:.3f}",
-                            f"{box.f1:.3f}",
-                            f"score={box.score:.4f}",
-                        ]
+                    label = Label(
+                        self.project.names[box.cls],
+                        KIND_SPAN,
+                        box.channel,
+                        box.t0,
+                        box.t1,
+                        box.f0,
+                        box.f1,
+                        f"score={box.score:.4f}",
+                        box.polygon,
                     )
+                    writer.writerow(label.row())
         except OSError as exc:
             self._notify("error", f"could not write {out}: {exc}")
             return None
@@ -1883,7 +1767,6 @@ class SpectrogramDetectorPanel(QWidget):
             return
         self._closed = True
         self._write_timer.stop()
-        self._view_timer.stop()
         self._persist_timer.stop()
         try:
             self._clear_found()
@@ -1895,13 +1778,10 @@ class SpectrogramDetectorPanel(QWidget):
             self._shutdown()
 
     def _shutdown(self) -> None:
-        self.armed = False
-        self.router.uninstall()
-        for client in (self.batch, self.interactive):
-            try:
-                client.shutdown(500)
-            except Exception:  # noqa: BLE001 - going away regardless
-                pass
+        try:
+            self.batch.shutdown(500)
+        except Exception:  # noqa: BLE001 - going away regardless
+            pass
         self.detach()
 
     def closeEvent(self, event):  # noqa: N802 - Qt's spelling

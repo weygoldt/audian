@@ -1,7 +1,8 @@
 """The Detector tab in the real window, with the runners replaced by a stand-in.
 
-No models and no processes: `FakeClient` records each request and answers when told
-to.  What is asserted is what a reader can see and what is written down: labels in the
+The tab labels nothing itself: events are labelled with audian's own label mode, and
+these tests draw them through the browser as a reader's drag does.  No models and no
+processes: `FakeClient` records each request and answers when told to.  What is asserted is what a reader can see and what is written down: labels in the
 store, the view on the lane, the content of a request, the rows of a CSV.
 """
 
@@ -16,8 +17,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PySide6.QtCore import QObject, QPointF, Qt, Signal
-from PySide6.QtWidgets import QApplication, QLineEdit
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
+from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
@@ -25,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_panelsplitter import RATE, build_window, pump  # noqa: E402
 
-from audian.labels import KIND_POINT, KIND_SPAN, Label  # noqa: E402
+from audian.databrowser import DataBrowser  # noqa: E402
+from audian.labels import KIND_POINT, KIND_SPAN, Label, LabelSet  # noqa: E402
 from audian_plugins import specdetector  # noqa: E402
 from audian_plugins.specdetector import models  # noqa: E402
 from audian_plugins.specdetector import panel as panel_module  # noqa: E402
@@ -35,7 +37,12 @@ from audian_plugins.specdetector.panel import (  # noqa: E402
     FOUND_SUFFIX,
     SpectrogramDetectorPanel,
 )
-from audian_plugins.specdetector.tools import KEY_TABLE, KeyRouter  # noqa: E402
+from audian_plugins.specdetector.assistant import SamAssistant  # noqa: E402
+from audian_plugins.specdetector.tools import (  # noqa: E402
+    KEY_TABLE,
+    KeyRouter,
+    LaneSurface,
+)
 
 CLASS = "pip"
 FOUND = f"{CLASS}{FOUND_SUFFIX}"
@@ -127,6 +134,7 @@ def window(shared_window):
     browser.labels.clear()
     browser.labels.forget_undo()
     yield shared_window
+    shared_window.set_region_mode(DataBrowser.MODE_ZOOM)
     for label in list(browser.plugin_panels):
         browser.close_plugin_panel(label)
     pump(0.05)
@@ -150,14 +158,13 @@ def panel(window):
     assert browser.open_plugin_panel("Spectrogram detector")
     widget = browser.plugin_panels["Spectrogram detector"]
     widget.batch = FakeClient()
-    widget.interactive = FakeClient()
     widget.batch.sigProgress.connect(widget._job_progress)
     widget.batch.sigResult.connect(widget._job_result)
     widget.batch.sigError.connect(widget._job_error)
-    widget.interactive.sigResult.connect(widget._segment_result)
-    widget.interactive.sigError.connect(widget._segment_error)
-    widget._view_timer.stop()
-    widget.add_class(CLASS)
+    # A category of the reader's, chosen as a reader does: on the chips.
+    browser.labels.add_category(CLASS, KIND_SPAN)
+    browser.current_category = CLASS
+    browser.sync_category_state()
     widget._ensure_project()
     widget.show()
     pump(0.2)
@@ -179,6 +186,73 @@ def own_labels(panel):
 def mask(t0=1.0, t1=1.1, f0=500.0, f1=900.0):
     polygon = [[t0, f0], [t1, f0], [t1, f1], [t0, f1]]
     return dict(box=[t0, t1, f0, f1], polygon=polygon, score=0.9, fraction=0.01)
+
+
+def draw(panel, category, t0, t1, f0=500.0, f1=900.0, channel=0):
+    """A label drawn with audian's own tool, on a spectrogram lane: what a drag does."""
+    browser = panel.browser
+    if browser.labels.category(category) is None:
+        browser.labels.add_category(category, KIND_SPAN)
+    ax = panel._lanes()[channel]
+    return browser.store_label(
+        browser.labels.category(category), ax, ax.channel, t0, t1, f0, f1
+    )
+
+
+def reviewing(panel):
+    """Label mode, in an active window: where review takes clicks and keys."""
+    activate(panel)
+    panel.enter_label_mode()
+    pump(0.05)
+    assert panel._reviewing()
+
+
+class FakeClick:
+    """What pyqtgraph hands `mouseClickEvent`, and what the item did with it."""
+
+    def __init__(self, scene_pos, modifiers=Qt.KeyboardModifier.NoModifier):
+        self._pos = scene_pos
+        self._modifiers = modifiers
+        self.accepted = None
+
+    def button(self):
+        return Qt.MouseButton.LeftButton
+
+    def modifiers(self):
+        return self._modifiers
+
+    def scenePos(self):  # noqa: N802 - pyqtgraph's spelling
+        return self._pos
+
+    def accept(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.accepted = False
+
+
+class FakeHover:
+    def __init__(self, scene_pos):
+        self._pos = scene_pos
+        self.clicks = []
+        self.drags = []
+
+    def isExit(self):  # noqa: N802
+        return False
+
+    def scenePos(self):  # noqa: N802
+        return self._pos
+
+    def acceptClicks(self, button):  # noqa: N802
+        self.clicks.append(button)
+
+    def acceptDrags(self, button):  # noqa: N802
+        self.drags.append(button)
+
+
+def scene_at(panel, t, f, channel=0):
+    surface = panel.surfaces[channel]
+    return surface, surface.vb.mapViewToScene(QPointF(t, f))
 
 
 def propose(panel, boxes, source="examples"):
@@ -249,162 +323,156 @@ def test_importing_the_panel_brings_no_model_library_into_audian():
 
 
 def test_nothing_starts_until_it_is_asked_for(panel):
-    """A tab looked at must not start a gigabyte of model."""
-    assert panel.interactive.requests == []
+    """A tab looked at must not start a gigabyte of model, nor SAM its own."""
     assert panel.batch.requests == []
+    assert panel.browser.label_assistant.client is None
 
 
-# ------------------------------------------------------------------- labelling
+# ------------------------------------------------------------------- labelling is audian's
 
 
-def test_a_click_asks_sam_in_seconds_and_hertz_about_what_is_in_view(panel):
-    panel.goto(1.0, 3.0, 200.0, 3000.0)
-    pump(0.2)
-    panel.lane_clicked(lane(panel), 1.5, 700.0, False)
-    op, request = panel.interactive.requests[-1]
-    assert op == "segment"
-    assert request["points"] == [[1.5, 700.0, True]]
-    assert request["box"] is None
-    assert request["view"]["t0"] == pytest.approx(1.0)
-    assert request["view"]["t1"] == pytest.approx(3.0)
-    assert request["view"]["f0"] == pytest.approx(200.0)
-    assert request["view"]["f1"] == pytest.approx(3000.0)
-    assert request["paths"] == panel._paths()
+def test_the_tab_has_no_label_tool_of_its_own(panel):
+    """It had its own Label button, class picker and prompts: a second way to label."""
+    texts = {button.text() for button in panel.findChildren(QPushButton)}
+    assert "Label" not in texts and "+" not in texts
+    status = SpectrogramDetectorPanel(panel.browser).statusw.text()
+    assert "label mode (b)" in status and "SAM" in status
 
 
-def test_a_ctrl_click_says_not_this(panel):
-    panel.lane_clicked(lane(panel), 1.5, 700.0, False)
-    panel.interactive.answer(mask=mask())
-    panel.lane_clicked(lane(panel), 1.6, 700.0, True)
-    assert panel.interactive.requests[-1][1]["points"][-1] == [1.6, 700.0, False]
+def test_a_label_drawn_with_audians_tool_is_a_class_and_an_example(panel):
+    """The point of tying the two together: no label of the reader's is ignored."""
+    draw(panel, "rise", 2.0, 2.4, 600.0, 800.0)
+    add_label(panel)
+    panel.find_more()
+    shots = panel.batch.requests[-1][1]["shots"]
+    names = panel.project.names
+    assert sorted((names[s["cls"]], s["t0"]) for s in shots) == [
+        (CLASS, 1.0),
+        ("rise", 2.0),
+    ]
+    # and the tab says so at once, not after the next training
+    assert panel.classesw.text() == f"{CLASS}, rise"
 
 
-def test_a_drag_asks_with_its_box_the_right_way_round_whichever_way_it_was_made(panel):
-    panel.lane_boxed(lane(panel), 2.0, 1.0, 900.0, 500.0)
-    assert panel.interactive.requests[-1][1]["box"] == (1.0, 2.0, 500.0, 900.0)
+def test_training_learns_every_boxed_category_and_nothing_else(panel):
+    labels = panel.browser.labels
+    add_label(panel)
+    draw(panel, "rise", 2.0, 2.4, 600.0, 800.0)
+    labels.add_category("click", KIND_POINT)
+    labels.add(Label("click", KIND_POINT, None, 3.0, None, 700.0, 700.0))
+    labels.add_category("note", KIND_SPAN)
+    labels.add(Label("note", KIND_SPAN, None, 4.0, 4.5))  # on a trace: no band
+    labels.add_category(panel_module.REGION_CATEGORY, KIND_SPAN)
+    labels.add(
+        Label(panel_module.REGION_CATEGORY, KIND_SPAN, None, 7.0, 8.0, 0.0, 4000.0)
+    )
+    panel.train()
+    request = panel.batch.requests[-1][1]
+    assert request["names"] == [CLASS, "rise"]
+    boxes = request["sources"][0]["boxes"]
+    assert sorted((b["cls"], b["t0"]) for b in boxes) == [(0, 1.0), (1, 2.0)]
 
 
-def test_a_single_channel_lane_asks_for_that_channel(panel):
-    panel.lane_clicked(panel._lanes()[1], 1.5, 700.0, False)
-    request = panel.interactive.requests[-1][1]
-    assert request["reduction"] == str(panel._lanes()[1].channel)
-    assert request["channels"] is None
+def test_a_category_left_out_is_not_learnt_and_its_labels_are_hidden(panel):
+    """Not taught as background either: the reader did not say it is no event."""
+    add_label(panel)
+    draw(panel, "noise", 2.0, 2.4, 100.0, 300.0)
+    panel.set_class_learnt("noise", False)
+    panel.train()
+    request = panel.batch.requests[-1][1]
+    assert request["names"] == [CLASS]
+    source = request["sources"][0]
+    assert [b["t0"] for b in source["boxes"]] == [1.0]
+    assert [2.0, 2.4, 100.0, 300.0] in [hidden[:4] for hidden in source["hidden"]]
+    assert "not noise" in panel.classesw.text()
+    assert project_.Project.open(panel.project.directory).left_out == ["noise"]
+    panel.set_class_learnt("noise", True)
+    panel.train()
+    assert panel.batch.requests[-1][1]["names"] == [CLASS, "noise"]
 
 
-def test_the_answer_is_drawn_where_it_says(panel):
-    ax = lane(panel)
-    panel.goto(0.0, 3.0, 200.0, 3000.0)
-    panel.lane_clicked(ax, 1.05, 700.0, False)
-    panel.interactive.answer(mask=mask())
-    pump(0.05)
-    outline = panel.prompts[ax].outline
-    assert outline.isVisible()
-    bounds = outline.path().boundingRect()
-    assert bounds.left() == pytest.approx(1.0)
-    assert bounds.right() == pytest.approx(1.1)
-    assert bounds.top() == pytest.approx(500.0)
-    assert bounds.bottom() == pytest.approx(900.0)
+def test_the_classes_menu_offers_the_readers_span_categories(panel):
+    prepared(panel)
+    labels = panel.browser.labels
+    labels.add_category("click", KIND_POINT)
+    labels.add_category(panel_module.REGION_CATEGORY, KIND_SPAN)
+    labels.add_category("rise", KIND_SPAN)
+    panel._fill_classes_menu()
+    actions = {action.text(): action for action in panel.classes_menu.actions()}
+    assert CLASS in actions and "rise" in actions
+    assert not {"click", panel_module.REGION_CATEGORY, FOUND} & set(actions)
+    assert all(action.isChecked() for action in actions.values())
+    actions["rise"].setChecked(False)
+    assert panel.project.left_out == ["rise"]
 
 
-def test_a_reader_clicking_faster_than_sam_gets_the_answer_to_the_last_click(panel):
-    ax = lane(panel)
-    panel.lane_clicked(ax, 1.0, 700.0, False)
-    panel.lane_clicked(ax, 1.1, 700.0, False)
-    panel.lane_clicked(ax, 1.2, 700.0, False)
-    assert len(panel.interactive.requests) == 1  # one in flight, not a queue
-    panel.interactive.answer(mask=mask())
-    # That answer was to an old prompt: nothing to accept yet, and nothing drawn.
-    assert panel.mask is None
-    assert len(panel.interactive.requests) == 2
-    assert panel.interactive.requests[-1][1]["points"][-1][0] == 1.2
-    panel.interactive.answer(mask=mask(1.2, 1.3))
-    assert panel.mask["box"][0] == 1.2
+def test_an_outline_on_a_label_is_what_training_draws(panel):
+    shape = ((1.0, 500.0), (1.1, 500.0), (1.05, 900.0))
+    labels = panel.browser.labels
+    labels.add(Label(CLASS, KIND_SPAN, None, 1.0, 1.1, 500.0, 900.0, "", shape))
+    panel.trainonw.setCurrentIndex(1)
+    panel.train()
+    source = panel.batch.requests[-1][1]["sources"][0]
+    assert source["boxes"][0]["polygon"] == [list(p) for p in shape]
 
 
-def test_enter_turns_the_outline_into_a_label_and_keeps_the_outline(panel):
-    ax = lane(panel)
-    panel.lane_clicked(ax, 1.05, 700.0, False)
-    panel.interactive.answer(mask=mask())
-    panel.run_key("enter")
-    labels = own_labels(panel)
-    assert len(labels) == 1
-    assert labels[0].t0 == 1.0 and labels[0].t1 == 1.1
-    assert labels[0].f0 == 500.0 and labels[0].f1 == 900.0
-    assert labels[0].kind == KIND_SPAN
-    assert labels[0].channel == ax.channel
+def test_outlines_kept_in_the_project_move_onto_their_labels(panel):
+    """Before labels carried outlines, this tab kept SAM's in the project."""
+    label = add_label(panel)
+    polygon = [[1.0, 500.0], [1.1, 500.0], [1.05, 900.0]]
     key = project_.mask_key(CLASS, 1.0, 1.1, 500.0, 900.0)
-    assert panel.project.masks[key] == mask()["polygon"]
-    assert panel.prompts[ax].outline.path().isEmpty()
-    assert panel.points == []
-
-
-def test_what_has_been_done_is_on_the_panel_and_not_in_a_tooltip(panel):
-    panel.lane_clicked(lane(panel), 1.05, 700.0, False)
-    panel.interactive.answer(mask=mask())
-    panel.run_key("enter")
-    assert panel.summaryw.text().startswith("1 labels, 0 views reviewed, 0 rejected")
-
-
-def test_the_tool_says_to_drag_first(panel):
-    """A rough drag trains as well as a careful box; one click trains far worse."""
-    assert panel.labelw.toolTip().startswith("Drag a box")
-    assert "drag a box" in SpectrogramDetectorPanel(panel.browser).statusw.text()
-
-
-def test_the_new_label_survives_the_sidecar_and_finds_its_outline_again(panel):
-    panel.lane_clicked(lane(panel), 1.05, 700.0, False)
-    panel.interactive.answer(mask=mask(1.0000012, 1.1000034, 500.0004, 900.0006))
-    panel.run_key("enter")
-    panel.browser.save_labels()
-    from audian.labels import LabelSet
-
+    elsewhere = project_.mask_key(CLASS, 3.0, 3.1, 500.0, 900.0)
+    panel.project.masks.update({key: polygon, elsewhere: polygon})
+    panel._adopt_masks()
+    assert label.outline == tuple(map(tuple, polygon))
+    assert list(panel.project.masks) == [elsewhere]
+    panel.browser.flush_labels()
     read = LabelSet()
     read.read(panel.browser.labels_path())
-    label = next(iter(read))
-    key = project_.mask_key(label.category, label.t0, label.t1, label.f0, label.f1)
-    assert key in panel.project.masks
+    assert [la.outline for la in read] == [tuple(map(tuple, polygon))]
+    # A recording not opened since keeps finding its own in the project.
+    other = LabelSet()
+    other.add_category(CLASS, KIND_SPAN)
+    other.add(Label(CLASS, KIND_SPAN, None, 3.0, 3.1, 500.0, 900.0))
+    boxes, _regions, _unusable = panel.labelled_boxes(other)
+    assert boxes[0].polygon == tuple(map(tuple, polygon))
 
 
-def test_enter_before_sam_has_answered_labels_nothing(panel):
-    panel.lane_clicked(lane(panel), 1.05, 700.0, False)
-    panel.run_key("enter")
-    assert own_labels(panel) == []
-    assert panel.project.reviewed_rects(panel._paths()) == []
-
-
-def test_escape_drops_the_outline_and_labels_nothing(panel):
-    ax = lane(panel)
-    panel.lane_clicked(ax, 1.05, 700.0, False)
-    panel.interactive.answer(mask=mask())
-    panel.run_key("escape")
-    assert panel.mask is None and panel.points == []
-    assert panel.prompts[ax].outline.path().isEmpty()
-    assert own_labels(panel) == []
-
-
-def test_backspace_takes_back_the_last_click(panel):
-    ax = lane(panel)
-    panel.lane_clicked(ax, 1.0, 700.0, False)
-    panel.interactive.answer(mask=mask())
-    panel.lane_clicked(ax, 1.1, 700.0, True)
-    panel.interactive.answer(mask=mask())
-    panel.run_key("backspace")
-    assert panel.points == [(1.0, 700.0, True)]
-    assert panel.interactive.requests[-1][1]["points"] == [[1.0, 700.0, True]]
-
-
-def test_sam_failing_says_so(panel):
-    panel.lane_clicked(lane(panel), 1.05, 700.0, False)
-    panel.interactive.fail("exception", "no such tensor")
-    assert "no such tensor" in panel.statusw.text()
-
-
-def test_a_missing_model_says_which_and_how_to_get_it(panel):
-    (panel.weights_dir / models.SAM_WEIGHTS).unlink()
-    panel.arm(True)
-    assert not panel.armed
-    assert models.SAM_WEIGHTS in panel.statusw.text()
-    assert "Get models" in panel.statusw.text()
+def test_sam_is_offered_in_the_labels_tab_and_answers_a_drag_there(window):
+    """The whole path: a drag in label mode, the SAM runner asked, the label outlined."""
+    browser = window.browser()
+    assistant = browser.label_assistant
+    assert isinstance(assistant, SamAssistant)
+    assert browser.label_assistw.text() == "SAM"
+    assert not browser.label_assistw.isHidden()
+    client = FakeClient()
+    assistant.client, assistant._wired = client, False
+    browser.labels.add_category(CLASS, KIND_SPAN)
+    browser.current_category = CLASS
+    browser.sync_category_state()
+    on = browser.label_assist_on
+    browser.set_label_assist(True)
+    window.set_region_mode(DataBrowser.MODE_LABEL)
+    browser.assist_timer.stop()
+    try:
+        ax = browser.spectrogram_axes()[0]
+        rect = QRectF(1.0, 500.0, 0.2, 400.0)
+        assert browser.label_from_region(ax.channel, ax.getViewBox(), rect)
+        op, request = client.requests[-1]
+        assert op == "segment"
+        assert request["box"] == [1.0, 1.2, 500.0, 900.0]
+        assert request["reduction"] == str(ax.channel)
+        label = browser.labels.labels[-1]
+        assert (label.t0, label.t1) == (1.0, 1.2)
+        answer = mask(1.02, 1.15, 550.0, 850.0)
+        client.answer(mask=answer)
+        assert (label.t0, label.t1, label.f0, label.f1) == (1.02, 1.15, 550.0, 850.0)
+        assert label.outline == tuple(map(tuple, answer["polygon"]))
+    finally:
+        assistant.client, assistant._wired = None, False
+        assistant.waiting.clear()
+        assistant.asked = None
+        browser.set_label_assist(on)
 
 
 def test_get_models_asks_for_only_what_is_missing(panel):
@@ -536,8 +604,9 @@ def test_an_exhaustively_labelled_region_counts_as_reviewed(panel):
     boxes, regions, _ = panel.labelled_boxes()
     assert regions == [Rect(7.0, 8.0, 0.0, 4000.0)]
     assert [b.t0 for b in boxes] == [7.2]
-    panel.refresh_classes()
-    assert panel.classw.findData(panel_module.REGION_CATEGORY) < 0
+    panel._fill_classes_menu()
+    names = {action.text() for action in panel.classes_menu.actions()}
+    assert panel_module.REGION_CATEGORY not in names
 
 
 def test_a_huge_result_is_capped_on_screen_and_says_so(panel, monkeypatch):
@@ -564,32 +633,71 @@ def prepared(panel, boxes=None):
 
 def test_clicking_a_candidate_rejects_it_and_remembers_why(panel):
     prepared(panel)
-    panel.lane_clicked(lane(panel), 5.05, 700.0, False)
+    reviewing(panel)
+    assert panel.candidate_clicked(lane(panel), 5.05, 700.0)
     assert len(found_labels(panel)) == 2
     assert 5.0 not in {la.t0 for la in found_labels(panel)}
     assert panel.project.rejected_boxes(panel._paths())[0].t0 == 5.0
-    assert panel.interactive.requests == []  # it was an answer, not a prompt
 
 
 def test_backspace_takes_back_a_rejection(panel):
     prepared(panel)
-    panel.lane_clicked(lane(panel), 5.05, 700.0, False)
+    reviewing(panel)
+    panel.candidate_clicked(lane(panel), 5.05, 700.0)
     panel.run_key("backspace")
     assert 5.0 in {la.t0 for la in found_labels(panel)}
     assert panel.project.rejected_boxes(panel._paths()) == []
 
 
-def test_clicking_beside_a_candidate_is_a_prompt(panel):
+def test_a_click_beside_a_candidate_or_outside_label_mode_is_audians(panel):
+    """Review takes a click on a candidate in label mode, and nothing else."""
     prepared(panel)
-    panel.lane_clicked(lane(panel), 8.0, 700.0, False)
-    assert panel.points == [(8.0, 700.0, True)]
+    reviewing(panel)
+    assert not panel.claims_click(lane(panel), 8.0, 700.0)
+    assert not panel.candidate_clicked(lane(panel), 8.0, 700.0)
+    assert panel.claims_click(lane(panel), 5.05, 700.0)
+    panel.window().set_region_mode(DataBrowser.MODE_ZOOM)
+    assert not panel.claims_click(lane(panel), 5.05, 700.0)
+    assert not panel.candidate_clicked(lane(panel), 5.05, 700.0)
     assert len(found_labels(panel)) == 3
 
 
-def test_a_ctrl_click_on_a_candidate_is_a_prompt_and_rejects_nothing(panel):
+def test_the_surface_takes_a_plain_click_on_a_candidate_and_never_a_drag(panel):
+    """A drag must reach audian's rubber band, which labels what the model missed;
+    Ctrl+click must reach audian's label picking."""
+    assert not hasattr(LaneSurface, "mouseDragEvent")
     prepared(panel)
-    panel.lane_clicked(lane(panel), 5.05, 700.0, True)
+    reviewing(panel)
+    panel.goto(4.0, 6.0, 200.0, 3000.0)
+    pump(0.1)
+    surface, at = scene_at(panel, 5.05, 700.0)
+    hover = FakeHover(at)
+    surface.hoverEvent(hover)
+    assert hover.clicks == [Qt.MouseButton.LeftButton] and hover.drags == []
+    _surface, beside = scene_at(panel, 4.5, 700.0)
+    hover = FakeHover(beside)
+    surface.hoverEvent(hover)
+    assert hover.clicks == [] and hover.drags == []
+    ctrl = FakeClick(at, Qt.KeyboardModifier.ControlModifier)
+    surface.mouseClickEvent(ctrl)
+    assert ctrl.accepted is False
     assert len(found_labels(panel)) == 3
+    plain = FakeClick(at)
+    surface.mouseClickEvent(plain)
+    assert plain.accepted is True
+    assert 5.0 not in {la.t0 for la in found_labels(panel)}
+
+
+def test_a_click_on_another_channels_lane_rejects_nothing(panel):
+    prepared(panel, [box(5.0, 0.9)])
+    uid = next(iter(panel.candidates))
+    panel.candidates[uid] = panel.candidates[uid]._replace(channel=1)
+    panel._write_found()
+    reviewing(panel)
+    lanes = {ax.channel: ax for ax in panel._lanes()}
+    assert not panel.claims_click(lanes[0], 5.05, 700.0)
+    assert not panel.candidate_clicked(lanes[0], 5.05, 700.0)
+    assert panel.claims_click(lanes[1], 5.05, 700.0)
 
 
 def test_a_candidate_deleted_with_the_ordinary_tools_counts_as_rejected(panel):
@@ -654,12 +762,14 @@ def test_rejecting_a_view_teaches_what_is_shown_as_not_events(panel):
     assert panel.project.reviewed_rects(panel._paths())
 
 
-def test_next_window_shows_a_window_holding_candidates_and_turns_on_the_tool(panel):
+def test_next_window_shows_a_window_holding_candidates_in_label_mode(panel):
+    """Through the window's own Label action, so the tool bar says so too."""
     prepared(panel)
+    panel.window().set_region_mode(DataBrowser.MODE_ZOOM)
     panel.next_window()
     pump(0.1)
-    assert panel.armed
-    assert all(surface.armed for surface in panel.surfaces)
+    assert panel.browser.region_mode == DataBrowser.MODE_LABEL
+    assert panel.window().acts.label_region.isChecked()
     t0, t1, _f0, _f1 = panel._view_of(lane(panel))
     assert any(t0 <= b.t0 and b.t1 <= t1 for b in panel.candidates.values())
     assert "windows to go" in panel.statusw.text()
@@ -687,12 +797,10 @@ def test_when_nothing_is_left_it_says_what_comes_next(panel):
 
 def test_training_sends_labels_outlines_reviews_and_rejections(panel):
     prepared(panel)
-    panel.project.masks[project_.mask_key(CLASS, 1.0, 1.1, 500.0, 900.0)] = [
-        [1.0, 500.0],
-        [1.1, 500.0],
-        [1.05, 900.0],
-    ]
-    panel.lane_clicked(lane(panel), 12.05, 700.0, False)  # rejected
+    shape = ((1.0, 500.0), (1.1, 500.0), (1.05, 900.0))
+    own_labels(panel)[0].outline = shape
+    reviewing(panel)
+    panel.candidate_clicked(lane(panel), 12.05, 700.0)  # rejected
     panel.project.mark_reviewed(panel._paths(), Rect(1.0, 2.0, 0.0, 4000.0))
     panel.trainonw.setCurrentIndex(1)
     panel.train()
@@ -717,17 +825,6 @@ def test_a_label_with_no_band_is_left_out_and_the_reader_is_told(panel):
     source = panel.batch.requests[-1][1]["sources"][0]
     assert [b["t0"] for b in source["boxes"]] == [1.0]
     assert "2 labels have no band" in panel.statusw.text()
-
-
-def test_categories_that_are_not_classes_are_not_trained_on(panel):
-    add_label(panel)
-    labels = panel.browser.labels
-    labels.add_category("noise", KIND_SPAN)
-    labels.add(Label("noise", KIND_SPAN, None, 2.0, 2.1, 100.0, 200.0))
-    panel.train()
-    assert panel.batch.requests[-1][1]["names"] == [CLASS]
-    source = panel.batch.requests[-1][1]["sources"][0]
-    assert len(source["boxes"]) == 1
 
 
 def test_training_with_nothing_labelled_says_so(panel):
@@ -819,7 +916,8 @@ def test_a_run_writes_results_in_the_project_and_shows_them(panel):
 
 
 def test_export_writes_what_is_above_the_cut_in_label_columns(panel):
-    prepared(panel, [box(5.0, 0.9), box(6.0, 0.05)])
+    shape = ((5.0, 500.0), (5.05, 900.0), (5.1, 500.0))
+    prepared(panel, [box(5.0, 0.9, polygon=shape), box(6.0, 0.05)])
     panel.threshold = 0.5
     panel._write_found()
     out = panel.export_csv()
@@ -830,10 +928,9 @@ def test_export_writes_what_is_above_the_cut_in_label_columns(panel):
     assert rows[0]["category"] == CLASS
     assert float(rows[0]["t_start_s"]) == 5.0
     assert rows[0]["note"] == "score=0.9000"
-    from audian.labels import LabelSet
-
     read = LabelSet()
     assert read.read(out).read == 1
+    assert read.labels[0].outline == shape
 
 
 # ------------------------------------------------------------------- going away
@@ -853,7 +950,6 @@ def test_guesses_never_reach_the_sidecar_and_come_back_next_time(panel, window):
 
     fresh = SpectrogramDetectorPanel(browser, weights_dir=panel.weights_dir)
     fresh.batch = FakeClient()
-    fresh.interactive = FakeClient()
     fresh._restore()
     assert sorted(b.t0 for b in fresh.candidates.values()) == [5.0, 5.2, 12.0]
     assert len(found_labels(fresh)) == 3
@@ -879,37 +975,32 @@ def test_a_project_that_cannot_be_read_is_left_alone_and_reported(window):
 
 
 def test_closing_the_tab_stops_the_runners_and_the_keys(panel):
-    batch, interactive = panel.batch, panel.interactive
     closed = []
-    batch.shutdown = lambda *_a: closed.append("batch")
-    interactive.shutdown = lambda *_a: closed.append("interactive")
-    panel.arm(True)
+    panel.batch.shutdown = lambda *_a: closed.append("batch")
     ax = lane(panel)
     surface = panel.surfaces[0]
-    outline = panel.prompts[ax].outline
     assert surface.parentItem() is ax.getViewBox()
-    assert outline.scene() is ax.scene()
+    assert panel.router._installed
     panel.close()
-    assert sorted(closed) == ["batch", "interactive"]
-    assert panel.armed is False
+    assert closed == ["batch"]
     assert not panel.router._installed
     # Taken off the lane, and not only out of the panel's own lists.
     assert surface.parentItem() is None
-    assert outline.scene() is None
 
 
 # ------------------------------------------------------------------- what review found
 
 
-def test_one_enter_too_many_marks_nothing(panel):
+def test_enter_with_no_candidate_in_view_is_not_reviews(panel):
     """It marked the whole view, teaching every unlabelled event as background."""
-    panel.lane_clicked(lane(panel), 1.05, 700.0, False)
-    panel.interactive.answer(mask=mask())
-    panel.run_key("enter")
-    assert own_labels(panel)
-    panel.run_key("enter")
-    assert panel.project.reviewed_rects(panel._paths()) == []
-    assert "View done" in panel.statusw.text()
+    prepared(panel)
+    reviewing(panel)
+    panel.goto(7.0, 9.0, 200.0, 3000.0)
+    pump(0.1)
+    assert panel.router.command_for(enter_key()) is None
+    panel.goto(4.0, 6.0, 200.0, 3000.0)
+    pump(0.1)
+    assert panel.router.command_for(enter_key()) == "enter"
 
 
 def test_enter_finishes_a_view_holding_candidates(panel):
@@ -921,43 +1012,34 @@ def test_enter_finishes_a_view_holding_candidates(panel):
     assert sorted(la.t0 for la in own_labels(panel)) == [1.0, 5.0, 5.2]
 
 
-def test_view_done_keeps_the_outline_waiting(panel):
-    """It marked the view around an event just outlined, and taught it as background."""
-    prepared(panel)
-    panel.goto(7.0, 9.0, 200.0, 3000.0)
-    pump(0.1)
-    panel.lane_clicked(lane(panel), 8.0, 700.0, False)
-    panel.interactive.answer(mask=mask(8.0, 8.1))
-    panel.accept_view()
-    assert 8.0 in {la.t0 for la in own_labels(panel)}
-    assert panel.project.reviewed_rects(panel._paths())
-
-
-def test_rejecting_a_view_with_an_outline_waiting_is_refused(panel):
+def test_an_event_labelled_during_review_is_kept_and_its_class_reviewed(panel):
+    """A miss is labelled the ordinary way, and the view is then reviewed for it too."""
     prepared(panel)
     panel.goto(4.0, 6.0, 200.0, 3000.0)
     pump(0.1)
-    panel.lane_clicked(lane(panel), 4.5, 700.0, False)
-    panel.interactive.answer(mask=mask(4.5, 4.6))
-    panel.reject_view()
-    assert panel.project.reviewed_rects(panel._paths()) == []
-    assert "outline" in panel.statusw.text()
+    draw(panel, CLASS, 4.4, 4.5)
+    draw(panel, "rise", 5.5, 5.9, 600.0, 800.0)
+    panel.accept_view()
+    assert 4.4 in {la.t0 for la in own_labels(panel)}
+    assert panel.project.names == [CLASS, "rise"]
+    assert panel.project.reviewed_rects(panel._paths())[0].classes == (0, 1)
 
 
 def test_a_finished_view_can_be_taken_back_whole(panel):
     polygon = ((5.0, 500.0), (5.1, 500.0), (5.05, 900.0))
     prepared(panel, [box(5.0, 0.9, polygon=polygon), box(12.0, 0.7)])
+    # drawn by audian with its outline, as any label's
+    assert next(la for la in found_labels(panel) if la.t0 == 5.0).outline == polygon
     panel.goto(4.0, 6.0, 200.0, 3000.0)
     pump(0.1)
     panel.accept_view()
-    assert 5.0 in {la.t0 for la in own_labels(panel)}
-    assert panel.project.masks
+    accepted = next(la for la in own_labels(panel) if la.t0 == 5.0)
+    assert accepted.outline == polygon
     panel.run_key("backspace")
     assert [la.t0 for la in own_labels(panel)] == [1.0]
     assert panel.project.reviewed_rects(panel._paths()) == []
     assert sorted(b.t0 for b in panel.candidates.values()) == [5.0, 12.0]
     assert 5.0 in {la.t0 for la in found_labels(panel)}
-    assert panel.project.masks == {}
 
 
 def test_a_rejected_view_can_be_taken_back_whole(panel):
@@ -996,9 +1078,7 @@ def test_an_open_label_table_is_told_when_the_store_is_rewritten(panel, monkeypa
 def test_guesses_never_reach_the_sidecar_on_any_autosave(panel):
     """The clean-up on closing was the only protection, and a crash skipped it."""
     prepared(panel)
-    panel.lane_clicked(lane(panel), 8.0, 700.0, False)
-    panel.interactive.answer(mask=mask(8.0, 8.1))
-    panel.run_key("enter")
+    draw(panel, CLASS, 8.0, 8.1)
     panel.browser.save_labels()
     assert found_labels(panel)
     with open(panel.browser.labels_path(), newline="") as fp:
@@ -1026,8 +1106,8 @@ def test_a_guess_category_is_offered_nowhere(panel, window):
     assert FOUND not in {c.name for c in browser.labels.lasting_categories}
     browser.sync_category_state()
     assert browser.current_category != FOUND
-    panel.refresh_classes()
-    assert panel.classw.findData(FOUND) < 0
+    panel._fill_classes_menu()
+    assert FOUND not in {action.text() for action in panel.classes_menu.actions()}
 
 
 def test_settings_keep_only_the_readers_categories(panel, window, monkeypatch):
@@ -1089,7 +1169,7 @@ def test_a_new_class_is_still_proposed_inside_a_view_reviewed_for_the_old_one(pa
     panel.goto(4.0, 6.0, 200.0, 3000.0)
     pump(0.1)
     panel.accept_view()
-    panel.add_class("rise")
+    panel.browser.labels.add_category("rise", KIND_SPAN)
     panel.project.class_index("rise")
     propose(panel, [box(5.5, 0.9, cls=1), box(5.5, 0.9, cls=0)], "model")
     assert [b.cls for b in panel.candidates.values()] == [1]
@@ -1181,14 +1261,6 @@ def test_every_fifth_window_is_a_blind_one(panel):
     assert not any(abs(t0 - c) < 1e-6 for c in chosen)
 
 
-def test_a_view_too_long_for_sam_says_zoom_in_and_asks_nothing(panel, monkeypatch):
-    monkeypatch.setattr(panel_module, "MAX_VIEW_SAMPLES", 10.0)
-    panel.lane_clicked(lane(panel), 1.05, 700.0, False)
-    assert panel.interactive.requests == []
-    assert "Zoom in" in panel.statusw.text()
-    assert panel.points == []
-
-
 def test_a_recording_can_join_another_project_and_train_with_it(panel, tmp_path):
     """A detector generalises from the recordings it has seen."""
     from audian.labels import LabelSet
@@ -1248,8 +1320,9 @@ def test_rejecting_many_candidates_writes_them_once(panel, monkeypatch):
         "save_candidates",
         lambda *a, **k: writes.append(1),
     )
+    reviewing(panel)
     for i in range(5):
-        panel.lane_clicked(lane(panel), 5.05 + i, 700.0, False)
+        panel.candidate_clicked(lane(panel), 5.05 + i, 700.0)
     assert writes == []
     panel._persist_timer.stop()
     panel.about_to_flush_labels()
@@ -1259,23 +1332,29 @@ def test_rejecting_many_candidates_writes_them_once(panel, monkeypatch):
 # ------------------------------------------------------------------- keys
 
 
-def test_the_keys_are_claimed_only_while_the_tool_is_on(panel):
-    from PySide6.QtGui import QKeyEvent
+def test_the_keys_are_claimed_only_while_review_can_act_on_them(panel):
+    """Enter, Shift+Enter and Backspace stay audian's whenever review has no use for
+    them: outside label mode, with no candidate in view, with nothing to take back."""
     from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
 
-    press = QKeyEvent(
-        QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
-    )
+    def key(code, modifiers=Qt.KeyboardModifier.NoModifier):
+        return QKeyEvent(QEvent.Type.KeyPress, code, modifiers)
+
+    prepared(panel)
     activate(panel)
-    panel.armed = False
-    assert panel.router.command_for(press) is None
-    panel.armed = True
-    assert panel.router.command_for(press) == "enter"
-    shifted = QKeyEvent(
-        QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.ShiftModifier
-    )
+    panel.goto(4.0, 6.0, 200.0, 3000.0)
+    pump(0.1)
+    panel.window().set_region_mode(DataBrowser.MODE_ZOOM)
+    assert panel.router.command_for(key(Qt.Key.Key_Return)) is None
+    panel.enter_label_mode()
+    assert panel.router.command_for(key(Qt.Key.Key_Return)) == "enter"
+    shifted = key(Qt.Key.Key_Return, Qt.KeyboardModifier.ShiftModifier)
     assert panel.router.command_for(shifted) == "shift_enter"
-    panel.armed = False
+    assert panel.router.command_for(key(Qt.Key.Key_Backspace)) is None
+    panel.candidate_clicked(lane(panel), 5.05, 700.0)
+    assert panel.router.command_for(key(Qt.Key.Key_Backspace)) == "backspace"
+    assert panel.router.command_for(key(Qt.Key.Key_Escape)) is None
 
 
 def activate(panel):
@@ -1299,8 +1378,10 @@ def test_enter_in_a_dialog_belongs_to_the_dialog(panel):
     """It was taken from every window, and finished a view behind the dialog."""
     from PySide6.QtWidgets import QDialog
 
-    activate(panel)
-    panel.armed = True
+    prepared(panel)
+    reviewing(panel)
+    panel.goto(4.0, 6.0, 200.0, 3000.0)
+    pump(0.1)
     assert panel.router.command_for(enter_key()) == "enter"
     dialog = QDialog(panel.window())
     dialog.setModal(True)
@@ -1310,15 +1391,16 @@ def test_enter_in_a_dialog_belongs_to_the_dialog(panel):
     dialog.close()
     dialog.deleteLater()
     pump(0.05)
-    panel.armed = False
 
 
 def test_enter_in_an_open_menu_belongs_to_the_menu(panel):
     from PySide6.QtCore import QPoint
     from PySide6.QtWidgets import QMenu
 
-    activate(panel)
-    panel.armed = True
+    prepared(panel)
+    reviewing(panel)
+    panel.goto(4.0, 6.0, 200.0, 3000.0)
+    pump(0.1)
     menu = QMenu(panel.window())
     menu.addAction("something")
     menu.popup(QPoint(10, 10))
@@ -1328,14 +1410,15 @@ def test_enter_in_an_open_menu_belongs_to_the_menu(panel):
     menu.close()
     menu.deleteLater()
     pump(0.05)
-    panel.armed = False
 
 
 def test_keys_do_nothing_when_another_window_is_active(panel):
     from PySide6.QtWidgets import QWidget
 
-    activate(panel)
-    panel.armed = True
+    prepared(panel)
+    reviewing(panel)
+    panel.goto(4.0, 6.0, 200.0, 3000.0)
+    pump(0.1)
     other = QWidget()
     other.show()
     other.activateWindow()
@@ -1345,7 +1428,6 @@ def test_keys_do_nothing_when_another_window_is_active(panel):
     other.close()
     other.deleteLater()
     pump(0.05)
-    panel.armed = False
 
 
 def test_the_digit_keys_stay_audians(panel):
@@ -1364,7 +1446,7 @@ def test_a_key_typed_in_a_text_field_is_not_taken(panel):
     pump(0.05)
     if QApplication.focusWidget() is not field:
         pytest.skip("no focus in this environment")
-    router = KeyRouter(lambda: True, lambda name: None)
+    router = KeyRouter(lambda name: True, lambda name: None)
     press = QKeyEvent(
         QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
     )
@@ -1372,13 +1454,15 @@ def test_a_key_typed_in_a_text_field_is_not_taken(panel):
     field.deleteLater()
 
 
-def test_the_current_category_is_what_a_new_label_is(panel):
-    """The digit keys and the chips choose it; the panel follows."""
-    panel.add_class("rise")
+def test_find_looks_for_the_category_on_the_chips(panel):
+    """The digit keys and the chips choose it; the panel follows, unless it is left out."""
+    panel.browser.labels.add_category("rise", KIND_SPAN)
     panel.browser.current_category = CLASS
     assert panel.current_class() == CLASS
     panel.browser.current_category = "rise"
     assert panel.current_class() == "rise"
+    panel.set_class_learnt("rise", False)
+    assert panel.current_class() == ""
 
 
 def test_a_machines_category_is_never_what_a_new_label_is(panel):

@@ -336,6 +336,7 @@ def write_detections(path, boxes, names, suffix: str) -> None:
                 "f_low_hz",
                 "f_high_hz",
                 "note",
+                "outline",
             ]
         )
         for box in boxes:
@@ -349,8 +350,16 @@ def write_detections(path, boxes, names, suffix: str) -> None:
                     f"{box.f0:.3f}",
                     f"{box.f1:.3f}",
                     f"score={box.score:.4f}",
+                    outline_cell(box.polygon),
                 ]
             )
+
+
+def outline_cell(polygon) -> str:
+    """An outline as the sidecar writes one: ``t f`` pairs joined by ``;``."""
+    if not polygon:
+        return ""
+    return ";".join(f"{float(t):.6f} {float(f):.3f}" for t, f in polygon)
 
 
 def _box_json(box) -> dict:

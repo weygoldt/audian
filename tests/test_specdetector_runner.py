@@ -212,9 +212,13 @@ def test_detections_are_written_as_labels_audian_can_read(tmp_path):
     from audian.labels import LabelSet
 
     path = tmp_path / "found.csv"
+    shape = ((1.0, 100.0), (1.125, 200.0), (1.25, 100.0))
     modelrunner.write_detections(
         path,
-        [Box(1.0, 1.25, 100.0, 200.0, 1, 0.75), Box(2.0, 2.5, 300.0, 400.0, 0, 0.5)],
+        [
+            Box(1.0, 1.25, 100.0, 200.0, 1, 0.75, polygon=shape),
+            Box(2.0, 2.5, 300.0, 400.0, 0, 0.5),
+        ],
         ["chirp", "rise"],
         " (found)",
     )
@@ -227,6 +231,9 @@ def test_detections_are_written_as_labels_audian_can_read(tmp_path):
     assert first.f0 == 100.0 and first.f1 == 200.0
     assert first.note == "score=0.7500"
     assert first.channel is None
+    # A segmenting model's outline arrives as the label's, as SAM's would.
+    assert first.outline == shape
+    assert read.labels[1].outline is None
 
 
 def test_a_split_recording_opens_as_audian_opens_it(tmp_path):

@@ -8,9 +8,14 @@ is already a training example.  The project holds only what a label cannot say:
 * **reviewed rectangles**: which parts of which recording somebody has finished with,
   so that everything unboxed in them may be taught as background;
 * **rejections**: what a model proposed and a person said no to, the hard negatives;
-* **outlines**: SAM's masks, keyed by the box they belong to;
+* **classes**: the categories learnt, in the order of a model's class indices, and
+  those the reader left out;
 * **candidates**: the last proposals, so a queue survives closing the window;
 * the spectrogram **config** the models were trained on, and which model is active.
+
+Outlines are on the labels themselves now, in the sidecar.  `masks` holds the ones
+kept here before labels could carry them, keyed by their box, until each recording is
+opened and its labels take theirs back.
 
 The directory defaults to ``<stem>-specdetector`` beside the recording, like
 wavetracker's results.  A project can take in further recordings, whose labels stay in
@@ -120,13 +125,15 @@ class Project:
     #: class names, in the order of a model's class indices.  Append only: inserting
     #: one would silently renumber every trained model's classes.
     names: list = field(default_factory=list)
+    #: categories the reader does not want learnt, whatever is labelled in them
+    left_out: list = field(default_factory=list)
     #: each recording is the ordered list of its files, relative to `directory`
     recordings: list = field(default_factory=list)
     #: recording key -> rectangles
     reviewed: dict = field(default_factory=dict)
     #: recording key -> rejected boxes
     rejected: dict = field(default_factory=dict)
-    #: `mask_key` -> outline ``[[t, f], ...]``
+    #: `mask_key` -> outline ``[[t, f], ...]``, from before labels had outlines
     masks: dict = field(default_factory=dict)
     #: the active model's weights, relative to `directory`
     model: Optional[str] = None
@@ -221,6 +228,7 @@ class Project:
             "version": VERSION,
             "config": None if self.config is None else self.config.as_dict(),
             "names": list(self.names),
+            "left_out": list(self.left_out),
             "recordings": self.recordings,
             "reviewed": {
                 key: [list(rect) for rect in rects]
@@ -280,6 +288,7 @@ class Project:
         config = values.get("config")
         project.config = None if config is None else tiling.SpecConfig.from_dict(config)
         project.names = list(values.get("names", []))
+        project.left_out = [str(name) for name in values.get("left_out", [])]
         project.recordings = [list(files) for files in values.get("recordings", [])]
         project.reviewed = {
             key: [rect_from_list(rect) for rect in rects]

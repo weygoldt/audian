@@ -4,9 +4,9 @@
     uv run python scripts/specdetector_shots.py --weights DIR [--out docs/shots]
 
 Walks the loop on a copy of the cricket recording, offscreen, from empty settings,
-with the real panel and the real models: a click outlined by SAM, candidates proposed
-from the hand labels in `tests/data/gryllus-fewshot-labels.csv`, and a window under
-review.  It stops with an error if a step produces nothing to show.  `--weights` is a
+with the real panel and the real models: a box dragged in audian's label mode and
+outlined by SAM, candidates proposed from the hand labels in
+`tests/data/gryllus-fewshot-labels.csv`, and a window under review.  It stops with an error if a step produces nothing to show.  `--weights` is a
 directory holding the model files, which the panel's Get models button would download.
 """
 
@@ -120,25 +120,36 @@ def main() -> None:
     pump(app, 0.5)
     args.out.mkdir(parents=True, exist_ok=True)
 
-    # A click, and SAM's answer.
+    # A rough box dragged in audian's own label mode, which SAM tightens and outlines.
+    from audian.databrowser import DataBrowser
+    from PySide6.QtCore import QRectF
+
+    assistant = browser.label_assistant
+    if assistant is None:
+        raise SystemExit("no label assistant: the plugin did not offer SAM")
     panel.goto(8.8, 9.3, 0.0, 24000.0)
     pump(app, 1.0)
-    panel.arm(True)
+    window.set_region_mode(DataBrowser.MODE_LABEL)
+    browser.set_label_assist(True)
     pump(app, 0.5)
-    wait(app, panel.interactive, "encoding the view")
+    wait(app, assistant._client(), "encoding the view")
     ax = panel._lanes()[0]
-    panel.lane_clicked(ax, 9.02, 9000.0, False)
-    pump(app, 0.2)
-    wait(app, panel.interactive, "SAM")
-    if panel.mask is None:
+    browser.label_from_region(
+        ax.channel, ax.getViewBox(), QRectF(8.95, 1500.0, 0.12, 15500.0)
+    )
+    label = browser.labels.labels[-1]
+    end = time.monotonic() + 300.0
+    while label.outline is None and (assistant.waiting or assistant._client().busy()):
+        if time.monotonic() > end:
+            raise SystemExit("timed out waiting for SAM")
+        pump(app, 0.05)
+    if label.outline is None:
         raise SystemExit("SAM answered with no outline")
     pump(app, 0.3)
     save(window, args.out, "specdetector-label")
-    panel.clear_prompt()
 
-    # What the examples find, with no training.
+    # What the examples find, with no training.  The labels' category is the class.
     panel.scopew.setCurrentIndex(panel.scopew.findData("all"))
-    panel.project.class_index(CLASS)
     panel.find_more()
     pump(app, 0.2)
     wait(app, panel.batch, "Find more")

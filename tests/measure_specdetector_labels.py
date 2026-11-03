@@ -62,7 +62,7 @@ def main() -> None:
     pump(1.0)
     browser.open_plugin_panel("Spectrogram detector")
     widget = browser.plugin_panels["Spectrogram detector"]
-    widget.add_class("x")
+    browser.labels.add_category("x")
     widget._ensure_project()
     widget.project.class_index("x")
     panel_module.FOUND_LIMIT = 10**9
