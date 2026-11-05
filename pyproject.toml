@@ -22,6 +22,7 @@ dependencies = [
   # interpreter, so the two live in one environment and nothing has to be
   # discovered.  Never its `gui` extra: that is PyQt5.
   "wavetracker",
+  "ultralytics>=8.4.198",
 ]
 # What wavetracker, installed alongside, supports: 3.11 through 3.14.
 requires-python = ">=3.11,<3.15"
@@ -86,7 +87,7 @@ audian = ["fonts/*.ttf", "fonts/*.txt"]
 # callables audian binds:
 #
 #     [project.entry-points."audian.plugins"]
-#     eventdetection = "audian_plugins.eventdetection"
+#     specdetector = "audian_plugins.specdetector"
 #
 # Nothing is declared here, because everything under `src/audian_plugins`
 # is found by walking that package -- the entry point is what a plugin
@@ -102,6 +103,7 @@ pythonpath = "src"
 markers = [
   "slow: builds widgets on the QApplication.  Applied by conftest to every test that uses the `app` fixture; deselect with -m 'not slow'.",
   "realdata: needs recordings that are not in this repository.  Deselected by default; run with --realdata.",
+  "realmodels: needs model weights, and trains.  Deselected by default; run with --realmodels, with AUDIAN_TEST_WEIGHTS naming the directory that holds them.",
 ]
 
 [tool.coverage.run]

@@ -577,3 +577,150 @@ closer together than one screen pixel are collapsed to the one line they would
 have painted anyway. A session with half a million rows costs a few
 milliseconds a frame, and the count in a chip's tool tip is always the number
 of rows the layer holds, not the number of marks on screen.
+
+## Detecting events on the spectrogram
+
+**Plugins > Spectrogram detector** opens the **Detector** tab. It trains a
+detector on the recording you have open, from the events you label. The first
+time, press **Get models**, which downloads about 120 MB once. After that it
+needs no network.
+
+### Label a few events
+
+Label the way you always do: press <kbd>b</kbd> for label mode, pick a category
+on the chips or with its digit key, and drag a box around an event on the
+spectrogram. The tab has no labelling of its own. Every span category with boxes
+on the spectrogram is something the detector learns; **Classes** names them, and
+unticking one there leaves it out. New categories come from the Labels tab
+(<kbd>Ctrl</kbd>+<kbd>L</kbd>).
+
+With the plugin installed, the Labels tab has a **SAM** toggle beside **Show**.
+With it on, the box you drag is stored at once, as always, and SAM then tightens
+it onto the event and draws the event's outline inside it, a moment later. There
+is nothing to accept. <kbd>Shift</kbd>+<kbd>B</kbd> still takes the whole label
+back, and if you move or resize the box before SAM answers, your box is kept.
+Turn SAM off to keep exactly the box you drew; the choice is remembered.
+
+The outline is part of the label: it is drawn over the spectrogram and kept in the
+sidecar, in a column of its own. Moving or resizing a box with its grips drops the
+outline, since the box it described is gone. The first time SAM is used, the
+Detector tab's **Get models** must have fetched it.
+
+A rough box is enough: detectors trained from SAM's answers to rough drags did
+about as well as those trained from careful boxes.
+
+### Find more, and review
+
+**Find more** proposes more events: from your labels with no training if you have
+no model yet, otherwise with the last model you trained. With no model it uses
+YOLOE, prompted with your boxes; SAM plays no part in it. **Look in** sets how much
+of the recording it searches. Candidates appear as labels in `<class> (found)`.
+Move **Cut** to show more or fewer of them, which runs nothing.
+
+**Next window** goes to the window worth looking at next, in label mode. Click
+the wrong candidates to reject them, drag around any event that was missed, as you
+would label anything, then press <kbd>Enter</kbd>. Everything still shown in view
+is accepted, and the view counts as reviewed. You can also resize a candidate
+with its grips, or delete it with the ordinary label tools, which counts as a
+rejection.
+
+| Input | What it does |
+| --- | --- |
+| Click a candidate | Reject it |
+| Drag | Label an event the model missed, as always in label mode |
+| <kbd>Enter</kbd> | Accept what is left in view and go to the next window |
+| <kbd>Shift</kbd>+<kbd>Enter</kbd> | Reject what is left in view and go to the next window |
+| <kbd>Backspace</kbd> | Take back the last rejection or finished view |
+
+These belong to review only in label mode, while candidates are drawn in view,
+and never while you are typing in a field. Otherwise a click, <kbd>Enter</kbd>
+and <kbd>Backspace</kbd> do what they do everywhere else in Audian.
+
+Candidates never stay in the sidecar: they are taken off when you close the file,
+and come back next time.
+
+Proposals from your labels alone are a quick first look and are often rough. A
+detector trained on the same few labels is usually much better, so train early.
+
+### Train and run
+
+**Train** builds images from what you have looked at and trains a detector, in
+about a minute or two on a GPU. The tab reports the score and says what it was
+measured on. With few labels there is nothing to hold out, so the score is a
+training score and the tab says so.
+
+While it trains, a curve under **Train** shows each epoch: the loss on the
+training tiles and on the held-out ones, and mAP50 on the held-out ones. A dashed
+line marks the epoch kept as the model, which is the best one and not always the
+last. Each model keeps its curve, and opening the tab later shows the curve of the
+model in use. YOLO updates its weights once per 64 tiles, so with fewer training
+tiles than that the held-out numbers stay flat for an epoch or more between
+updates; the steps in the curve are real.
+
+**Training settings** opens the choices behind it:
+
+| Setting | What it does |
+| --- | --- |
+| Model | YOLO26 from n, the smallest and fastest, to x. Any but n is downloaded the first time, with **Get models** |
+| Start | **Pretrained** starts from YOLO's own weights. **Last model** goes on from the model this project trained last, to fine-tune it on what you labelled since |
+| Epochs | How many passes over the training tiles. **Auto** trains for a fixed number of batches (400), whatever the number of labels |
+| Patience | With **Stop early**, training stops after this many epochs without a better held-out score. **Auto** is a third of the epochs, at least 10 |
+| Batch | Tiles per batch. **Auto** is 16 on a GPU and 4 on the CPU |
+| Hold out | How often a labelled stretch of time is set aside to judge the model by |
+
+Early stopping and an honest score both need something held out. A stretch is
+everything within four tiles' length of other labels, so all the labels of one
+view are one stretch. **1 stretch in 5** needs labels in five separate places,
+**1 in 2** needs two. With nothing held out, training runs all its epochs, and
+the tab says how far apart to label to change that. The settings are kept with
+the project.
+
+Only what you have looked at reaches the model. That means your reviewed views, a
+small area around each label, and each rejection. Everything else on an image is
+masked, so an event you have not labelled is never taught as background. The more
+windows you finish, the more the detector learns about what is not an event.
+
+A label with no frequency band, such as one drawn on a trace, cannot be trained
+on, and the tab says how many it left out. Labels in a category called
+`labeled_region` count as exhaustively reviewed rectangles.
+
+**Preview**, beside **Find more**, runs the trained model on what is on screen and
+nothing else: a look at how it does here, in seconds. Its answers replace the
+candidates in view, the rest stay, and you can review them as any others.
+
+**Run** detects over the whole recording in the background. All scores go to a CSV
+in the project, and what is above the cut is shown as candidates. **Export CSV**
+writes what is above the cut beside the recording as `<stem>-detections.csv`.
+
+**Learn** chooses whether the detector draws boxes or outlines.
+
+### Where things are kept
+
+The project is the directory `<stem>-specdetector` beside the recording. It holds
+what you reviewed and rejected, which categories you left out, the last
+candidates, the trained models and the results. Your labels and their outlines
+stay in the sidecar beside the recording. Each model's `model.json` records the image settings it
+needs.
+
+Delete the `dataset` directory inside a model freely: it is rebuilt from the
+sources. Deleting the project forgets the review and the models, and your labels
+stay.
+
+### What it cannot do
+
+- It works on the spectrogram only. An event must show there, and needs a box with
+  a band.
+- The picture it trains on is its own and ignores audian's spectrogram settings and
+  denoisers. An event you can only see after denoising may not show to the model.
+- Its image settings are chosen from your first labels, so classes much shorter
+  than those are small on the image.
+- A detector generalises from the recordings it has seen. One trained on a single
+  recording does much worse on others, as
+  [`specdetector-design.md`](specdetector-design.md) shows. To learn from several,
+  open each and press **Add to a project** with the first one's project directory.
+  Each recording keeps its own labels and review, and **Train** learns from them
+  all.
+- Scores do not mean the same on a recording the model has not seen. Trained on three
+  recordings and run on a fourth, the best **Cut** ranged from 0.01 to 0.49, so the
+  default lost half the chirps of one and let in false ones on another. Look through
+  a stretch of a new recording and move **Cut** before believing a count.

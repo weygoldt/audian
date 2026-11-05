@@ -65,26 +65,40 @@ cheat sheet. Almost everything has one.
 - **A navigator strip** showing the whole recording, so you always know where
   you are in it.
 - **Plugins** for computed traces, analyses and side panels — including a
-  few-shot event detector and a wavetracker front end for tracking and
-  correcting electric fish, both of which ship with it.
+  spectrogram event detector you train on your own recording and a wavetracker
+  front end for tracking and correcting electric fish, both of which ship with
+  it.
 
 ## Detecting events
 
-Mark a handful of examples, and let it find the rest.
+Drag a box around a few events, train a detector in about a minute, and run it
+over the whole recording.
 
-![detector](docs/shots/detector.png)
+![detector](docs/shots/specdetector-review.png)
 
-**Plugins → Event detection → Normalised cross-correlation** learns templates
-from the events you labelled and matches them against the recording, on the
-spectrogram or on the waveform. Tune it on the window in front of you, then
-run it over the whole file in the background. Results arrive as ordinary
-editable labels — correct them, delete them, save them — and as a CSV beside
-the recording.
+**Plugins → Spectrogram detector** is the whole loop, in one tab:
 
-The defaults were measured rather than guessed: which way of combining several
-examples survives noise, why the threshold is relative to the noise floor
-instead of an absolute score, and where the whole approach stops working. See
-[`engine.py`](src/audian_plugins/eventdetection/engine.py) for the numbers.
+1. **Label.** With audian's own label tool: <kbd>b</kbd>, a category, a rough
+   box. Turn on **SAM** in the Labels tab and it tightens the box onto the event
+   and outlines it.
+2. **Find more.** See right away what your labels suggest, with no training.
+3. **Review.** It takes you to the windows it is least sure of. Click what is
+   wrong, drag what was missed, and press <kbd>Enter</kbd>.
+4. **Train.** A YOLO detector on everything you have looked at. Events you have
+   not labelled are masked out, so they are never taught as background. Choose
+   the model size, epochs, early stopping and what is held out; watch the curve;
+   **Preview** what it finds on screen.
+5. **Run.** The whole recording, in the background. Results arrive as ordinary
+   editable labels, with every score in a CSV.
+
+![training](docs/shots/specdetector-train.png)
+
+Your labels stay in the ordinary sidecar beside the recording. The models run in
+a process of their own and need a network once, for **Get models**.
+
+Every default was measured on hand-labelled recordings. The numbers, including
+where it does not work, are in the
+[design document](docs/specdetector-design.md).
 
 ## Tracking electric fish with wavetracker
 

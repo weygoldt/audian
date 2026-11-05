@@ -955,6 +955,65 @@ def test_a_plugin_panel_lands_in_its_own_region(app, tmp_path):
     assert region.tabPosition() == QTabWidget.TabPosition.North
 
 
+#: What the spectrogram detector says after a training, 259 characters: four lines at
+#: the 80 characters a word-wrapped label asks for, so it asks for that width.
+TRAINED = (
+    "Trained in 30 s, 40 of 40 epochs, best at 40. Early stopping was off, with "
+    "nothing held out: label in at least 5 places more than 10 s apart, or hold out "
+    "more often. mAP50 0.995 on its own training data, which flatters it. Preview "
+    "shows how it does on screen."
+)
+
+
+def test_a_plugin_gets_the_height_it_needs_at_the_width_it_has(app):
+    """A word-wrapped label hints at the width it would like, not the one it gets.
+
+    So a plugin's size hint counts a long status line as if the panel were wider
+    than it is.  Held to that hint, the detector's tab lost 64 px from
+    its last rows, and its training curve's caption was laid over the chart.  The
+    probe is that shape: the status, and a chart of a fixed height under it, in the
+    side panel at the 343 px it had in the screenshots.  The status is there twice:
+    in the theme's font its 259 characters run to four lines at 80, and in this
+    bare panel's they do not, and the label then asks for half that width instead.
+    """
+    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+    from audian.plugins import Plugins
+
+    def audian_probe_panel(browser):
+        widget = QWidget()
+        box = QVBoxLayout(widget)
+        widget.status = QLabel(f"{TRAINED} {TRAINED}")
+        widget.status.setWordWrap(True)
+        widget.chart = QWidget()
+        widget.chart.setFixedHeight(120)
+        box.addWidget(widget.status)
+        box.addWidget(widget.chart)
+        return "Probe", widget
+
+    plugins = Plugins()
+    plugins.add_panel_factory(audian_probe_panel)
+    view = _StubPanelBrowser()
+    plugins.setup_panels(view)
+    assert view.open_plugin_panel("Probe")
+    widget = view.plugin_panels["Probe"]
+    view.parambar.resize(343, 600)
+    view.parambar.show()
+    pump(0.2)
+    try:
+        status, chart = widget.status, widget.chart
+        # the case: the label's hint is shorter than it is at the width it got
+        assert status.sizeHint().height() < status.heightForWidth(status.width())
+        assert status.height() >= status.heightForWidth(status.width())
+        assert chart.geometry().top() > status.geometry().bottom()
+        assert widget.rect().contains(chart.geometry())
+    finally:
+        view.close_plugin_panel("Probe")
+        view.parambar.close()
+        view.parambar.deleteLater()
+        pump(0.2)
+
+
 def test_a_broken_plugin_panel_does_not_take_the_window_down(app):
     """A plugin is somebody else's code on the reader's own path.
 

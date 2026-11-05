@@ -41,7 +41,7 @@ from audioio import bext_history_str, add_history
 from thunderlab.datawriter import available_formats, write_data
 from thunderlab.tabledata import TableData
 
-from . import denoise, smoothing, theme
+from . import denoise, labelassist, smoothing, theme
 from .data import Data
 from .panels import Panel, Panels, peaking_colormap
 from .panelsplitter import PanelSplitter
@@ -1034,11 +1034,22 @@ class SidePanel(QWidget):
         top made both worse.  Scrolled, the region can be any size the
         reader drags it to and the plugin keeps the height it asked for.
 
-        The same shape `ParameterTabs` uses for the built-in pages: a
-        stretch under the widget so the layout has somewhere to put slack
-        rather than spreading it through the rows, and a **Fixed** vertical
-        policy on the widget itself, which is what makes the content keep
-        its size hint and the viewport scroll instead of compressing it.
+        A stretch under the widget gives the layout somewhere to put slack
+        rather than spreading it through the rows, and a **Minimum** vertical
+        policy on the widget makes its size hint a floor, so the viewport
+        scrolls instead of compressing it.
+
+        A floor and not, as the built-in pages have it, a fixed height: a
+        plugin's hint is not the height it needs.  A layout sums its rows'
+        hints, and a word-wrapped label hints at the width it would like --
+        up to 80 characters once its text runs to four lines at that width
+        -- so a long status line is counted as if the panel were wider than
+        it is.  Fixed, that hint was a ceiling as well: measured
+        after a detector's training, the content was laid out 1078 px tall
+        at the panel's 333 px, the plugin was held to its 1014 px hint, and
+        the 64 px went missing from its last rows, which laid the training
+        curve's caption over its chart.  With a floor, the column asks the
+        plugin for its height at the width it has, and gets it.
         Horizontal scrolling stays off: the panel has a 220 px floor and a
         control that needs more width than that is a control to rebuild,
         not one to put on a slider.
@@ -1049,7 +1060,7 @@ class SidePanel(QWidget):
         column.setSpacing(0)
         column.addWidget(widget, 0)
         column.addStretch(1)
-        widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         area = QScrollArea(self)
         area.setWidgetResizable(True)
         area.setFrameShape(QFrame.Shape.NoFrame)
@@ -1549,8 +1560,15 @@ class DataBrowser(QWidget):
     #: vocabulary is the other way round -- the same reader labels many
     #: recordings with the same words.
     LABEL_SETTING = "labels"
-    #: Bumped when the shape of that value changes.
+    #: Bumped when the shape of that value changes.  Not for ``assist``, which
+    #: was added beside the categories: a build that does not know it reads
+    #: everything it knows unchanged, and one that does treats it as absent.
     LABEL_SETTING_VERSION = 1
+    #: How long the view rests in label mode before a label assistant is told
+    #: the reader may draw there.  The same 250 ms the detector waited before
+    #: encoding a view for SAM, which on this desktop took 38 ms on the GPU and
+    #: 564 ms on four CPU threads -- so it starts before most drags end.
+    ASSIST_REST_MS = 250
 
     #: Key the parameter bar's open tab is saved under, by group NAME.  Not
     #: by index: the Filter group only exists when the data has a filtered
@@ -2061,6 +2079,18 @@ class DataBrowser(QWidget):
         self.label_showw = None
         self.label_statusw = None
         self.label_undow = None
+        #: What helps draw a label, when a plugin offers one (`labelassist`),
+        #: the toggle that names it, and whether the reader has it on.  On
+        #: unless they turned it off: a reader who installed it wants it.
+        self.label_assistant = None
+        self.label_assistw = None
+        self.label_assist_row = None
+        self.label_assist_on = self.label_settings().get("assist") is not False
+        #: the view has to rest this long before the assistant is told about it
+        self.assist_timer = QTimer(self)
+        self.assist_timer.setSingleShot(True)
+        self.assist_timer.setInterval(DataBrowser.ASSIST_REST_MS)
+        self.assist_timer.timeout.connect(self.prepare_label_assistant)
         #: a sidecar write is queued for the end of this turn of the loop
         self.label_save_pending = False
         #: the last message `save_labels` produced, so the bar can say
@@ -2848,8 +2878,12 @@ class DataBrowser(QWidget):
 
         # The plugins' own side-panel tabs, last: they are handed a browser
         # that is finished, so a factory can read anything it needs off it
-        # rather than being called into a half-built one.
+        # rather than being called into a half-built one.  The label assistant
+        # likewise.
         self.plugins.setup_panels(self)
+        setup_assistant = getattr(self.plugins, "setup_label_assistant", None)
+        if setup_assistant is not None:
+            setup_assistant(self)
 
         # setup analyzers:
         PlainAnalyzer(self)
@@ -4856,6 +4890,7 @@ class DataBrowser(QWidget):
             "time_step_timer",
             "denoise_timer",
             "overview_timer",
+            "assist_timer",
         ):
             timer = getattr(self, name, None)
             if timer is None:
@@ -4864,6 +4899,15 @@ class DataBrowser(QWidget):
                 timer.stop()
             except RuntimeError:
                 pass
+        # The label assistant may run a process of its own, reading the very
+        # recording released below.
+        assistant = getattr(self, "label_assistant", None)
+        if assistant is not None:
+            self.label_assistant = None
+            try:
+                assistant.close()
+            except Exception:
+                log.exception("label assistant %r failed to close", assistant)
         # A tab can close without the window closing, so this is the other
         # place a worker can be left reading a recording that is about to be
         # released.  `Audian.teardown` shuts the manager down for good; this
@@ -5220,7 +5264,8 @@ class DataBrowser(QWidget):
             DataBrowser.LABEL_SETTING,
             {
                 "version": DataBrowser.LABEL_SETTING_VERSION,
-                "categories": categories_to_settings(self.labels.categories),
+                "categories": categories_to_settings(self.labels.lasting_categories),
+                "assist": bool(self.label_assist_on),
             },
         )
 
@@ -5453,7 +5498,7 @@ class DataBrowser(QWidget):
         named a category the settings did not know, or a category being
         removed out from under the one that was current.
         """
-        names = [c.name for c in self.labels.categories]
+        names = [c.name for c in self.labels.lasting_categories]
         if self.current_category not in names:
             self.current_category = names[0] if names else ""
         self.rebuild_category_actions()
@@ -5478,7 +5523,7 @@ class DataBrowser(QWidget):
             act.setParent(None)
             act.deleteLater()
         self.category_acts = []
-        for i, category in enumerate(self.labels.categories[:9]):
+        for i, category in enumerate(self.labels.lasting_categories[:9]):
             act = QAction(category.name, self)
             act.setShortcut(str(i + 1))
             act.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
@@ -5865,11 +5910,15 @@ class DataBrowser(QWidget):
             if f1 < f0:
                 f0, f1 = f1, f0
         ax = panel.axs[channel] if channel < len(panel.axs) else None
-        self.store_label(category, ax, channel, t0, t1, f0, f1)
+        label = self.store_label(category, ax, channel, t0, t1, f0, f1)
+        if panel.is_spectrogram() and ax is not None:
+            # after the store, never instead of it: the reader's box is the
+            # label whatever the assistant makes of it, and whenever it does
+            self.assist_label(label, ax)
         return True
 
-    def store_label(self, category, ax, channel, t0, t1, f0, f1) -> None:
-        """Add one label of `category`, and start the save that follows it.
+    def store_label(self, category, ax, channel, t0, t1, f0, f1):
+        """Add one label of `category`, start the save that follows it, return it.
 
         A label made on the mean spectrogram carries **no channel**: that
         panel is an average over the whole selected array and is no electrode
@@ -5912,6 +5961,7 @@ class DataBrowser(QWidget):
         self.schedule_label_save()
         self.update_label_status()
         self.notify("info", self.describe_label(label))
+        return label
 
     def add_point_label(self) -> bool:
         """Place a point label where the cross hair is.  False when it cannot.
@@ -5997,9 +6047,10 @@ class DataBrowser(QWidget):
     def setup_label_group(self) -> "ParameterGroup":
         """Build the Editable labels group of the parameter bar.
 
-        Three rows, against the annotation group's five.  The bar is as
-        tall as its tallest page whichever page is showing, so this group
-        costs the lanes no height at all; a row of this bar is about 24 px
+        Three rows, and a fourth for the label assistant when a plugin offers
+        one, against the annotation group's five.  The bar is as tall as its
+        tallest page whichever page is showing, so this group costs the lanes no
+        height at all; a row of this bar is about 24 px
         off every lane in a sixteen channel stack, which is why the row
         count is still a design constraint rather than an afterthought.
 
@@ -6067,6 +6118,30 @@ class DataBrowser(QWidget):
         where.addStretch(1)
         group.add_row("Show", "F9", wherebox)
 
+        # A row of its own, named and shown once a plugin offers an assistant: a
+        # toggle for something not installed would be a control that does
+        # nothing.  Not beside Show: measured, that took this page from 200 px to
+        # 258 wide, past the 204 a 220 px panel has inside its margins, and width
+        # is the budget a 14 inch laptop sets.  As a row it costs height instead:
+        # measured at 1280 x 860 and 1.5, the page asks for 189 px against 142
+        # without it, and the window's minimum width stays 609.  The page area
+        # scrolls, so with a plugin tab sharing the panel in a short window the
+        # File row is one row further down.
+        assistbox = QWidget(self.parambar)
+        assist = QHBoxLayout(assistbox)
+        assist.setContentsMargins(0, 0, 0, 0)
+        self.label_assistw = QToolButton(assistbox)
+        self.label_assistw.setText("Assist")
+        self.label_assistw.setCheckable(True)
+        self.label_assistw.setChecked(self.label_assist_on)
+        self.label_assistw.setFont(theme.font_ui(theme.SIZE_SMALL_PT))
+        self.label_assistw.setFixedHeight(theme.CHIP_HEIGHT)
+        self.label_assistw.toggled.connect(self.set_label_assist)
+        assist.addWidget(self.label_assistw)
+        assist.addStretch(1)
+        self.label_assist_row = group.add_row("Assist", "", assistbox)
+        self.show_label_assist_row()
+
         self.label_statusw = QLabel("", self.parambar)
         self.label_statusw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
         self.label_statusw.setWordWrap(False)
@@ -6087,6 +6162,204 @@ class DataBrowser(QWidget):
         # group's own file row states the empty case.
         return group
 
+    # -- the label assistant --
+
+    def offer_label_assistant(self, assistant) -> None:
+        """Use `assistant` to help draw labels (`labelassist`); None for none.
+
+        Called by `Plugins.setup_label_assistant`.  An assistant offered again
+        replaces the last one, which is closed: each runs a model process of
+        its own, and one left behind is a process nobody will stop.
+        """
+        old = self.label_assistant
+        if old is not None and old is not assistant:
+            try:
+                old.close()
+            except Exception:
+                log.exception("label assistant %r failed to close", old)
+        self.label_assistant = assistant
+        self.show_label_assist_row()
+        if assistant is not None and not getattr(self, "_assist_wired", False):
+            self.sigRangesChanged.connect(self.label_view_moved)
+            self._assist_wired = True
+        self.label_view_moved()
+
+    def show_label_assist_row(self) -> None:
+        """Show the assistant's row when there is one, named after it."""
+        if self.label_assistw is None:
+            return
+        offered = self.label_assistant is not None
+        for widget in getattr(self, "label_assist_row", None) or [self.label_assistw]:
+            widget.setVisible(offered)
+        self.label_assistw.setVisible(offered)
+        if offered:
+            self.name_label_assistant()
+
+    def name_label_assistant(self) -> None:
+        """Put the assistant's own name and help on its toggle."""
+        assistant = self.label_assistant
+        self.label_assistw.setText(assistant.name)
+        tip = (
+            f"{assistant.name} helps draw labels  (in label mode, b).  Drag a "
+            "rough box as usual: the label is stored at once, and then "
+            f"{assistant.name} tightens it and draws the shape inside.  Shift+B "
+            "still takes the label back."
+        )
+        if assistant.tip:
+            tip += "\n" + assistant.tip
+        self.label_assistw.setToolTip(tip)
+
+    def set_label_assist(self, on: bool) -> None:
+        """Turn the label assistant on or off, and remember which."""
+        on = bool(on)
+        if on == self.label_assist_on:
+            return
+        self.label_assist_on = on
+        if self.label_assistw is not None and self.label_assistw.isChecked() != on:
+            self.label_assistw.setChecked(on)
+        self.save_label_settings()
+        self.label_view_moved()
+
+    def label_assisting(self) -> bool:
+        """Whether a drag in label mode now goes to the assistant."""
+        return (
+            self.label_assistant is not None
+            and self.label_assist_on
+            and self.region_mode == DataBrowser.MODE_LABEL
+        )
+
+    def label_view_moved(self, *_args) -> None:
+        if self.label_assisting():
+            self.assist_timer.start()
+
+    def recording_paths(self) -> list:
+        """Every file behind the timeline, absolute and in order.
+
+        Off the loader, which knows which files it joined; `Data.file_path`
+        is what was asked for.  Absolute, because whoever is handed them may
+        be working from a directory of its own.
+        """
+        loader = getattr(self.data, "data", None)
+        opened = getattr(loader, "file_paths", None)
+        if opened:
+            return [os.path.abspath(os.fspath(path)) for path in opened]
+        asked = getattr(self.data, "file_path", None)
+        if asked is None:
+            return []
+        if isinstance(asked, (list, tuple)):
+            return [os.path.abspath(os.fspath(path)) for path in asked]
+        return [os.path.abspath(os.fspath(asked))]
+
+    def label_assist_view(self, ax, box=None):
+        """What an assistant is told about lane `ax`: a `labelassist.Drawn`.
+
+        None when there is no recording to read.  The view is clipped to the
+        recording, since a view box shows past both of its ends.
+        """
+        paths = self.recording_paths()
+        view = ax.getViewBox() if ax is not None else None
+        if not paths or view is None:
+            return None
+        (t0, t1), (f0, f1) = view.viewRange()
+        bounds = self.axis_bounds(ax, "x")
+        if bounds is not None:
+            t0, t1 = max(t0, bounds[0]), min(t1, bounds[1])
+        bounds = self.axis_bounds(ax, "y")
+        if bounds is not None:
+            f0, f1 = max(f0, bounds[0]), min(f1, bounds[1])
+        mean = getattr(ax, "mean_channels", None)
+        overlay = getattr(ax, "overlay_channels", None)
+        if mean or overlay:
+            channels = [int(c) for c in (mean or overlay)]
+        else:
+            channels = int(getattr(ax, "channel", 0))
+        return labelassist.Drawn(
+            tuple(paths), channels, (float(t0), float(t1), float(f0), float(f1)), box
+        )
+
+    def prepare_label_assistant(self) -> None:
+        """Tell the assistant which view the reader is about to draw in.
+
+        The first spectrogram lane on screen: it is the one a reader of a
+        stack draws in most, and the one any other lane's view matches in
+        time.  A drag on another lane costs the assistant its head start and
+        nothing else.
+        """
+        if not self.label_assisting():
+            return
+        shown = set(self.visible_channels())
+        for ax in self.spectrogram_axes():
+            if getattr(ax, "channel", 0) in shown or getattr(ax, "mean_channels", None):
+                view = self.label_assist_view(ax)
+                if view is not None:
+                    try:
+                        self.label_assistant.prepare(view)
+                    except Exception:
+                        log.exception("label assistant failed to prepare")
+                return
+
+    def assist_label(self, label, ax) -> None:
+        """Ask the assistant about the label just drawn on lane `ax`.
+
+        The label is already stored; the answer, when it comes, is written onto
+        that same label by `label_assisted`.  A span with a band is the only
+        thing a box and a shape can be given to.
+        """
+        if not self.label_assisting():
+            return
+        if label is None or label.is_point() or not label.has_frequency():
+            return
+        assistant = self.label_assistant
+        why = assistant.unavailable()
+        if why:
+            self.notify("warning", f"{assistant.name}: {why}")
+            return
+        drawn = (label.t0, label.t1, label.f0, label.f1)
+        view = self.label_assist_view(ax, drawn)
+        if view is None:
+            return
+
+        def done(answer, message="") -> None:
+            self.label_assisted(label, drawn, ax, answer, message)
+
+        try:
+            assistant.refine(view, done)
+        except Exception as e:
+            log.exception("label assistant failed")
+            self.notify("error", f"{assistant.name} failed: {e}")
+
+    def label_assisted(self, label, drawn, ax, answer, message="") -> None:
+        """Write an assistant's answer onto the label it was asked about.
+
+        **The reader's geometry wins.**  A label moved or resized since the
+        drag, or removed, is not the box the answer is about, and writing it
+        would undo an edit the reader made after asking.  So the answer is
+        dropped, quietly: there is nothing for the reader to do about it.
+        """
+        name = getattr(self.label_assistant, "name", "the assistant")
+        if answer is None:
+            if message:
+                self.notify("warning", f"{name}: {message}")
+            return
+        if self.labels.index_of(label) < 0:
+            return
+        if (label.t0, label.t1, label.f0, label.f1) != drawn:
+            return
+        t0, t1, f0, f1 = answer.box
+        bounds = self.axis_bounds(ax, "x") if ax is not None else None
+        if bounds is not None:
+            t0, t1 = DataBrowser.fit_into(bounds[0], bounds[1], t0, t1, True)
+        bounds = self.axis_bounds(ax, "y") if ax is not None else None
+        if bounds is not None:
+            f0, f1 = DataBrowser.fit_into(bounds[0], bounds[1], f0, f1, True)
+        if not self.labels.refine(label, t0, t1, f0, f1, answer.outline):
+            return
+        self.redraw_labels()
+        self.refresh_label_table()
+        self.schedule_label_save()
+        self.update_label_status()
+        self.notify("info", f"{name}: {self.describe_label(label)}")
+
     def build_category_chips(self) -> None:
         """Rebuild the category chips.
 
@@ -6100,10 +6373,10 @@ class DataBrowser(QWidget):
             return
         keys = {
             c.name: self.category_key_for(i)
-            for i, c in enumerate(self.labels.categories)
+            for i, c in enumerate(self.labels.lasting_categories)
         }
         self.label_chipbox.set_categories(
-            self.labels.categories, self.current_category, keys
+            self.labels.lasting_categories, self.current_category, keys
         )
         self.label_chips = self.label_chipbox.chips
         # The group grew or shrank by a chip, and `equalize` froze every frame
@@ -6146,7 +6419,7 @@ class DataBrowser(QWidget):
         if self.label_error:
             return f"{count} labels -- SAVE FAILED: {self.label_error}"
         if not count:
-            if not self.labels.categories:
+            if not self.labels.lasting_categories:
                 return "no categories yet -- add one with Edit…"
             return "no labels yet -- press b, then drag over a lane"
         name = self.labels.path.name if self.labels.path is not None else "?"
@@ -10517,6 +10790,7 @@ class DataBrowser(QWidget):
             # on that page.  Not raised again on the way out: leaving the
             # mode says nothing about what the reader wants to look at.
             self.raise_parameter_tab(DataBrowser.EDITABLE_TAB)
+            self.label_view_moved()
 
     def region_menu_at(self, channel, vbox, rect, scene_pos):
         """Act on a selected region, popping up the menu at the drag.
@@ -10568,9 +10842,9 @@ class DataBrowser(QWidget):
             # the categories are not a fixed set, and a chain would have to be
             # edited in two places every time one is added.
             label_acts = {}
-            if self.labels.categories:
+            if self.labels.lasting_categories:
                 submenu = menu.addMenu("&Label as")
-                for i, category in enumerate(self.labels.categories):
+                for i, category in enumerate(self.labels.lasting_categories):
                     key = self.category_key_for(i)
                     act = submenu.addAction(
                         f"{category.name}  {key}" if key else category.name

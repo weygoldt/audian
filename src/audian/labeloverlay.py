@@ -105,12 +105,13 @@ from typing import Optional
 
 import pyqtgraph as pg
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QIconEngine
+from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainterPath
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QGraphicsPathItem,
     QGraphicsRectItem,
     QHBoxLayout,
     QMenu,
@@ -456,6 +457,10 @@ class LabelOverlay:
         self.visible = True
         self.boxes: list[QGraphicsRectItem] = []
         self._boxes_live = 0
+        #: The shapes inside the boxes, for labels that have one.  Pooled like
+        #: the boxes, but none built up front: most labels have no outline.
+        self.shapes: list[QGraphicsPathItem] = []
+        self._shapes_live = 0
         self.points = pg.ScatterPlotItem(
             symbol="+", size=POINT_SYMBOL_PX, pxMode=True, hoverable=False
         )
@@ -484,6 +489,15 @@ class LabelOverlay:
         _passive(item)
         self.plot.addItem(item, ignoreBounds=True)
         self.boxes.append(item)
+        return item
+
+    def _grow_shape(self) -> QGraphicsPathItem:
+        item = QGraphicsPathItem()
+        item.setZValue(self.z)
+        item.setVisible(False)
+        _passive(item)
+        self.plot.addItem(item, ignoreBounds=True)
+        self.shapes.append(item)
         return item
 
     def channel(self) -> int:
@@ -535,6 +549,9 @@ class LabelOverlay:
         for item in self.boxes:
             item.setVisible(False)
         self._boxes_live = 0
+        for item in self.shapes:
+            item.setVisible(False)
+        self._shapes_live = 0
         if not self._points_blank:
             self.points.setData([], [])
             self._points_blank = True
@@ -768,6 +785,7 @@ class LabelOverlay:
         channels = self.channels()
         half = POINT_HALF_PX * float(view.viewPixelSize()[0])
         used = 0
+        shaped = 0
         xs: list[float] = []
         ys: list[float] = []
         pens = []
@@ -796,9 +814,29 @@ class LabelOverlay:
             item.setPen(theme.pen(color, theme.LW_THIN))
             item.setVisible(True)
             used += 1
+            if bounded and label.outline:
+                # Only where frequency is an axis: a trace or the navigator
+                # would draw the shape at amplitudes it never had.
+                if shaped >= len(self.shapes):
+                    self._grow_shape()
+                shape = self.shapes[shaped]
+                path = QPainterPath()
+                path.moveTo(*label.outline[0])
+                for t, f in label.outline[1:]:
+                    path.lineTo(t, f)
+                path.closeSubpath()
+                shape.setPath(path)
+                pen = theme.pen(color, theme.LW_THIN)
+                pen.setCosmetic(True)
+                shape.setPen(pen)
+                shape.setVisible(True)
+                shaped += 1
         for item in self.boxes[used : self._boxes_live]:
             item.setVisible(False)
         self._boxes_live = used
+        for item in self.shapes[shaped : self._shapes_live]:
+            item.setVisible(False)
+        self._shapes_live = shaped
         if xs:
             self.points.setData(xs, ys, pen=pens, brush=brushes)
             self._points_blank = False
@@ -891,7 +929,7 @@ class CategoryModel(QAbstractTableModel):
     def __init__(self, store: LabelSet, parent=None):
         super().__init__(parent)
         self.store = store
-        self.rows: list[LabelCategory] = list(store.categories)
+        self.rows: list[LabelCategory] = list(store.lasting_categories)
 
     def rowCount(self, parent=None) -> int:
         return len(self.rows)
@@ -1026,7 +1064,7 @@ class CategoryModel(QAbstractTableModel):
     def store_rows(self) -> list[str]:
         """Push the edited vocabulary onto the store.  Returns names dropped."""
         kept = {c.name for c in self.rows}
-        gone = [c.name for c in self.store.categories if c.name not in kept]
+        gone = [c.name for c in self.store.lasting_categories if c.name not in kept]
         for name in gone:
             self.store.remove_category(name)
         self.store.set_categories(self.rows)

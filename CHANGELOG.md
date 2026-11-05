@@ -9,8 +9,21 @@ at v2.5. Install it from source; `pip install audian` gets upstream.
 
 - **Wavetracker plugin:** run wavetracker from inside audian and correct its
   tracks on the spectrogram, with undo history, autosave and harmonic flags.
-- **Event detection plugin:** a few-shot detector that learns from the events
-  you label.
+- **Spectrogram detector plugin:** label a few events with audian's own label
+  tool, review what a model proposes, train a YOLO detector on the recording in
+  about a minute and run it over the whole file. Every labelled span category is
+  a class. It replaces the template matcher that shipped under **Plugins > Event
+  detection**, which matched on the waveform as well; this one works on the
+  spectrogram only.
+- **Detector training settings:** the YOLO26 size, pretrained or go on from the
+  last model, epochs, batch, hold-out and early stopping, kept per project; a
+  live training curve kept with each model; and **Preview**, the trained model
+  run on the current view only.
+- **SAM in the label tool:** with the detector plugin installed, a **SAM**
+  toggle in the Labels tab tightens each box you drag and outlines the event in
+  it. Labels carry the outline in a new last column of the sidecar.
+- **Label assistants:** `audian_*label_assistant` plugins can answer a drawn
+  label with a better box and a shape (`audian.labelassist`).
 - **Denoiser plugins** for the spectrogram: mains hum and spatial coherence.
 - **Click removal** on the Filter tab (<kbd>Alt</kbd>+<kbd>K</kbd>): repairs
   clicks and crackle in the filtered traces, and so in the spectrogram, and
@@ -42,6 +55,9 @@ at v2.5. Install it from source; `pip install audian` gets upstream.
 - The playback speed is a multiplier: 2 plays twice as fast and an octave up.
 - Python 3.11 to 3.14, with dependencies locked by uv.
 - The UI font, Inter, ships with audian.
+- A plugin tab is as tall as its rows need at the panel's width. Before, it got
+  the height its layout guessed at a wider panel, and a long word-wrapped status
+  line cost the rows under it: the detector's curve caption landed on its chart.
 
 ### Removed
 

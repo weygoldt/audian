@@ -54,6 +54,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from audian import theme  # noqa: E402
 from audian.databrowser import DataBrowser, SidePanel  # noqa: E402
+from audian.labelassist import Answer, LabelAssistant  # noqa: E402
 from audian.labels import (  # noqa: E402
     COLUMNS,
     DEFAULT_CATEGORIES,
@@ -156,6 +157,89 @@ def test_a_note_with_a_comma_survives(store, tmp_path):
     fresh = LabelSet(DEFAULT_CATEGORIES)
     fresh.read(path)
     assert fresh.labels[0].note == 'two, "three"'
+
+
+SHAPE = ((1.1, 120.0), (1.5, 190.0), (1.9, 130.0))
+
+
+def test_an_outline_is_written_as_pairs_and_read_back(store, tmp_path):
+    path = tmp_path / "rec-editable-labels.csv"
+    store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, 100.0, 200.0, "", SHAPE))
+    store.write(path)
+    cells = dict(zip(COLUMNS, read_rows(path)[1]))
+    assert cells["outline"] == "1.100000 120.000;1.500000 190.000;1.900000 130.000"
+    fresh = LabelSet(DEFAULT_CATEGORIES)
+    fresh.read(path)
+    assert fresh.labels[0].outline == SHAPE
+
+
+def test_a_file_from_before_outlines_reads_with_none(tmp_path):
+    path = tmp_path / "rec-editable-labels.csv"
+    old = "category,kind,channel,t_start_s,t_end_s,f_low_hz,f_high_hz,note"
+    path.write_text(old + "\nevent,span,0,1.0,2.0,100.0,200.0,\n", encoding="utf-8")
+    fresh = LabelSet(DEFAULT_CATEGORIES)
+    report = fresh.read(path)
+    assert (report.read, report.dropped) == (1, 0)
+    assert fresh.labels[0].outline is None
+    assert (fresh.labels[0].f0, fresh.labels[0].f1) == (100.0, 200.0)
+
+
+def test_an_unreadable_outline_costs_the_shape_and_not_the_row(tmp_path):
+    path = tmp_path / "rec-editable-labels.csv"
+    path.write_text(
+        ",".join(COLUMNS)
+        # three good vertices and one bad in the first two: dropping only the
+        # bad vertex would leave a shape, and the wrong one
+        + "\nevent,span,0,1.0,2.0,100.0,200.0,,1.1 120;oops;1.5 190;1.9 130\n"
+        + "event,span,0,3.0,4.0,100.0,200.0,,3.1 120;3.5 nan;3.6 190;3.9 130\n"
+        + "event,span,0,5.0,6.0,100.0,200.0,,5.1 120;5.9 130\n",
+        encoding="utf-8",
+    )
+    fresh = LabelSet(DEFAULT_CATEGORIES)
+    report = fresh.read(path)
+    assert (report.read, report.dropped) == (3, 0)
+    assert [la.outline for la in fresh] == [None, None, None]
+    assert [la.t0 for la in fresh] == [1.0, 3.0, 5.0]
+
+
+def test_a_label_with_no_band_is_given_no_outline(tmp_path):
+    path = tmp_path / "rec-editable-labels.csv"
+    path.write_text(
+        ",".join(COLUMNS) + "\nevent,span,0,1.0,2.0,,,,1.1 120;1.5 190;1.9 130\n",
+        encoding="utf-8",
+    )
+    fresh = LabelSet(DEFAULT_CATEGORIES)
+    fresh.read(path)
+    assert fresh.labels[0].outline is None
+
+
+def test_moving_a_box_drops_its_outline_and_undo_brings_it_back(store):
+    label = store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, 100.0, 200.0, "", SHAPE))
+    assert store.set_geometry(0, 1.5, 2.5, 100.0, 200.0)
+    assert label.outline is None
+    assert store.undo() == "geometry"
+    assert (label.t0, label.t1, label.outline) == (1.0, 2.0, SHAPE)
+
+
+def test_refining_keeps_the_readers_undo_of_the_drawing(store):
+    label = store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, 100.0, 200.0))
+    revision = store.revision
+    assert store.refine(label, 1.2, 1.8, 140.0, 180.0, SHAPE)
+    assert (label.t0, label.t1, label.f0, label.f1) == (1.2, 1.8, 140.0, 180.0)
+    assert label.outline == SHAPE
+    assert store.revision > revision
+    # Shift+B takes back what the reader did, which was to draw the label
+    assert store.undo() == "add"
+    assert list(store) == []
+
+
+def test_refining_a_label_that_is_gone_or_has_no_band_does_nothing(store):
+    gone = store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, 100.0, 200.0))
+    store.remove(0)
+    assert not store.refine(gone, 1.2, 1.8, 140.0, 180.0, SHAPE)
+    trace = store.add(Label("event", KIND_SPAN, 0, 1.0, 2.0, None, None))
+    assert not store.refine(trace, 1.2, 1.8, 140.0, 180.0, SHAPE)
+    assert (trace.t0, trace.f0, trace.outline) == (1.0, None, None)
 
 
 def test_rows_that_cannot_be_placed_are_counted_not_drawn(tmp_path):
@@ -538,6 +622,250 @@ def test_a_drag_the_other_way_gives_the_same_band(labelling):
     label = browser.labels.labels[0]
     assert label.f0 < label.f1
     assert label.t0 < label.t1
+
+
+def live_shapes(overlay):
+    """The outlines actually drawing, as their vertices in DATA coordinates."""
+    out = []
+    for item in overlay.shapes:
+        if item.isVisible():
+            path = item.path()
+            out.append(
+                [
+                    (round(path.elementAt(i).x, 6), round(path.elementAt(i).y, 3))
+                    for i in range(path.elementCount())
+                ]
+            )
+    return out
+
+
+def test_an_outline_is_drawn_on_its_spectrogram_and_nowhere_else(labelling):
+    """Where frequency is an axis, at the label's own vertices.
+
+    A trace's y is amplitude, so a shape drawn there would sit at amplitudes it
+    never had; another channel's lane is not where the event was.
+    """
+    browser = labelling
+    shape = ((1.1, 1200.0), (1.5, 1900.0), (1.9, 1300.0))
+    browser.labels.add(
+        Label("event", KIND_SPAN, 1, 1.0, 2.0, 1000.0, 2000.0, "", shape)
+    )
+    browser.redraw_labels()
+    settle()
+    drawn = live_shapes(overlay_for(browser, "spectrogram", 1))
+    assert len(drawn) == 1
+    assert drawn[0][:3] == list(shape)
+    assert live_shapes(overlay_for(browser, "trace", 1)) == []
+    assert live_shapes(overlay_for(browser, "spectrogram", 0)) == []
+    browser.set_labels_visible(False)
+    settle()
+    assert live_shapes(overlay_for(browser, "spectrogram", 1)) == []
+    browser.set_labels_visible(True)
+    settle()
+    assert len(live_shapes(overlay_for(browser, "spectrogram", 1))) == 1
+
+
+class FakeAssistant(LabelAssistant):
+    """Remembers what it was asked; the test answers by calling `done` itself."""
+
+    name = "Fake"
+
+    def __init__(self):
+        self.asked = []
+        self.prepared = []
+        self.why = ""
+        self.closed = False
+
+    def unavailable(self):
+        return self.why
+
+    def prepare(self, view):
+        self.prepared.append(view)
+
+    def refine(self, drawn, done):
+        self.asked.append((drawn, done))
+
+    def close(self):
+        self.closed = True
+
+
+def test_a_label_assistant_is_found_by_its_name_and_a_broken_one_costs_itself():
+    """Bound like a panel, by the end of its name, and never mistaken for one."""
+    import types
+
+    from audian.plugins import Plugins
+
+    module = types.ModuleType("fake_assistant_plugin")
+
+    def audian_broken_label_assistant(browser):
+        raise RuntimeError("no model")
+
+    def audian_fake_label_assistant(browser):
+        return FakeAssistant()
+
+    module.audian_broken_label_assistant = audian_broken_label_assistant
+    module.audian_fake_label_assistant = audian_fake_label_assistant
+    plugins = Plugins()
+    assert plugins.bind(module)
+    assert plugins.panel_factories == []
+    assert len(plugins.label_assistant_factories) == 2
+
+    class Browser:
+        def __init__(self):
+            self.offered = []
+
+        def offer_label_assistant(self, assistant):
+            self.offered.append(assistant)
+
+    browser = Browser()
+    plugins.setup_label_assistant(browser)
+    assert [type(a) for a in browser.offered] == [FakeAssistant]
+
+
+@pytest.fixture
+def assisted(no_assistant, monkeypatch):
+    """Label mode with a fake assistant on, and what the browser said."""
+    browser = no_assistant
+    fake = FakeAssistant()
+    said = []
+    monkeypatch.setattr(
+        browser, "notify", lambda level, text: said.append((level, text))
+    )
+    was_on = browser.label_assist_on
+    browser.offer_label_assistant(fake)
+    browser.set_label_assist(True)
+    yield browser, fake, said
+    browser.set_label_assist(was_on)
+
+
+@pytest.fixture
+def no_assistant(labelling):
+    """The browser with whatever assistant it has set aside, unclosed, and put back."""
+    browser = labelling
+    original, browser.label_assistant = browser.label_assistant, None
+    browser.offer_label_assistant(None)
+    yield browser
+    browser.offer_label_assistant(None)
+    if original is not None:
+        browser.offer_label_assistant(original)
+
+
+def test_the_assistant_toggle_is_offered_only_with_an_assistant(no_assistant):
+    browser = no_assistant
+    row = browser.label_assist_row
+    assert browser.label_assistw.isHidden()
+    assert all(widget.isHidden() for widget in row)
+    fake = FakeAssistant()
+    browser.offer_label_assistant(fake)
+    assert not browser.label_assistw.isHidden()
+    assert not any(widget.isHidden() for widget in row)
+    assert browser.label_assistw.text() == "Fake"
+    browser.offer_label_assistant(None)
+    assert browser.label_assistw.isHidden()
+    assert fake.closed
+
+
+def test_a_drag_is_stored_at_once_and_refined_when_the_answer_comes(assisted):
+    browser, fake, _said = assisted
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 0.8, 1000.0, 2.4, 2600.0)
+    assert len(browser.labels) == 1
+    label = browser.labels.labels[0]
+    drawn = (label.t0, label.t1, label.f0, label.f1)
+    assert len(fake.asked) == 1
+    request, done = fake.asked[0]
+    assert request.box == drawn
+    assert request.channels == 0
+    assert request.paths and all(os.path.isabs(p) for p in request.paths)
+    t0, t1, f0, f1 = request.view
+    assert t0 <= label.t0 < label.t1 <= t1
+    assert f0 <= label.f0 < label.f1 <= f1
+    shape = ((1.0, 1500.0), (1.5, 2200.0), (2.0, 1600.0))
+    done(Answer((1.0, 2.0, 1400.0, 2300.0), shape), "")
+    settle()
+    assert (label.t0, label.t1, label.f0, label.f1) == (1.0, 2.0, 1400.0, 2300.0)
+    assert label.outline == shape
+    browser.flush_labels()
+    fresh = LabelSet(DEFAULT_CATEGORIES)
+    fresh.read(browser.labels_path())
+    assert [la.outline for la in fresh] == [shape]
+    # Shift+B takes back the drawing, answer and all
+    browser.undo_last_label_change()
+    assert list(browser.labels) == []
+
+
+def test_an_answer_to_a_box_since_changed_or_removed_is_dropped(assisted):
+    browser, fake, _said = assisted
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 0.8, 1000.0, 2.4, 2600.0)
+    label = browser.labels.labels[0]
+    browser.labels.set_geometry(0, 0.5, 2.0, 900.0, 2500.0)
+    fake.asked[0][1](Answer((1.0, 2.0, 1400.0, 2300.0), SHAPE), "")
+    settle()
+    assert (label.t0, label.t1, label.f0, label.f1) == (0.5, 2.0, 900.0, 2500.0)
+    assert label.outline is None
+    drag(browser, 0, ax, 3.0, 1000.0, 3.6, 2600.0)
+    gone = browser.labels.labels[1]
+    browser.labels.remove(1)
+    fake.asked[1][1](Answer((3.1, 3.5, 1400.0, 2300.0), SHAPE), "")
+    settle()
+    assert gone not in browser.labels.labels and len(browser.labels) == 1
+
+
+def test_with_the_assistant_off_a_drag_asks_nothing_and_that_is_kept(assisted):
+    browser, fake, _said = assisted
+    browser.set_label_assist(False)
+    assert browser.label_settings()["assist"] is False
+    assert not browser.label_assistw.isChecked()
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 0.8, 1000.0, 2.4, 2600.0)
+    assert len(browser.labels) == 1
+    assert fake.asked == []
+    browser.set_label_assist(True)
+    assert browser.label_settings()["assist"] is True
+
+
+def test_a_trace_drag_or_an_unavailable_assistant_asks_nothing(assisted):
+    browser, fake, said = assisted
+    trace = panel(browser, "trace").axs[2]
+    (_t0, _t1), (a0, a1) = trace.getViewBox().viewRange()
+    drag(browser, 2, trace, 1.0, a0 + 0.2 * (a1 - a0), 2.0, a0 + 0.8 * (a1 - a0))
+    assert fake.asked == []
+    fake.why = "no model yet"
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 0.8, 1000.0, 2.4, 2600.0)
+    assert fake.asked == []
+    assert len(browser.labels) == 2
+    assert ("warning", "Fake: no model yet") in said
+
+
+def test_an_answer_with_nothing_in_it_says_why_and_leaves_the_label(assisted):
+    browser, fake, said = assisted
+    ax = panel(browser, "spectrogram").axs[0]
+    drag(browser, 0, ax, 0.8, 1000.0, 2.4, 2600.0)
+    label = browser.labels.labels[0]
+    before = (label.t0, label.t1, label.f0, label.f1)
+    fake.asked[0][1](None, "zoom in")
+    settle()
+    assert (label.t0, label.t1, label.f0, label.f1) == before
+    assert ("warning", "Fake: zoom in") in said
+
+
+def test_the_assistant_is_told_the_view_only_in_label_mode(assisted):
+    browser, fake, _said = assisted
+    fake.prepared.clear()
+    browser.prepare_label_assistant()
+    assert len(fake.prepared) == 1
+    view = fake.prepared[0]
+    assert view.box is None and view.paths
+    lane = panel(browser, "spectrogram").axs[view.channels]
+    (t0, t1), _ = lane.getViewBox().viewRange()
+    assert view.view[0] == pytest.approx(max(t0, 0.0))
+    browser.set_region_mode(DataBrowser.MODE_ZOOM)
+    fake.prepared.clear()
+    browser.prepare_label_assistant()
+    assert fake.prepared == []
+    browser.set_region_mode(DataBrowser.MODE_LABEL)
 
 
 def test_a_trace_drag_stores_no_frequency(labelling):
