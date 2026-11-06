@@ -238,11 +238,13 @@ class Runner:
             if duration is None
             else min(info.frames, s0 + round(duration * rate))
         )
-        step = step_size(sc.nfft, sc.overlap_frac)
-        if s1 - s0 < sc.nfft + step:
+        # wavetracker >= freq_resolution: the window follows the rate
+        nfft = sc.resolve_nfft(rate) if hasattr(sc, "resolve_nfft") else sc.nfft
+        step = step_size(nfft, sc.overlap_frac)
+        if s1 - s0 < nfft + step:
             raise InputError(
                 "Selected data is shorter than two FFT windows "
-                f"({(sc.nfft + step) / rate:.2f} s needed, "
+                f"({(nfft + step) / rate:.2f} s needed, "
                 f"{(s1 - s0) / rate:.2f} s given)."
             )
 

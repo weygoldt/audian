@@ -7,8 +7,14 @@ from pathlib import Path
 
 @dataclass
 class SpectrogramConfig:
-    nfft: int = 256
+    freq_resolution: float = 1000.0 / 256  # 256 samples at the stub's 1 kHz
+    nfft: int | None = None
     overlap_frac: float = 0.5
+
+    def resolve_nfft(self, rate):
+        if self.nfft is not None:
+            return int(self.nfft)
+        return 2 * round(rate / self.freq_resolution / 2)
 
 
 @dataclass

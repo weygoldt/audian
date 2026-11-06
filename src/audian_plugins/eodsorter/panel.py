@@ -91,6 +91,7 @@ from audian.pluginapi import CancelToken, ParameterGroup, narrow_combo, theme
 from . import geometry as G
 from . import harmonics as HM
 from . import model as M
+from . import ridge as RG
 from . import runner as R
 from . import trackrange as TR
 from .overlay import TrackOverlay, view_of
@@ -892,9 +893,13 @@ class WavetrackerPanel(QWidget):
         form.setContentsMargins(theme.S4, 0, 0, 0)
         form.setSpacing(theme.S2)
         self.nfftw = narrow_combo(QComboBox(self.advw))
+        # auto (data 0): wavetracker's default frequency resolution, the same
+        # at any sampling rate; the fixed choices are samples
+        res = RG.wavetracker_default("spectrogram", "freq_resolution", None)
+        self.nfftw.addItem(f"auto ({res:.2f} Hz)" if res else "auto", 0)
         for n in (4096, 8192, 16384, 32768, 65536):
             self.nfftw.addItem(str(n), n)
-        self.nfftw.setCurrentIndex(self.nfftw.findData(32768))
+        self.nfftw.setCurrentIndex(0)
         form.addRow("nfft", self.nfftw)
         self.overlapw = QDoubleSpinBox(self.advw)
         self.overlapw.setRange(0.0, 0.99)
@@ -2791,6 +2796,20 @@ class WavetrackerPanel(QWidget):
             self.threshmodew.setCurrentIndex(0)
         self._range_changed()
 
+    def _run_nfft(self, rate: float | None = None) -> int | None:
+        """The Run settings' FFT window [samples] at `rate` (default: the
+        recording's): 'auto' is wavetracker's default frequency resolution
+        there. None for 'auto' without a recording."""
+        n = int(self.nfftw.currentData() or 0)
+        if n:
+            return n
+        if rate is None:
+            try:
+                rate = float(self.browser.data.rate)
+            except (AttributeError, TypeError, ValueError):
+                return None
+        return RG.default_nfft(rate)
+
     def _config_overrides(self, snippet: bool = False) -> dict:
         cfg = {
             "harmonic_groups": {
@@ -2798,7 +2817,6 @@ class WavetrackerPanel(QWidget):
                 "max_freq": float(self.fmaxw.value()),
             },
             "spectrogram": {
-                "nfft": int(self.nfftw.currentData()),
                 "overlap_frac": float(self.overlapw.value()),
                 "block_duration": float(self.blockw.value()),
             },
@@ -2808,6 +2826,9 @@ class WavetrackerPanel(QWidget):
             },
             "stitching": {"enabled": bool(self.stitchw.isChecked())},
         }
+        nfft = self._run_nfft()
+        if nfft is not None:
+            cfg["spectrogram"]["nfft"] = nfft
         ts = self.ts
         if ts is not None and ts.grid is not None:
             cfg["spectrogram"]["nfft"] = int(ts.grid.nfft)
@@ -3060,7 +3081,7 @@ class WavetrackerPanel(QWidget):
         return TR.recording_grid(
             rate,
             frames,
-            int(sp["nfft"]),
+            int(sp.get("nfft") or self._run_nfft(rate)),
             float(sp["overlap_frac"]),
             ts.grid if ts is not None else None,
         )
@@ -3261,7 +3282,7 @@ class WavetrackerPanel(QWidget):
         except (AttributeError, TypeError):
             return None
         return M.FrameGrid.for_recording(
-            rate, frames, int(self.nfftw.currentData()), float(self.overlapw.value())
+            rate, frames, self._run_nfft(rate), float(self.overlapw.value())
         )
 
     def track_visible(self) -> None:

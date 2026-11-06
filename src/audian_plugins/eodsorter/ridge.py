@@ -135,6 +135,21 @@ def wavetracker_default(section: str, name: str, fallback):
         return fallback
 
 
+def default_nfft(rate: float) -> int:
+    """wavetracker's FFT window [samples] at sampling rate `rate`: its default
+    frequency resolution (0.61 Hz) at any rate; a wavetracker from before
+    `freq_resolution` has a fixed nfft, and without wavetracker 2**15."""
+    try:
+        from wavetracker import config as wc
+
+        sc = wc.SpectrogramConfig()
+        if hasattr(sc, "resolve_nfft"):
+            return int(sc.resolve_nfft(float(rate)))
+        return int(sc.nfft)
+    except Exception:  # noqa: BLE001 - not installed, or a different version
+        return 2**15
+
+
 # ------------------------------------------------------------------ bands
 
 

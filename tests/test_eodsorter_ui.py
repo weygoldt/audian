@@ -2498,3 +2498,20 @@ def test_a_run_does_not_drop_the_focus_into_the_range_fields(panel, world):
         focus = QApplication.focusWidget()
         button.setEnabled(True)
         assert not isinstance(focus, QLineEdit), focus
+
+
+def test_run_settings_offer_wavetrackers_resolution_at_the_recording_rate(panel):
+    """'auto' (the first nfft choice and the default) runs wavetracker at its
+    default frequency resolution, resolved at the recording's rate; a loaded
+    session keeps its own grid, a fixed choice is passed as it is."""
+    from audian_plugins.eodsorter import ridge as RG
+
+    assert panel.nfftw.itemData(0) == 0 and panel.nfftw.itemText(0).startswith("auto")
+    assert panel._config_overrides()["spectrogram"]["nfft"] == NFFT  # the session's
+    panel.set_session(None)
+    panel.nfftw.setCurrentIndex(0)
+    assert panel._config_overrides()["spectrogram"]["nfft"] == RG.default_nfft(RATE)
+    assert panel._snippet_grid().nfft == RG.default_nfft(RATE)
+    panel.nfftw.setCurrentIndex(panel.nfftw.findData(4096))
+    assert panel._config_overrides()["spectrogram"]["nfft"] == 4096
+    assert panel._snippet_grid().nfft == 4096

@@ -229,3 +229,17 @@ def test_frame_starts_use_the_grid_or_the_times():
     assert RG.frame_starts(Grid, [0, 2], None, 1000.0, 64).tolist() == [100, 200]
     times = np.array([0.5, 0.6, 0.7])
     assert RG.frame_starts(None, [1, 2], times, 1000.0, 100).tolist() == [550, 650]
+
+
+@pytest.mark.parametrize("rate", [8000.0, 20000.0, 48000.0])
+def test_default_nfft_is_wavetrackers_resolution_at_the_rate(rate):
+    """wavetracker's default window is a frequency resolution (0.61 Hz), the
+    same at any sampling rate: 2**15 samples at 20 kHz, 78732 at 48 kHz."""
+    pytest.importorskip("wavetracker.config")
+    from wavetracker.config import SpectrogramConfig
+
+    sc = SpectrogramConfig()
+    if not hasattr(sc, "resolve_nfft"):
+        pytest.skip("wavetracker before freq_resolution")
+    assert RG.default_nfft(rate) == sc.resolve_nfft(rate)
+    assert rate / RG.default_nfft(rate) == pytest.approx(sc.freq_resolution, rel=0.01)

@@ -2407,7 +2407,7 @@ wheels = [
 [[package]]
 name = "wavetracker"
 version = "0.3.0"
-source = { git = "https://github.com/weygoldt/wavetracker#7ce41427af68f7d613b66628709dff1f3eeff309" }
+source = { git = "https://github.com/weygoldt/wavetracker#b833de9c30021bdac9f43526a8127b8a88b9f7ff" }
 dependencies = [
     { name = "audioio" },
     { name = "matplotlib" },

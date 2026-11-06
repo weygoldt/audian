@@ -75,7 +75,7 @@ class RidgeWorker(QObject):
             loader = self._open(job["paths"])
             rate = float(loader.rate)
             n_total = len(loader)
-            nfft = int(job["nfft"])
+            nfft = int(job["nfft"]) if job["nfft"] else RG.default_nfft(rate)
             starts = RG.frame_starts(
                 job["grid"], job["frames"], job["all_times"], rate, nfft
             )
@@ -140,7 +140,9 @@ class RidgeSource(QObject):
             return "the recording's files are not known"
         return ""
 
-    def nfft(self) -> int:
+    def nfft(self) -> int | None:
+        """The session's FFT window; None: wavetracker's default at the
+        recording's rate (resolved where the recording is open)."""
         ts = self.panel.ts
         if ts.grid is not None:
             return int(ts.grid.nfft)
@@ -148,7 +150,7 @@ class RidgeSource(QObject):
         spec = cfg.get("spectrogram") if isinstance(cfg, dict) else None
         if isinstance(spec, dict) and spec.get("nfft"):
             return int(spec["nfft"])
-        return int(RG.wavetracker_default("spectrogram", "nfft", 2**15))
+        return None
 
     def request(self, frames, lo, hi, done) -> None:
         from .panel import session_channels
