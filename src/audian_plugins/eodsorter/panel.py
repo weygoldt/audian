@@ -107,6 +107,18 @@ from .tools import (
     ToolSurface,
 )
 
+#: The two wavetracker pipelines of the Run settings: (data, label).
+PIPELINES = (
+    ("learned", "default (learned)"),
+    ("classic", "classic"),
+)
+#: Seconds run on either side of a Track visible window with the default
+#: pipeline and cut off again: the learned detector looks about +-26 s around
+#: every frame, and without that context a 30-s window keeps only 89 % of what
+#: a run over everything tracks there (63 % in its first and last 3 s; with
+#: 30 s on either side 97 % and 95 %).
+SNIPPET_CONTEXT_S = 30.0
+
 #: The key of this plugin's preferences in audian's settings store (4.1).
 SETTINGS_KEY = "eodsorter"
 SETTINGS_VERSION = 1
@@ -116,6 +128,9 @@ SETTINGS_VERSION = 1
 DEFAULT_PREFS = {
     "version": SETTINGS_VERSION,
     "device": "auto",
+    #: "learned": wavetracker's default pipeline; "classic": detector.method
+    #: classic (harmonic groups, the rule-based tracker)
+    "pipeline": "learned",
     "brush_px": 14,
     "sticky_brush": True,
     "ridge_add": True,
@@ -864,6 +879,21 @@ class WavetrackerPanel(QWidget):
         theme.tint(self.rangewarnw, "accent")
         group.add_span_row(self.rangewarnw)
 
+        self.pipelinew = narrow_combo(QComboBox(self))
+        for data, text in PIPELINES:
+            self.pipelinew.addItem(text, data)
+        self.pipelinew.setCurrentIndex(
+            max(0, self.pipelinew.findData(self.prefs.get("pipeline", "learned")))
+        )
+        self.pipelinew.setToolTip(
+            "default (learned): neural networks detect and link the fish, with "
+            "the spectrogram grid the models were trained on; classic: harmonic "
+            "groups and the rule-based tracker, with the options under Advanced. "
+            "A config file's keys override the pipeline's defaults."
+        )
+        self.pipelinew.currentIndexChanged.connect(self._pipeline_changed)
+        group.add_row("Pipeline", "", self.pipelinew)
+
         self.devicew = narrow_combo(QComboBox(self))
         for d in ("auto", "cpu", "cuda"):
             self.devicew.addItem(d, d)
@@ -941,6 +971,7 @@ class WavetrackerPanel(QWidget):
         group.add_span_row(self.advw)
 
         self._sync_thresholds()
+        self._sync_pipeline()
         self._range_changed()
 
     def _build_snippet(self, box) -> None:
@@ -2736,7 +2767,11 @@ class WavetrackerPanel(QWidget):
             ok = R.wavetracker_status()[1] is None
         lo, hi = self.fminw.value(), self.fmaxw.value()
         mark = "" if ok else "✗ "
-        self.runsummaryw.setText(f"{mark}{lo:.0f}–{hi:.0f} Hz")
+        name = "default" if self._pipeline() == "learned" else "classic"
+        if not hasattr(self, "pipelinew"):
+            name = ""
+        sep = " · " if name else ""
+        self.runsummaryw.setText(f"{mark}{name}{sep}{lo:.0f}–{hi:.0f} Hz")
         self.runsummaryw.setToolTip(self.interpw.text())
 
     def _browse_config(self) -> None:
@@ -2766,8 +2801,67 @@ class WavetrackerPanel(QWidget):
 
     def _sync_thresholds(self) -> None:
         fixed = self.threshmodew.currentData() == "fixed"
-        self.lothw.setEnabled(fixed)
-        self.hithw.setEnabled(fixed)
+        classic = not hasattr(self, "pipelinew") or self._pipeline() == "classic"
+        self.lothw.setEnabled(fixed and classic)
+        self.hithw.setEnabled(fixed and classic)
+
+    def _pipeline(self) -> str:
+        """The Run settings' pipeline: "learned" (wavetracker's default) or
+        "classic"."""
+        w = getattr(self, "pipelinew", None)
+        return str(w.currentData()) if w is not None else "classic"
+
+    def _pipeline_changed(self) -> None:
+        self.prefs["pipeline"] = self._pipeline()
+        if hasattr(self, "_prefs_timer"):
+            self._prefs_timer.start()
+        self._sync_pipeline()
+        self._refresh_run_summary()
+
+    def _sync_pipeline(self) -> None:
+        """The default pipeline runs on the grid its models were trained on
+        (nfft auto, the default overlap) and has none of the classic
+        options: those widgets are fixed and greyed out."""
+        learned = self._pipeline() == "learned"
+        if learned:
+            self.nfftw.setCurrentIndex(0)  # auto
+            self.overlapw.setValue(
+                float(RG.wavetracker_default("spectrogram", "overlap_frac", 0.9))
+            )
+        why = "set by the default pipeline's models" if learned else ""
+        for w in (self.nfftw, self.overlapw):
+            w.setEnabled(not learned)
+            w.setToolTip(why)
+        only = "classic pipeline only" if learned else ""
+        for w in (self.threshmodew, self.ftolw, self.maxdtw, self.stitchw):
+            w.setEnabled(not learned)
+            w.setToolTip(only)
+        self._sync_thresholds()
+
+    def _pipeline_problem(self, grid) -> Optional[str]:
+        """Why the default pipeline cannot track on `grid` (a session's frame
+        grid), or None: its detector only runs on the frequency resolution
+        and frame step it was trained on (the classic one runs on any)."""
+        if grid is None or self._pipeline() != "learned":
+            return None
+        want_res = RG.wavetracker_default("spectrogram", "freq_resolution", None)
+        if want_res is None:  # an old wavetracker: it will say so itself
+            return None
+        rate = float(grid.rate)
+        n = RG.default_nfft(rate)
+        overlap = float(RG.wavetracker_default("spectrogram", "overlap_frac", 0.9))
+        want_step = M.step_size(n, overlap) / rate
+        res, step = rate / float(grid.nfft), float(grid.step) / rate
+        tol = 0.01  # wavetracker's GRID_TOLERANCE
+        if abs(res - want_res) <= tol * want_res and abs(step - want_step) <= (
+            tol * want_step
+        ):
+            return None
+        return (
+            f"these results have a {res:.2f} Hz, {step:.3f} s spectrogram grid; "
+            f"the default pipeline needs {want_res:.2f} Hz, {want_step:.3f} s. "
+            "Switch Run settings → Pipeline to classic to track here."
+        )
 
     def _sync_session_fields(self) -> None:
         """Prefill the run fields from the loaded results' config."""
@@ -2794,6 +2888,7 @@ class WavetrackerPanel(QWidget):
             self.maxdtw.setValue(float(tr["max_dt"]))
         if meta.get("low_threshold") is not None:
             self.threshmodew.setCurrentIndex(0)
+        self._sync_pipeline()  # the default pipeline keeps its own grid
         self._range_changed()
 
     def _run_nfft(self, rate: float | None = None) -> int | None:
@@ -2811,7 +2906,9 @@ class WavetrackerPanel(QWidget):
         return RG.default_nfft(rate)
 
     def _config_overrides(self, snippet: bool = False) -> dict:
+        classic = self._pipeline() == "classic"
         cfg = {
+            "detector": {"method": self._pipeline()},
             "harmonic_groups": {
                 "min_freq": float(self.fminw.value()),
                 "max_freq": float(self.fmaxw.value()),
@@ -2820,12 +2917,13 @@ class WavetrackerPanel(QWidget):
                 "overlap_frac": float(self.overlapw.value()),
                 "block_duration": float(self.blockw.value()),
             },
-            "tracking": {
+        }
+        if classic:  # the default pipeline has no use for these
+            cfg["tracking"] = {
                 "freq_tolerance": float(self.ftolw.value()),
                 "max_dt": float(self.maxdtw.value()),
-            },
-            "stitching": {"enabled": bool(self.stitchw.isChecked())},
-        }
+            }
+            cfg["stitching"] = {"enabled": bool(self.stitchw.isChecked())}
         nfft = self._run_nfft()
         if nfft is not None:
             cfg["spectrogram"]["nfft"] = nfft
@@ -2837,7 +2935,7 @@ class WavetrackerPanel(QWidget):
                 cfg["spectrogram"]["overlap_frac"] = float(sp["overlap_frac"])
             if "exclude_channels" in sp:
                 cfg["spectrogram"]["exclude_channels"] = list(sp["exclude_channels"])
-        if snippet:
+        if snippet and classic:
             mode = self.threshmodew.currentData()
             meta = ts.meta if ts is not None else {}
             if mode == "results" and meta.get("low_threshold") is not None:
@@ -3003,6 +3101,10 @@ class WavetrackerPanel(QWidget):
                     "needs a wavetracker with list input (see docs/eodsorter-design.md 4.6)"
                 )
                 return
+        problem = self._pipeline_problem(self.ts.grid if self.ts is not None else None)
+        if problem:
+            self.controller.reject(problem)
+            return
         window = self._range_window()
         if window is False:
             return
@@ -3299,6 +3401,10 @@ class WavetrackerPanel(QWidget):
                 "these results have no regular frame grid; snippet runs are disabled"
             )
             return
+        problem = self._pipeline_problem(self.ts.grid if self.ts is not None else None)
+        if problem:
+            self.controller.reject(problem)
+            return
         t0, t1 = view[0], view[1]
         notes = []
         r = self.track_range
@@ -3326,13 +3432,19 @@ class WavetrackerPanel(QWidget):
         if span > R.MAX_SNIPPET_S:
             self.controller.reject("use Track recording for spans this long")
             return
-        if k1 - k0 < 30:
+        # the default pipeline runs with context on either side (cut off again
+        # when the result is loaded): the learned detector needs it
+        r0, r1 = k0, k1
+        if self._pipeline() == "learned":
+            pad = int(np.ceil(SNIPPET_CONTEXT_S * grid.rate / grid.step))
+            r0, r1 = max(0, k0 - pad), min(grid.n_frames, k1 + pad)
+        if r1 - r0 < 30:
             notes.append("comb removal needs 30 frames; this snippet runs without it")
         if notes:
             self.controller.say("Snippet " + "; ".join(notes))
         tmp = R.make_tmpdir()
         wav = str(Path(tmp) / "snippet.wav")
-        s0, s1 = grid.sample_range(k0, k1)
+        s0, s1 = grid.sample_range(r0, r1)
         self._token = CancelToken()
         self._exporter = R.SnippetExporter(paths, (s0, s1), wav, self._token)
         self._export_thread = QThread(self)
@@ -3347,6 +3459,7 @@ class WavetrackerPanel(QWidget):
             "grid": grid,
             "k0": k0,
             "k1": k1,
+            "r0": r0,
             "session": self.ts,
         }
         self._job_started = time.monotonic()
@@ -3401,6 +3514,7 @@ class WavetrackerPanel(QWidget):
             grid=job["grid"],
             k0=job["k0"],
             k1=job["k1"],
+            r0=job.get("r0", job["k0"]),
             out=out,
             session=job.get("session"),
         ):
@@ -3417,7 +3531,8 @@ class WavetrackerPanel(QWidget):
             )
             return
         try:
-            snippet = M.load_snippet(out, job["grid"], job["k0"])
+            snippet = M.load_snippet(out, job["grid"], job.get("r0", job["k0"]))
+            snippet = M.crop_snippet(snippet, job["k0"], job["k1"])
         finally:
             self._remove_tmp(job["tmp"])
         self.show_snippet(snippet, job["grid"])

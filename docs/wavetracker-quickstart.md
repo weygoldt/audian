@@ -84,6 +84,13 @@ field, the mouse wheel changes the field's value.
    **350** and **1000** Hz. audian remembers it.
 2. This note stays until you change the range from its wide default.
 
+**Pipeline** is wavetracker's default, **default (learned)**: neural networks find
+the fish and link their tracks, and wavetracker writes where it is least sure to
+`review.json` in the results folder. It runs on the spectrogram grid its models
+were trained on (0.61 Hz, 0.16 s frames, at any sampling rate), so *nfft*,
+*overlap* and the classic options under *Advanced* are greyed out. **classic** is
+the rule-based tracker of earlier versions, with all of *Advanced*.
+
 Scroll back up and press **Track recording**. It runs in the background with a
 progress bar and **Cancel**, writes its results to a folder beside the recording
 (`demo-wavetracker`), and opens them. On the demo it takes seconds. The first run
@@ -251,7 +258,9 @@ it. Press <kbd>Shift</kbd>+<kbd>R</kbd> until the fish are thin lines; how many
 times depends on the sampling rate.
 
 **Try your settings on a minute or two first.** **Track visible** tracks what is on
-screen, up to five minutes, in seconds. The result is a *snippet*: a preview, drawn
+screen, up to five minutes, in seconds. With the default pipeline it also reads
+30 s on either side and keeps only what is on screen: the learned detector needs
+that context, or it misses fish near the edges. The result is a *snippet*: a preview, drawn
 as lines without dots, that you cannot click yet.
 
 ![A pending snippet](shots/quickstart/snippet.png)
@@ -289,7 +298,8 @@ tracks can separate two fish that look like one line on screen.
 | keys do something else, or nothing | the plugin's keys work only in edit mode, with the pointer over a lane and the cursor not in a text box (click the spectrogram first). Elsewhere they are audian's own: <kbd>G</kbd> is the grid, <kbd>Ctrl</kbd>+<kbd>Z</kbd> is pan mode |
 | no tracks on screen | the spectrograms are off (<kbd>F3</kbd>), or the view is outside the band of the tracks |
 | an empty spectrogram after <kbd>Backspace</kbd> | a known glitch in zoom-back: <kbd>Shift</kbd>+<kbd>Backspace</kbd> returns |
-| the tracker misses fish | check the fish range first. Then *Run settings → Advanced* |
+| the tracker misses fish | check the fish range first. Then *Run settings → Advanced* (classic pipeline) |
+| "Switch Run settings → Pipeline to classic to track here" | these results were made on a spectrogram grid the default pipeline's models were not trained on (older results, or a fixed nfft): track them with the classic pipeline |
 | "use Track recording for spans this long" | Track visible stops at five minutes |
 | "zoom out: wavetracker needs at least two FFT windows" | the view is too short to track |
 | Clean up finds nothing to keep | it is made for a few persistent fish. Correct by hand |

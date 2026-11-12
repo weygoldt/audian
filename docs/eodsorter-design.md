@@ -1082,8 +1082,16 @@ reachable and visible whatever is folded), the snippet bar, **Edit** (toggle,
 tools, hint, the selection strip while something is selected (5.3), Undo/Redo,
 brush, sticky, "Dim spectrogram", "Track ridge in brush" (5.5), and a
 "Display and keys" disclosure for the rest), **History**, **Tracks**, **Issues** (folded)
-and **Run settings** (the wavetracker line, fish range, device, config,
-advanced, cleanup).  Under Track visible / Track recording sits the
+and **Run settings** (the wavetracker line, fish range, pipeline, device,
+config, advanced, cleanup).  *Pipeline* is wavetracker's default (learned)
+pipeline or the classic one (``detector.method``, sent with every run; the
+runner merges the overrides into the config file's own sections before
+wavetracker fills in the rest from the chosen pipeline).  With the default
+pipeline nfft and overlap are fixed to its models' grid and the classic-only
+options (thresholds, tolerance, max dt, stitching) are greyed out; a session
+on another grid is refused with a hint to switch to classic; Track visible
+runs ``SNIPPET_CONTEXT_S`` (30 s) beyond each side and crops the result to
+the visible frames (`model.crop_snippet`).  Under Track visible / Track recording sits the
 **Range** row: "from [time] to [time]" (`hh:mm:ss.s`, or `mm:ss.s` on a
 recording shorter than an hour; `mm:ss` and seconds are accepted, "end" or
 empty for the end), **⇤ view** (from = the view's left edge), **view ⇥**

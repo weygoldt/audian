@@ -22,6 +22,7 @@ from audian_plugins.eodsorter.model import (
     ResultsError,
     Snippet,
     TrackSet,
+    crop_snippet,
     finish_interrupted_save,
     ident_variants,
     load_snippet,
@@ -1350,3 +1351,26 @@ def test_cleanup_runs_on_a_snippet_session_only_when_cut(tmp_path):
     )
     assert len(ident) == ts.n
     assert len(np.unique(ident[np.isfinite(ident)])) == 5
+
+
+def test_crop_snippet_keeps_the_window_asked_for():
+    """A Track visible run with context on either side is cut back to the
+    window: rows, frames and the provisional ids of the rows kept."""
+    idx = np.arange(10, 30)
+    s = Snippet(
+        k0=10,
+        k1=30,
+        fund=500.0 + np.arange(20.0),
+        idx=idx,
+        ident=np.repeat([0.0, 1.0], 10),
+        sign=np.ones((20, 2), np.float32),
+        cplx=np.ones((20, 2), np.complex64),
+        meta={"a": 1},
+    )
+    c = crop_snippet(s, 15, 25)
+    assert (c.k0, c.k1) == (15, 25)
+    assert c.idx.tolist() == list(range(15, 25))
+    assert c.fund.tolist() == (500.0 + np.arange(5.0, 15.0)).tolist()
+    assert c.ident.tolist() == [0.0] * 5 + [1.0] * 5
+    assert len(c.sign) == len(c.cplx) == 10 and c.meta == {"a": 1}
+    assert crop_snippet(s, 0, 100) is s  # nothing to cut

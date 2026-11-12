@@ -86,6 +86,23 @@ def deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
+def _read_config(path) -> dict:
+    """The sections a config file sets (YAML, or JSON), not filled up with
+    defaults: wavetracker's `Config.from_dict` fills in what it leaves out
+    from the pipeline that ``detector.method`` names (the default, learned
+    one, or the classic one), so overrides such as the Run settings'
+    pipeline choice must be merged in before that, not into a full config."""
+    import yaml  # a dependency of wavetracker
+
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("the config file does not hold sections")
+    return data
+
+
 def _require(req: dict, *names):
     missing = [n for n in names if n not in req]
     if missing:
@@ -196,12 +213,14 @@ class Runner:
         from wavetracker.config import Config
 
         try:
-            cfg = Config.load(config_path)
-            cfg = Config.from_dict(deep_merge(cfg.to_dict(), overrides))
+            base = _read_config(config_path) if config_path else {}
+            cfg = Config.from_dict(deep_merge(base, overrides))
         except FileNotFoundError as e:
             raise RequestError(f"config file not found: {e}") from e
         except (TypeError, ValueError) as e:
             raise RequestError(f"bad config: {e}") from e
+        except Exception as e:  # noqa: BLE001 - yaml.YAMLError and the like
+            raise RequestError(f"bad config file: {e}") from e
 
         _check_input_exists(inp)
         if final_dir is not None and os.path.exists(final_dir):
@@ -289,6 +308,7 @@ class Runner:
             "n_ids": int(results.n_ids),
             "n_frames": int(len(results.times)),
             "timings": timings,
+            "pipeline": getattr(getattr(cfg, "detector", None), "method", "classic"),
         }
 
     # -- peaks ---------------------------------------------------------

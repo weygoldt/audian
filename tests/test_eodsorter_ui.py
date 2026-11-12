@@ -175,6 +175,9 @@ def panel(world, tmp_path):
     if p.ts is not None:
         p.set_session(None)
     assert p.open_results(folder, ask=False)
+    # the synthetic results have a 3.9 Hz grid: the classic pipeline's runs
+    # (the default pipeline has its own tests below)
+    p.pipelinew.setCurrentIndex(p.pipelinew.findData("classic"))
     browser.set_ranges("f", 540.0, 960.0)
     browser.set_times(4.0, 8.0)
     pump(0.3)
@@ -2515,3 +2518,79 @@ def test_run_settings_offer_wavetrackers_resolution_at_the_recording_rate(panel)
     panel.nfftw.setCurrentIndex(panel.nfftw.findData(4096))
     assert panel._config_overrides()["spectrogram"]["nfft"] == 4096
     assert panel._snippet_grid().nfft == 4096
+
+
+def _pipeline(panel, name):
+    panel.pipelinew.setCurrentIndex(panel.pipelinew.findData(name))
+    pump(0.05)
+
+
+def test_the_default_pipeline_keeps_its_grid_and_has_no_classic_options(panel):
+    _pipeline(panel, "learned")
+    try:
+        assert panel.nfftw.currentData() == 0 and not panel.nfftw.isEnabled()
+        assert not panel.overlapw.isEnabled()
+        for w in (panel.threshmodew, panel.ftolw, panel.maxdtw, panel.stitchw):
+            assert not w.isEnabled()
+        assert not panel.lothw.isEnabled() and not panel.hithw.isEnabled()
+        cfg = panel._config_overrides(snippet=True)
+        assert cfg["detector"] == {"method": "learned"}
+        assert "tracking" not in cfg and "stitching" not in cfg
+        assert "low_threshold" not in cfg["harmonic_groups"]
+        assert "default ·" in panel.runsummaryw.text()
+        assert panel.prefs["pipeline"] == "learned"
+    finally:
+        _pipeline(panel, "classic")
+    assert panel.nfftw.isEnabled() and panel.ftolw.isEnabled()
+    cfg = panel._config_overrides()
+    assert cfg["detector"] == {"method": "classic"}
+    assert cfg["tracking"]["max_dt"] == panel.maxdtw.value()
+    assert "classic ·" in panel.runsummaryw.text()
+
+
+def test_the_default_pipeline_says_to_switch_to_classic_on_another_grid(panel):
+    """Results on a grid the learned detector was not trained on: neither
+    Track visible nor Track recording runs; the hint says what to do."""
+    fake = HoldingRunner(panel)
+    panel.runner = None
+    panel.runner_factory = lambda oneshot: fake
+    _pipeline(panel, "learned")
+    try:
+        panel.track_visible()
+        assert panel._job is None and not fake.jobs
+        assert "Pipeline to classic" in panel.hintw.text()
+        panel.track_recording()
+        assert panel._job is None and not fake.jobs
+        assert "Pipeline to classic" in panel.hintw.text()
+    finally:
+        panel.cancel_job(quiet=True)
+        _pipeline(panel, "classic")
+
+
+def test_track_visible_with_the_default_pipeline_runs_with_context(panel):
+    """Without a session the Run settings' grid is the models'; the snippet
+    is written with SNIPPET_CONTEXT_S on either side (within the recording)
+    and asked for over the visible frames."""
+    import math
+
+    from audian_plugins.eodsorter import ridge as RG
+    from audian_plugins.eodsorter.panel import SNIPPET_CONTEXT_S
+
+    fake = HoldingRunner(panel)
+    panel.runner = None
+    panel.runner_factory = lambda oneshot: fake
+    panel.set_session(None)
+    _pipeline(panel, "learned")
+    try:
+        panel.browser.set_times(8.0, 4.0)
+        pump(0.3)
+        panel.track_visible()
+        job = panel._job
+        assert job is not None and job["kind"] == "export"
+        grid = job["grid"]
+        assert grid.nfft == RG.default_nfft(RATE)
+        pad = math.ceil(SNIPPET_CONTEXT_S * RATE / grid.step)
+        assert job["r0"] == max(0, job["k0"] - pad) < job["k0"]
+    finally:
+        panel.cancel_job(quiet=True)
+        _pipeline(panel, "classic")

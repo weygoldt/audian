@@ -390,7 +390,8 @@ def test_wtrunner_imports_neither_audian_nor_qt():
             roots |= {a.name.split(".")[0] for a in node.names}
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             roots.add(node.module.split(".")[0])
-    allowed = set(sys.stdlib_module_names) | {"numpy", "wavetracker", "torch"}
+    # wavetracker and its own dependencies (torch, yaml for config files)
+    allowed = set(sys.stdlib_module_names) | {"numpy", "wavetracker", "torch", "yaml"}
     assert roots <= allowed, roots - allowed
     assert not roots & {"audian", "audian_plugins", "PySide6", "pyqtgraph"}
 
@@ -425,6 +426,50 @@ def test_deep_merge():
         "c": 1,
     }
     assert base == {"a": {"x": 1, "y": 2}, "b": 3}
+
+
+def _wtrunner():
+    sys.path.insert(0, str(Path(WTRUNNER).parent))
+    try:
+        import wtrunner
+    finally:
+        sys.path.pop(0)
+    return wtrunner
+
+
+def test_the_run_settings_pipeline_picks_the_defaults_of_a_config_file(tmp_path):
+    """Overrides go into the sections a config file sets, before wavetracker
+    fills in the rest: with "classic" the classic pipeline's defaults, not
+    the default (learned) pipeline's with a classic detector."""
+    pytest.importorskip("wavetracker.config")
+    from wavetracker.config import Config
+
+    if not hasattr(Config, "classic"):
+        pytest.skip("a wavetracker without the learned default pipeline")
+    wt = _wtrunner()
+    path = tmp_path / "cfg.yaml"
+    path.write_text("tracking:\n  max_dt: 5.0\n")
+    classic = Config.from_dict(
+        wt.deep_merge(wt._read_config(path), {"detector": {"method": "classic"}})
+    )
+    assert classic.detector.method == "classic"
+    assert classic.tracking.method == "classic"
+    assert classic.tracking.max_dt == 5.0
+    assert not classic.rises.enabled and classic.linking.model is None
+    learned = Config.from_dict(
+        wt.deep_merge(wt._read_config(path), {"detector": {"method": "learned"}})
+    )
+    assert learned.tracking.method == "learned" and learned.rises.enabled
+    assert learned.tracking.max_dt == 5.0
+    # no file: the overrides alone
+    assert Config.from_dict(wt.deep_merge({}, {"detector": {"method": "classic"}})) == (
+        Config.classic()
+    )
+    (tmp_path / "empty.yaml").write_text("")
+    assert wt._read_config(tmp_path / "empty.yaml") == {}
+    (tmp_path / "list.yaml").write_text("- 1\n")
+    with pytest.raises(ValueError):
+        wt._read_config(tmp_path / "list.yaml")
 
 
 def test_wavetracker_is_installed_alongside_and_cheap_to_check():

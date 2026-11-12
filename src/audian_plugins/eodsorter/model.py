@@ -514,6 +514,25 @@ class Snippet:
     meta: dict = field(default_factory=dict)
 
 
+def crop_snippet(snippet: Snippet, k0: int, k1: int) -> Snippet:
+    """The part of `snippet` in session frames [k0, k1): a run with context
+    on either side, cut back to the window that was asked for."""
+    k0, k1 = max(int(k0), snippet.k0), min(int(k1), snippet.k1)
+    if (k0, k1) == (snippet.k0, snippet.k1):
+        return snippet
+    keep = (snippet.idx >= k0) & (snippet.idx < k1)
+    return Snippet(
+        k0=k0,
+        k1=k1,
+        fund=snippet.fund[keep],
+        idx=snippet.idx[keep],
+        ident=snippet.ident[keep],
+        sign=snippet.sign[keep],
+        cplx=None if snippet.cplx is None else snippet.cplx[keep],
+        meta=snippet.meta,
+    )
+
+
 def load_snippet(run_dir, grid: FrameGrid, k0: int) -> Snippet:
     """Read a run's directory, add k0 to idx_v, and check that the run's
     times + offset equal grid.times()[k0:k0+len(times)] within 1e-6 s.
