@@ -281,8 +281,8 @@ uv run audian session/*.wav    # a session split over files, joined by their tim
 
 **Set the fish range** to the band your species lives in. A narrow band finds less
 junk. **Run settings** folds itself after the first run: click its title to open
-it. Press <kbd>Shift</kbd>+<kbd>R</kbd> until the fish are thin lines; how many
-times depends on the sampling rate.
+it. Press <kbd>Shift</kbd>+<kbd>R</kbd> until the fish are thin lines: five times
+from the default, as on the demo, at any sampling rate.
 
 **Try your settings on a minute or two first.** **Track visible** tracks what is on
 screen, up to five minutes, in seconds. With the default pipeline it also reads
