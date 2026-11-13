@@ -41,7 +41,7 @@ from audioio import bext_history_str, add_history
 from thunderlab.datawriter import available_formats, write_data
 from thunderlab.tabledata import TableData
 
-from . import denoise, labelassist, smoothing, theme
+from . import denoise, fftwindow, labelassist, smoothing, theme
 from .data import Data
 from .panels import Panel, Panels, peaking_colormap
 from .panelsplitter import PanelSplitter
@@ -1714,7 +1714,8 @@ class DataBrowser(QWidget):
 
     SPECTROGRAM_SETTING = "spectrogram"
     #: 1: ``{"version": 1, "colormap": {"dark": name, "light": name},
-    #: "nfft": int|None, "overlap": float|None}``.
+    #: "resolution": float|None, "overlap": float|None, ...}``, and from an
+    #: older audian ``"nfft": int|None``.
     #:
     #: The colormap used to live in a `QSettings` INI of its own, as an
     #: **index** into `theme.spectrogram_maps()`.  Both halves of that were
@@ -1737,22 +1738,29 @@ class DataBrowser(QWidget):
     #: day.  Two names cost one extra key and mean the choice made on each
     #: page comes back to that page.
     #:
-    #: nfft and overlap are null until a reader touches them, on the rule
-    #: `SPEC_BAND_SETTING_VERSION` states: ship inert, and never freeze this
-    #: session's default into the file as though it had been chosen.  Both
-    #: are dimensionless -- a window of 256 samples means the same trade of
-    #: frequency against time on an 8 kHz file and a 96 kHz one, which is
-    #: why they travel where an absolute Hz band would not.
+    #: The window and the overlap are null until a reader touches them, on
+    #: the rule `SPEC_BAND_SETTING_VERSION` states: ship inert, and never
+    #: freeze this session's default into the file as though it had been
+    #: chosen.
+    #:
+    #: The window is stored as its frequency resolution in Hz
+    #: (``"resolution"``), not in samples.  It used to be ``"nfft"``, on the
+    #: argument that a sample count is dimensionless and so travels between
+    #: rates; it does not -- 256 samples is 12.8 ms and 78 Hz wide bins at
+    #: 20 kHz and 5.3 ms and 188 Hz at 48 kHz, so a window chosen on one
+    #: recording opened every other rate at a picture nobody had chosen.  A
+    #: resolution is what a reader sees and picks, and `fftwindow` turns it
+    #: into the window at whatever rate is open.  The overlap is a fraction
+    #: of the window and does travel.
+    #:
+    #: An ``"nfft"`` an older audian wrote is converted once, at the rate of
+    #: the recording open when it is first read, and from then on
+    #: ``"resolution"`` wins.  The old key itself is never rewritten or
+    #: removed: an older audian installed beside this one keeps reading its
+    #: own.  The version is NOT bumped for the new key: `spectrogram_settings`
+    #: drops the whole block on a version it does not know, which would take
+    #: every reader's colormap with it.
     SPECTROGRAM_SETTING_VERSION = 1
-
-    #: The Fourier windows the parameter bar offers, as exponents of two.
-    #: Named so that a restored window is snapped to a step the combo can
-    #: actually show: `set_nfft_widget` returns silently when `findData`
-    #: misses, so a window off the list would leave the picture and the bar
-    #: disagreeing with nothing said about it.
-    NFFT_EXPONENTS = range(3, 20)
-    NFFT_MIN = 2 ** NFFT_EXPONENTS[0]
-    NFFT_MAX = 2 ** NFFT_EXPONENTS[-1]
 
     # y-range policies of the trace panels:
     y_shared = 0
@@ -2018,7 +2026,7 @@ class DataBrowser(QWidget):
         self.time_step_timer.setSingleShot(True)
         self.time_step_timer.setInterval(0)
         self.time_step_timer.timeout.connect(self.apply_pending_time_ranges)
-        self.pending_nfft = None
+        self.pending_resolution = None
         self.pending_overlap = None
         self.denoise_timer = QTimer(self)
         self.denoise_timer.setSingleShot(True)
@@ -2189,11 +2197,16 @@ class DataBrowser(QWidget):
         self.zmidw = None
         self.zmidsliderw = None
         self._level_widgets_shown = None
-        #: window and overlap the reader has asked for this run, or None
-        #: while both are still whatever the recording opened on.  Only a
-        #: number that came from a gesture is ever written.
-        self.nfft_pref = None
+        #: window (its frequency resolution, Hz) and overlap the reader has
+        #: asked for, or None while both are still whatever the recording
+        #: opened on.  Only a number that came from a gesture, or from the
+        #: settings file, is ever written.
+        self.resolution_pref = None
         self.overlap_pref = None
+        #: the windows the Window combo and R / Shift+R offer at the open
+        #: recording's rate: ``(resolution, nfft)`` pairs from
+        #: `fftwindow.windows`, coarsest first
+        self.windows = []
         #: a settings write is queued for the end of this turn of the loop
         self.spectrogram_save_queued = False
         self.figs = []  # all GraphicsLayoutWidgets - one for each channel
@@ -2560,11 +2573,11 @@ class DataBrowser(QWidget):
         # child of the window it belongs to while tabs are being moved.
         self.gui = gui
         self.adopt_task_manager(getattr(gui, "tasks", None))
-        self.restore_resolution()
         # load data:
         self.data.open(unwrap, unwrap_clip)
         if self.data.data is None:
             return
+        self.restore_resolution()
         # What the loader noticed about the joins between files but did not act
         # on.  It reaches the status bar rather than stdout, because the whole
         # failure mode here is information nobody sees: a split recording that
@@ -3327,17 +3340,19 @@ class DataBrowser(QWidget):
             spectrogram = self.data["spectrogram"]
             group = self.param_group("Spectrogram")
             self.nfftw = QComboBox(self)
-            self.nfftw.tooltip = "Number of samples of a Fourier window"
+            self.nfftw.tooltip = (
+                "Frequency resolution of the Fourier window, and how long the "
+                "window lasts; the same at any sampling rate"
+            )
             self.nfftw.setToolTip(self.nfftw.tooltip)
             self.nfftw.setFont(theme.font_mono(theme.SIZE_SMALL_PT))
-            for i in DataBrowser.NFFT_EXPONENTS:
-                nfft = 2**i
-                self.nfftw.addItem(self.nfft_label(nfft), nfft)
+            for resolution, nfft in self.windows:
+                self.nfftw.addItem(self.window_label(resolution, nfft), resolution)
             self.nfftw.setEditable(False)
             narrow_combo(self.nfftw)
             self.set_nfft_widget(spectrogram.nfft)
             self.nfftw.currentIndexChanged.connect(
-                lambda i: self.update_resolution(nfft=self.nfftw.itemData(i))
+                lambda i: self.update_resolution(resolution=self.nfftw.itemData(i))
             )
             group.add_row("Window", "R / ⇧R", self.nfftw)
 
@@ -3367,8 +3382,9 @@ class DataBrowser(QWidget):
             # the transform can reach and the clamp is not the highest of
             # them.  `set_hop` rounds the hop to whole frames and floors it
             # at one, so the real ceiling is `1 - hop/nfft`: measured over
-            # `NFFT_EXPONENTS`, it is 99.99923706 % at nfft 131072, above
-            # the clamp.  A box bounded at the clamp would round that down
+            # the windows `fftwindow` offers, it is 99.99923706 % at nfft
+            # 131072 at 20 kHz and 99.99904740 % at nfft 629856 at 48 kHz,
+            # above the clamp either way.  A box bounded at the clamp would round that down
             # and report a picture drawn at something else.  100 % typed in
             # is refused by the clamp instead, and refused visibly --
             # `set_resolution` writes back the 99.609 % that a hop of one
@@ -3791,7 +3807,7 @@ class DataBrowser(QWidget):
 
     @staticmethod
     def hz_label(hz: float) -> str:
-        """Render a frequency the way `nfft_label` renders a duration.
+        """Render a frequency the way `window_label` renders a duration.
 
         Explicit branches rather than `pg.siFormat`, which nothing else in
         this file uses: one formatting convention per file.
@@ -3909,15 +3925,30 @@ class DataBrowser(QWidget):
             widget.setValue(fallback if value is None else value)
             widget.blockSignals(False)
 
-    def nfft_label(self, nfft: int) -> str:
-        """Label a Fourier window by its length *and* its duration."""
+    def window_label(self, resolution: float, nfft: int) -> str:
+        """Label a Fourier window by its resolution *and* its duration.
+
+        The resolution is the nominal one of `fftwindow.LADDER`, the same
+        text at every rate; the duration is this rate's window.  The exact
+        bin width is in the tool tip `set_resolution` writes.
+        """
         duration = nfft / self.data.rate
         if duration >= 1:
-            return f"{nfft} ({duration:.3g} s)"
-        return f"{nfft} ({1000 * duration:.3g} ms)"
+            length = f"{duration:.3g} s"
+        else:
+            length = f"{1000 * duration:.3g} ms"
+        return f"{self.hz_label(resolution)} \u00b7 {length}"
 
     def set_nfft_widget(self, nfft: int) -> None:
-        index = self.nfftw.findData(nfft)
+        """Show the combo entry of the window `nfft` samples long.
+
+        Silent when no entry has exactly this window, as `findData` always
+        was: only `set_resolution(nfft=...)` can set one, and the entries
+        are exactly the windows `self.windows` holds.
+        """
+        index = next(
+            (i for i, entry in enumerate(self.windows) if entry[1] == nfft), -1
+        )
         if index < 0:
             return
         blocked = self.nfftw.blockSignals(True)
@@ -8727,41 +8758,61 @@ class DataBrowser(QWidget):
         )
 
     def restore_resolution(self) -> None:
-        """Put the stored Fourier window and overlap on the trace.
+        """Open the spectrogram at the stored window and overlap.
 
-        Before `data.open()`, which is the one place they can be set for
-        free: `BufferedSpectrogram.open` *reads* nfft and overlap to size
-        its buffers rather than resetting them, so a value put here is the
-        one the first transform runs at.  Going through `set_resolution`
-        instead would recompute a spectrogram that had just been computed,
-        and it could not run at all -- the parameter-bar widgets it drives
-        do not exist yet, and it early-returns while `self.setting` is up.
+        Right after `data.open()`: the window is stored as a resolution in
+        Hz and only the open recording's rate turns it into samples, and the
+        rate is known only once the file is open.  It is still free there.
+        `data.open()` sizes the buffers but transforms nothing -- the first
+        transform runs when a panel first asks for a picture -- so
+        `prepare_update` reshapes an empty buffer.  `set_resolution` instead
+        could not run at all: the parameter-bar widgets it drives do not
+        exist yet, and it early-returns while `self.setting` is up.
+
+        Without a preference the window is `fftwindow.DEFAULT`, 12.8 ms at
+        any rate.  An ``"nfft"`` an older audian stored is converted once:
+        its bin width at this rate, snapped to the ladder, becomes the
+        stored ``"resolution"``, and the old key is left as it is.
 
         Validated rather than trusted, because the settings file is a file a
-        reader may edit by hand: a window is snapped to a power of two in
-        the range the combo offers, and an overlap outside 0 to 1 is
-        dropped.  A window wider than the recording is left to
-        `BufferedSpectrogram` to clamp, which it already does against the
-        real length.
+        reader may edit by hand: a resolution must be a positive number and
+        is snapped to the ladder, an old window must be a sample count an
+        older audian could have offered, and an overlap outside 0 to 1 is
+        dropped.  A stored window the recording cannot hold (one longer
+        than half of it) opens at the closest one it can; the preference
+        itself is kept for the next recording.
         """
         if not self.spectrogram or self.spectrogram not in self.data:
             return
         saved = DataBrowser.spectrogram_settings()
         spectrogram = self.data[self.spectrogram]
+        source = spectrogram.source
+        self.windows = fftwindow.windows(source.rate, source.frames)
+        wanted = fftwindow.DEFAULT
+        resolution = fftwindow.valid_resolution(saved.get("resolution"))
         nfft = saved.get("nfft")
-        if isinstance(nfft, int) and not isinstance(nfft, bool):
-            if self.NFFT_MIN <= nfft <= self.NFFT_MAX:
-                # snap to the combo's own steps: a window the bar cannot
-                # show would leave the picture and the parameter bar
-                # disagreeing with nothing said about it
-                spectrogram.nfft = 1 << int(nfft).bit_length() - 1
-                self.nfft_pref = spectrogram.nfft
+        if resolution is not None:
+            wanted = self.resolution_pref = fftwindow.snap(resolution)
+        elif (
+            isinstance(nfft, int)
+            and not isinstance(nfft, bool)
+            and fftwindow.NFFT_MIN <= nfft <= fftwindow.LEGACY_NFFT_MAX
+        ):
+            wanted = self.resolution_pref = fftwindow.snap(source.rate / nfft)
+            # converted once: from now on the file holds the resolution
+            self.schedule_spectrogram_save()
+        entry = fftwindow.nearest(wanted, self.windows)
         overlap = saved.get("overlap")
         if isinstance(overlap, (int, float)) and not isinstance(overlap, bool):
             if 0.0 <= float(overlap) < 1.0:
-                spectrogram.overlap_frac = float(overlap)
-                self.overlap_pref = spectrogram.overlap_frac
-        spectrogram.set_hop()
+                self.overlap_pref = float(overlap)
+            else:
+                overlap = None
+        else:
+            overlap = None
+        spectrogram.prepare_update(
+            nfft=None if entry is None else entry[1], overlap_frac=overlap
+        )
 
     def schedule_spectrogram_save(self) -> None:
         """Queue one settings write for the end of this turn of the loop.
@@ -8801,7 +8852,14 @@ class DataBrowser(QWidget):
             {
                 "version": DataBrowser.SPECTROGRAM_SETTING_VERSION,
                 "colormap": maps,
-                "nfft": saved.get("nfft") if self.nfft_pref is None else self.nfft_pref,
+                "resolution": (
+                    saved.get("resolution")
+                    if self.resolution_pref is None
+                    else self.resolution_pref
+                ),
+                # an older audian's window, in samples: never rewritten here
+                # (see `SPECTROGRAM_SETTING_VERSION`)
+                "nfft": saved.get("nfft"),
                 "overlap": (
                     saved.get("overlap")
                     if self.overlap_pref is None
@@ -9320,8 +9378,11 @@ class DataBrowser(QWidget):
                 ].z()
             self.set_resolution()
 
-    def update_resolution(self, nfft=None, overlap_frac=None) -> None:
+    def update_resolution(self, resolution=None, overlap_frac=None) -> None:
         """Debounced entry point for the Fourier window and the overlap.
+
+        `resolution` is the window's frequency resolution in Hz, one of
+        `self.windows`; the window in samples follows from the rate.
 
         The last expensive control in the parameter bar with no coalescing.
         Dragging the overlap slider emits one `valueChanged` per integer
@@ -9333,34 +9394,41 @@ class DataBrowser(QWidget):
         Same shape as `update_filter`: stash the value, restart the timer,
         and let `apply_resolution` run once when the burst stops.  The
         keyboard steps read the *pending* value so that holding R down keeps
-        doubling instead of stepping off the same settled window each time.
+        stepping instead of stepping off the same settled window each time.
         """
-        if nfft is not None:
-            self.pending_nfft = int(nfft)
+        if resolution is not None:
+            self.pending_resolution = float(resolution)
         if overlap_frac is not None:
             self.pending_overlap = float(overlap_frac)
         self.resolution_timer.start(200)
 
     def apply_resolution(self) -> None:
         """Set the resolution from the stashed window and overlap."""
-        nfft = self.pending_nfft
+        resolution = self.pending_resolution
         overlap_frac = self.pending_overlap
-        self.pending_nfft = None
+        self.pending_resolution = None
         self.pending_overlap = None
-        if nfft is None and overlap_frac is None:
+        if resolution is None and overlap_frac is None:
             return
-        self.set_resolution(nfft=nfft, overlap_frac=overlap_frac)
+        self.set_resolution(resolution=resolution, overlap_frac=overlap_frac)
         # end of the gesture, so this is a window the reader asked for.
         # Only this browser writes: no other tab follows it, so the stored
         # value cannot depend on the order the tabs happen to sit in.
         spectrogram = self.data[self.spectrogram] if self.spectrogram else None
         if spectrogram is not None:
-            self.nfft_pref = int(spectrogram.nfft)
+            current = self.current_window()
+            if current is not None:
+                self.resolution_pref = current[0]
             self.overlap_pref = float(spectrogram.overlap_frac)
             self.schedule_spectrogram_save()
 
-    def set_resolution(self, nfft=None, overlap_frac=None) -> None:
+    def set_resolution(self, nfft=None, overlap_frac=None, resolution=None) -> None:
         """Set the Fourier window and overlap of the spectrogram.
+
+        The window is given as a frequency `resolution` in Hz -- the window
+        of `self.windows` closest to it, at this recording's rate -- or as
+        `nfft` in samples, which nothing in the interface does any more but
+        a test pinning an exact window may.
 
         The membership check happens *before* the guard flag is taken:
         an early return that leaves `self.setting` set freezes every
@@ -9371,18 +9439,26 @@ class DataBrowser(QWidget):
         if not self.spectrogram or self.spectrogram not in self.data:
             return
         spectrogram = self.data[self.spectrogram]
+        if resolution is not None:
+            entry = fftwindow.nearest(float(resolution), self.windows)
+            if entry is not None:
+                nfft = entry[1]
         with self.updating():
             self.request_recompute(spectrogram, nfft=nfft, overlap_frac=overlap_frac)
             if self.nfftw is not None:
                 self.set_nfft_widget(spectrogram.nfft)
-                T = spectrogram.nfft / self.data.rate
-                if 1 / T >= 1000:
-                    deltaf_label = f"\u0394f={0.001 / T:.2f}kHz"
-                elif 1 / T >= 1:
-                    deltaf_label = f"\u0394f={1 / T:.3g}Hz"
+                # the exact bin width, which the label's nominal resolution
+                # is only within the rounding to a fast FFT size of
+                deltaf = self.data.rate / spectrogram.nfft
+                if deltaf >= 1000:
+                    deltaf_label = f"\u0394f = {0.001 * deltaf:.4g} kHz"
+                elif deltaf >= 1:
+                    deltaf_label = f"\u0394f = {deltaf:.4g} Hz"
                 else:
-                    deltaf_label = f"\u0394f={1000 / T:.3g}mHz"
-                self.nfftw.setToolTip(f"{self.nfftw.tooltip}, {deltaf_label}")
+                    deltaf_label = f"\u0394f = {1000 * deltaf:.4g} mHz"
+                self.nfftw.setToolTip(
+                    f"{self.nfftw.tooltip}: {spectrogram.nfft} samples, {deltaf_label}"
+                )
             if self.ofracw is not None:
                 # The slider is rounded to whole percent and the box is
                 # not, which is why the two are written separately rather
@@ -9416,15 +9492,42 @@ class DataBrowser(QWidget):
                 self.ofracsliderw.setToolTip(tip)
                 self.ofracw.setToolTip(tip)
 
-    def current_nfft(self) -> int:
-        """The window the next step should be taken from.
+    def current_window(self):
+        """The entry of `self.windows` the spectrogram is drawn at.
 
-        A pending value if there is one, so that holding R down keeps
-        doubling rather than stepping off the same settled value each time.
+        Its ``(resolution, nfft)``: the entry with exactly this window, and
+        for a window set in samples that is on no entry (a caller of
+        `set_resolution(nfft=...)`), the entry whose resolution is closest
+        to the window's bin width.  None when nothing is offered.
         """
-        if self.pending_nfft is not None:
-            return self.pending_nfft
-        return self.data[self.spectrogram].nfft
+        if not self.spectrogram or self.spectrogram not in self.data:
+            return None
+        spectrogram = self.data[self.spectrogram]
+        for entry in self.windows:
+            if entry[1] == spectrogram.nfft:
+                return entry
+        rate = spectrogram.source.rate if spectrogram.source is not None else 0
+        if not rate or not spectrogram.nfft:
+            return None
+        return fftwindow.nearest(rate / spectrogram.nfft, self.windows)
+
+    def window_step(self, step: int):
+        """The resolution `step` entries finer (+) or coarser (-) than the
+        pending one, or than the window on screen; None at either end.
+
+        From the pending value, so that holding R down keeps stepping
+        rather than stepping off the same settled window each time.
+        """
+        if self.pending_resolution is not None:
+            current = fftwindow.nearest(self.pending_resolution, self.windows)
+        else:
+            current = self.current_window()
+        if current is None:
+            return None
+        k = self.windows.index(current) + step
+        if not 0 <= k < len(self.windows):
+            return None
+        return self.windows[k][0]
 
     def current_overlap(self) -> float:
         if self.pending_overlap is not None:
@@ -9432,12 +9535,18 @@ class DataBrowser(QWidget):
         return self.data[self.spectrogram].overlap_frac
 
     def freq_resolution_down(self):
+        """R: a shorter window, coarser in frequency."""
         if self.spectrogram in self.data:
-            self.update_resolution(nfft=self.current_nfft() // 2)
+            resolution = self.window_step(-1)
+            if resolution is not None:
+                self.update_resolution(resolution=resolution)
 
     def freq_resolution_up(self):
+        """Shift+R: a longer window, finer in frequency."""
         if self.spectrogram in self.data:
-            self.update_resolution(nfft=2 * self.current_nfft())
+            resolution = self.window_step(+1)
+            if resolution is not None:
+                self.update_resolution(resolution=resolution)
 
     def overlap_frac_up(self):
         if self.spectrogram in self.data:

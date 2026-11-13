@@ -498,6 +498,7 @@ def test_all_five_spectrogram_preferences_ride_in_one_block(store, app):
         {
             "version": DataBrowser.SPECTROGRAM_SETTING_VERSION,
             "colormap": {theme.THEME_DARK: name},
+            "resolution": 0.6103515625,
             "nfft": 512,
             "overlap": 0.75,
             "smoothing": "box",
@@ -506,6 +507,7 @@ def test_all_five_spectrogram_preferences_ride_in_one_block(store, app):
         },
     )
     saved = DataBrowser.spectrogram_settings()
+    assert saved["resolution"] == 0.6103515625
     assert saved["nfft"] == 512
     assert saved["overlap"] == 0.75
     assert DataBrowser.read_color_map_setting() == 2
@@ -557,17 +559,24 @@ def test_an_unwritable_settings_file_is_survivable(store, app, tmp_path, monkeyp
     store.save_setting("theme", theme.THEME_LIGHT)
 
 
-def test_the_nfft_range_the_bar_offers_is_the_one_a_restore_snaps_to(app):
+def test_a_restored_window_is_always_one_the_bar_offers(app):
     """One source for both, so a restored window is always a window shown.
 
-    `set_nfft_widget` returns silently when `findData` misses, so a window
-    off the combo's list would leave the picture and the parameter bar
-    disagreeing with nothing said about it.
+    `set_nfft_widget` returns silently when no entry has the window, so a
+    restore that landed off the list would leave the picture and the
+    parameter bar disagreeing with nothing said about it.  A stored
+    resolution is snapped to `fftwindow.LADDER`, an old window in samples
+    likewise (at the rate it is read at), and the bar lists the windows of
+    exactly those resolutions.
     """
-    from audian.databrowser import DataBrowser
+    from audian import fftwindow
 
-    assert DataBrowser.NFFT_MIN == 2 ** DataBrowser.NFFT_EXPONENTS[0]
-    assert DataBrowser.NFFT_MAX == 2 ** DataBrowser.NFFT_EXPONENTS[-1]
-    for exponent in DataBrowser.NFFT_EXPONENTS:
-        nfft = 2**exponent
-        assert 1 << int(nfft).bit_length() - 1 == nfft
+    for value in (1e-4, 0.07, 0.61, 1.0, 2.44, 50.0, 78.125, 3000.0):
+        assert fftwindow.snap(value) in fftwindow.LADDER
+    for rate in (8000, 20000, 48000):
+        for nfft in (8, 100, 256, 4096, 2**19):
+            assert fftwindow.snap(rate / nfft) in fftwindow.LADDER
+    offered = fftwindow.windows(48000, 10**9)
+    for resolution in fftwindow.LADDER:
+        entry = fftwindow.nearest(resolution, offered)
+        assert entry in offered
