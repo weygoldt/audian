@@ -87,10 +87,11 @@ def tones(channels):
     return signal
 
 
-def build_window(app, directory, channels, signal=None):
+def build_window(app, directory, channels, signal=None, rate=None):
     """The whole application on a synthetic recording of `channels` channels.
 
     `signal` is a (frames, channels) float array; `tones` is the default.
+    `rate` is the sampling rate it is written at, `RATE` by default.
 
     Both persistence stores are redirected into `directory` first, and the
     reason is no longer the reader's own ``~/.config/audian`` -- the session
@@ -114,7 +115,7 @@ def build_window(app, directory, channels, signal=None):
     import audian.audian as audian_app
     from audian.plugins import Plugins
 
-    rate = RATE
+    rate = RATE if rate is None else rate
     if signal is None:
         signal = tones(channels)
     recording = directory / "rec.wav"
@@ -137,13 +138,13 @@ def build_window(app, directory, channels, signal=None):
     return window
 
 
-def open_stack(app, directory, channels, signal=None):
+def open_stack(app, directory, channels, signal=None, rate=None):
     """A browser showing both panels, and the teardown that follows it."""
     import audian.audian as audian_app
 
     original = audian_app.settings_path
     home = Path(QSettings("audian", "audian").fileName()).parent.parent
-    window = build_window(app, directory, channels, signal)
+    window = build_window(app, directory, channels, signal, rate)
     view = window.browser()
     view.set_panels(specs=1)
     pump(1.0)

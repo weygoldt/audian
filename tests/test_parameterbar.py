@@ -1963,8 +1963,17 @@ def overlap(browser):
     """
     spectrogram = browser.data["spectrogram"]
     before = spectrogram.overlap_frac
+    window = spectrogram.nfft
+    # The numbers these tests quote -- 62.5 % exact, 80 % landing at
+    # 80.078125 %, a one-frame hop at 99.609375 % -- are for a 256 sample
+    # window.  At this fixture's 8 kHz the browser opens at the 78 Hz
+    # resolution, 100 samples, so pin the window they were written for,
+    # in samples, through the one entry point that still takes samples.
+    browser.set_resolution(nfft=256)
+    settle()
+    pump(0.3)
     yield browser
-    browser.set_resolution(overlap_frac=before)
+    browser.set_resolution(nfft=window, overlap_frac=before)
     settle()
     pump(0.3)
 

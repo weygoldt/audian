@@ -230,7 +230,14 @@ def test_the_pointer_readout_agrees_with_the_picture(stack, mean_off):
         # nearest one rather than the one below it.  Both were the other way
         # round, which is what put an nfft-dependent bias into every label
         # drawn on a spectrogram.
-        t = (data.offset + ti) / data.rate + item.time_shift()
+        #
+        # The middle of the column, not its left edge: on the edge the
+        # pointer is between two cells, and `floor` puts a probe there in
+        # the previous one whenever the float lands a hair low -- 52 of
+        # 5000 columns at nfft 256 / hop 128, 2 of 5000 at nfft 100 / hop
+        # 50, both at 8 kHz.  The window this fixture opens at changed from
+        # the first to the second and moved one probe onto such an edge.
+        t = (data.offset + ti + 0.5) / data.rate + item.time_shift()
         fi = int(np.floor(freq / data.fresolution + 0.5))
         with np.errstate(all="ignore"):
             want = decibel(float(np.mean(data.buffer[ti, :, fi])))
@@ -312,10 +319,11 @@ def test_a_filtering_smoothing_moves_the_readout_on_to_the_pixel(
     lane = enter_mean(stack)
     item = spec_item(stack, lane)
     data = item.data
-    # a column is drawn at its window's centre; see the test above
+    # a column is drawn at its window's centre, and probed in its middle;
+    # see the test above
     raw = {
         (ti, freq): item.get_power(
-            (data.offset + ti) / data.rate + item.time_shift(), freq
+            (data.offset + ti + 0.5) / data.rate + item.time_shift(), freq
         )
         for ti, freq in probe_points(item)
     }
@@ -326,7 +334,7 @@ def test_a_filtering_smoothing_moves_the_readout_on_to_the_pixel(
     i0, _i1, stride = item._image_range
     moved = 0
     for (ti, freq), before in raw.items():
-        t = (data.offset + ti) / data.rate + item.time_shift()
+        t = (data.offset + ti + 0.5) / data.rate + item.time_shift()
         got = item.get_power(t, freq)
         cell = item.image[
             int(np.floor(freq / data.fresolution + 0.5)), (ti - i0) // stride
