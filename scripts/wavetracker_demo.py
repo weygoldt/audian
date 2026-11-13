@@ -5,10 +5,11 @@
 
 Writes ``DIR/demo.wav`` (default: ./wavetracker-demo), two minutes on four
 electrodes, and ``DIR/demo_truth.npz``, what is really in it.  Six fish, chosen
-so that tracking it shows the mistakes a tracker makes: one fish's rises break
-it into pieces, two fish cross, one fish fades in and out, and another's second
-harmonic is strong enough to mistake for a fish.  Seeded, so everybody gets the
-same tracks and the track numbers in the quickstart are the ones on screen.
+so that tracking it leaves things to correct: two fish cross, one swims out of
+reach for a minute and comes back 5 Hz higher, one rises (which wavetracker's
+default pipeline follows), and one has a second harmonic strong enough to
+mistake for a fish.  Seeded, so everybody gets the same tracks
+and the track numbers in the quickstart are the ones on screen.
 """
 
 from __future__ import annotations
@@ -22,6 +23,18 @@ import wavetracker.synthetic as synthetic
 DURATION = 120.0
 #: Hz/s on top of the synthesizer's drift: two fish that meet and cross
 SLOPES = {650.0: +0.25, 668.0: -0.25}
+#: fish that are gone for a while: (start, end, ramp) [s] of their absence
+AWAY = {735.0: (30.0, 90.0, 3.0)}
+#: Hz a fish's frequency moves while it is away
+SHIFT = {735.0: 5.0}
+
+
+def presence(times, start, end, ramp):
+    """1 while the fish is there, 0 while it is away, cosine ramps between."""
+    times = np.asarray(times, dtype=float)
+    down = np.clip((times - (start - ramp)) / ramp, 0.0, 1.0)
+    up = np.clip((times - end) / ramp, 0.0, 1.0)
+    return 0.5 * (1 + np.cos(np.pi * down)) + 0.5 * (1 - np.cos(np.pi * up))
 
 
 def write_demo(directory) -> Path:
@@ -32,7 +45,13 @@ def write_demo(directory) -> Path:
 
     def trace(fish, times, rng):
         slope = SLOPES.get(fish.base_freq, 0.0)
-        return original(fish, times, rng) + slope * (times - DURATION / 2)
+        f = original(fish, times, rng) + slope * (times - DURATION / 2)
+        if fish.base_freq in SHIFT:
+            start, end, _ramp = AWAY[fish.base_freq]
+            f = f + SHIFT[fish.base_freq] * np.clip(
+                (times - start) / (end - start), 0, 1
+            )
+        return f
 
     fish = [
         synthetic.Fish(
@@ -54,10 +73,12 @@ def write_demo(directory) -> Path:
         synthetic.Fish(735.0, drift=2.0, amplitude=0.7, position=0.5),
         synthetic.Fish(905.0, drift=1.5, amplitude=0.6, position=0.6),
     ]
+    here = [f for f in fish if f.base_freq not in AWAY]
+    away = [f for f in fish if f.base_freq in AWAY]
     synthetic.frequency_trace = trace
     try:
         recording = synthetic.synthesize(
-            fish,
+            here,
             DURATION,
             rate=20000.0,
             channels=4,
@@ -65,6 +86,26 @@ def write_demo(directory) -> Path:
             mains=0.0,
             rng=np.random.default_rng(7),
         )
+        # each fish that leaves alone, faded by its presence, then added
+        for j, f in enumerate(away):
+            alone = synthetic.synthesize(
+                [f],
+                DURATION,
+                rate=20000.0,
+                channels=4,
+                noise=0.0,
+                mains=0.0,
+                rng=np.random.default_rng(8 + j),
+            )
+            t = np.arange(len(alone.data)) / alone.rate
+            recording.data += alone.data * presence(t, *AWAY[f.base_freq])[:, None]
+            env = presence(alone.truth_times, *AWAY[f.base_freq])
+            recording.truth_freqs = np.vstack(
+                [recording.truth_freqs, alone.truth_freqs]
+            )
+            recording.truth_amps = np.concatenate(
+                [recording.truth_amps, alone.truth_amps * env[None, :, None]]
+            )
     finally:
         synthetic.frequency_trace = original
     path = directory / "demo.wav"

@@ -32,8 +32,8 @@ uv run audian ~/wavetracker-demo/demo.wav
 so run `uv run` commands from here. Expect about 7 GB, most of it PyTorch. A GPU
 makes tracking faster but is not required.
 
-The demo is two minutes of six synthetic fish, built so that the tracker makes
-its typical mistakes. It is seeded, so you should see the same track numbers as
+The demo is two minutes of six synthetic fish, built so that the tracker leaves a
+few things to correct. It is seeded, so you should see the same track numbers as
 on this page.
 
 ## 2. Get a spectrogram you can read
@@ -104,16 +104,17 @@ pointer says what the next click will do. **Nothing changes until you click or
 release, so read the box.** For a few seconds after an edit, it shows that edit
 instead.
 
-The panel calls tracks *ids*. Here is what the tracker got wrong on the demo:
+The panel calls tracks *ids*. Here is what is left to correct on the demo:
 
-![The tracker's result, with its mistakes marked](shots/quickstart/result.png)
+![The tracker's result, with what is left to correct](shots/quickstart/result.png)
 
-1. **Broken fish.** Each rise, a sudden jump in frequency, broke one fish into
-   tracks 1, 6, 7 and 8.
-2. **Swapped fish.** The fish on tracks 0 and 2 cross at about 1:34, but the
+1. **A fish that came back.** The fish on track 4 swims out of reach at about
+   0:29 and comes back a minute later, 5 Hz higher, as track 36.
+2. **Swapped fish.** The fish on tracks 2 and 3 cross at about 1:34, but the
    tracks stay in their own bands, so from there on each follows the other fish.
-3. **A hole.** Track 0 lost its fish from about 0:57 to 1:05.
-4. Correct, leave it alone: the harmonic has no track, because it is not a fish.
+3. Correct, leave it alone: the rises, sudden jumps in frequency, stay in one
+   track.
+4. Correct too: the harmonic has no track, because it is not a fish.
 5. The button shows that edit mode is on.
 
 To move around in edit mode:
@@ -124,36 +125,71 @@ To move around in edit mode:
 | <kbd>Ctrl</kbd>+wheel | zoom in time |
 | <kbd>Shift</kbd>+wheel | zoom in frequency |
 
-### Join a broken fish: Merge
+### Start where the tracker is least sure: G
+
+For every place where wavetracker joined two pieces of track, or decided not to,
+and for every track, it estimates how likely it is to be right, and saves that
+with the results. Press <kbd>G</kbd>: the view jumps to the place it is least sure
+of.
+
+![The least sure place on the demo](shots/quickstart/review.png)
+
+1. Track 4, where the fish left.
+2. Track 36, where it came back, drawn in track 4's colour: that is what
+   <kbd>Enter</kbd> would do.
+3. What wavetracker thinks: *confidence 0.58 · 4 and 36 not joined: linker p =
+   0.19 across 61.6 s, df 2.3 Hz — Enter merges 36 into 4*. The confidence is the
+   chance that the tracks are right here, as they are.
+
+They are one fish, so press <kbd>Enter</kbd>. <kbd>Enter</kbd> does only what the
+line says, and the view stays, so you can look at the result.
+
+**Made a mistake?** <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes,
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> redoes, and clicking a line in
+**History** jumps back to that point. Press <kbd>Ctrl</kbd>+<kbd>Z</kbd> now: track
+36 is back. Merge it by hand instead, as you will where <kbd>G</kbd> does not lead
+you.
+
+### Join tracks by hand: Merge
+
+Zoom out to all two minutes (<kbd>Ctrl</kbd>+wheel) so that you see both tracks.
 
 1. Press <kbd>M</kbd>.
-2. Click track **1**. It stays and takes the others in.
-3. Point at track **6**. The box says what will happen. Click.
-4. Click **7** and **8**, then press <kbd>Esc</kbd>.
+2. Click track **4**. It stays and takes the other in.
+3. Point at track **36**. The box says what will happen. Click, then press
+   <kbd>Esc</kbd>.
 
-![Merging track 6 into track 1](shots/quickstart/merge.png)
+![Merging track 36 into track 4](shots/quickstart/merge.png)
 
 1. The Merge tool is on.
-2. Track 1, which keeps its number.
-3. The piece under the pointer, about to join it.
+2. Track 4, which keeps its number.
+3. The track under the pointer, about to join it.
 
 The ✕ marks *conflicting points*: frames where both tracks have a point. The one
 closer to the track's course stays and the other is unassigned. That is normal
 where two pieces meet.
+
+**<kbd>G</kbd> goes on.** Press it again for the next place, and
+<kbd>Shift</kbd>+<kbd>G</kbd> to go back. On the demo no other place is below the
+confidence the panel asks for (**Issues → Confidence below**, 0.90), so
+<kbd>G</kbd> goes on to what simple rules find: gaps in tracks, very short tracks,
+tracks that may continue each other, harmonics. <kbd>Enter</kbd> applies the
+suggestion when there is one; on a gap it picks the Add tool for you. Neither
+finds everything: the crossing below is invisible to both.
 
 ### Untangle a crossing: Swap
 
 Zoom in on the crossing first, to about 1:10–2:00 and 625–695 Hz.
 
 1. Press <kbd>V</kbd>.
-2. Click track **0**, then <kbd>Ctrl</kbd>+click track **2**. Both light up.
+2. Click track **2**, then <kbd>Ctrl</kbd>+click track **3**. Both light up.
 3. Put the pointer anywhere above **1:34**. Only its time counts.
 4. Press <kbd>Shift</kbd>+<kbd>X</kbd>.
 
 ![Two tracks selected, the pointer at the crossing](shots/quickstart/swap.png)
 
-1. Track 0, selected.
-2. Track 2, selected.
+1. Track 2, selected.
+2. Track 3, selected.
 3. The pointer, at the moment the fish cross.
 4. Whenever something is selected, this strip lists what you can do with it.
 
@@ -163,13 +199,14 @@ Afterwards each track runs straight through the crossing:
 
 ### Fill a hole: Add
 
-Zoom to about 0:40–1:20 so that you can see both ends of the hole in track 0.
+Where the two fish share a frequency, the tracker sees one line for both, so each
+track has a hole of a second or two. Zoom to about 1:22–1:46 and 625–695 Hz.
 
 1. Press <kbd>Esc</kbd>, then <kbd>F</kbd>.
-2. Press on the end of track **0**, drag along the hole to the other end, and
-   release.
+2. Press on track **2** just after the hole, drag back along it to the other end,
+   and release.
 
-![Brushing along the hole in track 0](shots/quickstart/add.png)
+![Brushing along the hole in track 2](shots/quickstart/add.png)
 
 1. The Add tool is on.
 2. The brush stroke. You do not have to be exact: the stroke only marks a region,
@@ -187,7 +224,7 @@ along it.
 
 ![The harmonic warning](shots/quickstart/harmonic.png)
 
-1. The new track is labelled **×2 of 4**: it runs at exactly twice track 4.
+1. The new track is labelled **×2 of 0**: it runs at exactly twice track 0.
 2. The message says so, for a few seconds. audian only warns; it is your call.
 
 Press <kbd>Enter</kbd> to unassign it, which leaves you with six tracks.
@@ -204,16 +241,6 @@ Press <kbd>Enter</kbd> to unassign it, which leaves you with six tracks.
 
 Points you remove from a track are not deleted. They become *unassigned*, stay
 visible as dim dots, and can be assigned again.
-
-**Made a mistake?** <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes,
-<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> redoes, and clicking a line in
-**History** jumps back to that point.
-
-**Not sure where to look?** <kbd>G</kbd> and <kbd>Shift</kbd>+<kbd>G</kbd> jump to
-the next and previous suspicious place: gaps, very short tracks, likely joins,
-harmonics. <kbd>Enter</kbd> applies the suggestion when there is one. On a gap it
-picks the Add tool for you. It will not find everything: the rises on the demo
-are too big for it to suggest a join.
 
 ## 5. Save
 
@@ -240,7 +267,7 @@ To use the tracks in Python, with `uv run python` from the audian folder:
 from wavetracker.results import Results
 
 results = Results.load("path/to/demo-wavetracker")
-fish = results.ident_v == 1  # the detections of track 1
+fish = results.ident_v == 4  # the detections of track 4
 times = results.times[results.idx_v[fish]]  # s
 freqs = results.fund_v[fish]  # Hz
 ```
@@ -260,8 +287,9 @@ times depends on the sampling rate.
 **Try your settings on a minute or two first.** **Track visible** tracks what is on
 screen, up to five minutes, in seconds. With the default pipeline it also reads
 30 s on either side and keeps only what is on screen: the learned detector needs
-that context, or it misses fish near the edges. The result is a *snippet*: a preview, drawn
-as lines without dots, that you cannot click yet.
+that context, or it misses fish near the edges. The result is a *snippet*: a
+preview, drawn as lines without dots, that you cannot click yet. Its least sure
+places come with it when you accept it, for <kbd>G</kbd>.
 
 ![A pending snippet](shots/quickstart/snippet.png)
 
@@ -278,9 +306,10 @@ and *to*, or go there and press **⇤ view** and **view ⇥**. **×** clears it.
 It can save a lot of work on long recordings of a few resident fish. It changes
 nothing without asking: press **OK**, and when it finishes it tells you what it
 would do, for you to **Apply** or **Cancel**. Read that message. On the demo it
-says *kept 6 ids, 452 points reassigned, 322 unassigned*, and those 322 points are
-real pieces of the rising fish, so there the answer is **Cancel**. On dense
-recordings it may find nothing to keep. Correcting by hand does not depend on it.
+says *kept 5 ids, 371 points reassigned, 371 unassigned*, and those 371 points are
+the fish that swam away and came back, so there the answer is **Cancel**. On
+dense recordings it may find nothing to keep. Correcting by hand does not depend
+on it.
 
 **The tracker does not look at the picture on your screen.** wavetracker reads the
 raw audio of all electrodes and computes its own, much finer spectrogram (*Run
@@ -303,6 +332,7 @@ tracks can separate two fish that look like one line on screen.
 | "use Track recording for spans this long" | Track visible stops at five minutes |
 | "zoom out: wavetracker needs at least two FFT windows" | the view is too short to track |
 | Clean up finds nothing to keep | it is made for a few persistent fish. Correct by hand |
+| "these tracks have no low-confidence places" | the tracks were made with the classic pipeline, or by a wavetracker before it wrote `review.json`: <kbd>G</kbd> visits the rule-based places only |
 | dragging is slow | a shorter time window and fewer lanes help most (**S**) |
 | audian will not start: "PortAudio library not found" | on Debian and Ubuntu: `sudo apt install libportaudio2` |
 | audian will not start: "Error initializing PortAudio … Can't connect to server" | no sound server is reachable, for example over SSH: run it in a desktop session |
@@ -318,7 +348,7 @@ These work in edit mode, with the pointer over a lane. The full list is under
 | <kbd>Esc</kbd> | cancel, one level at a time |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> | undo / redo |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> | save |
-| <kbd>G</kbd> / <kbd>Shift</kbd>+<kbd>G</kbd> | next / previous suspicious place |
+| <kbd>G</kbd> / <kbd>Shift</kbd>+<kbd>G</kbd> | next / previous place to check, least sure first |
 | <kbd>Enter</kbd> | accept the pending snippet or the suggestion |
 | <kbd>Del</kbd> / <kbd>Shift</kbd>+<kbd>Del</kbd> | unassign selected points / whole selected tracks |
 | <kbd>N</kbd> | selected points become a new track |

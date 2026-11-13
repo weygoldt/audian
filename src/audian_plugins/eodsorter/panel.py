@@ -2422,15 +2422,30 @@ class WavetrackerPanel(QWidget):
         self.controller.say(issue.text)
 
     def _show_review(self, issue, view) -> None:
-        """The item's time span (a join: 10 s either side; a track: all of
-        it, up to `REVIEW_MAX_SPAN_S`), its frequency brought into view the
-        way `centre_on` does."""
+        """The item's time span (a join: 10 s either side; a missed join:
+        that and the other track's nearest point; a track: all of it; up to
+        `REVIEW_MAX_SPAN_S`), its frequency brought into view the way
+        `centre_on` does."""
         it = issue.item
         t0, t1 = it.t0, it.t1
         if it.kind == "track":
             t0, t1 = min(t0, issue.t), max(t1, issue.t)
             if t1 - t0 > REVIEW_MAX_SPAN_S:
                 t1 = t0 + REVIEW_MAX_SPAN_S
+        elif it.action == "merge":
+            # both tracks: the earlier one may have ended long before the
+            # later one starts (a fish that swam away and came back)
+            ts = self.ts
+            for i in it.ids:
+                rows = ts.rows_of(i)
+                if len(rows):
+                    t = ts.times[ts.idx[rows]]
+                    near = float(t[np.argmin(np.abs(t - issue.t))])
+                    # the item's own context (10 s) on that side too
+                    t0 = min(t0, near - (it.t - it.t0))
+                    t1 = max(t1, near + (it.t1 - it.t))
+            if t1 - t0 > REVIEW_MAX_SPAN_S:
+                t0 = t1 - REVIEW_MAX_SPAN_S
         width = max(t1 - t0, REVIEW_MIN_SPAN_S)
         pad = 0.05 * width
         start = max(0.0, 0.5 * (t0 + t1) - 0.5 * width - pad)
@@ -2468,20 +2483,25 @@ class WavetrackerPanel(QWidget):
         return marks
 
     def _refresh_issue_marks(self) -> None:
-        """After an edit: the current review item's preview as it is now
-        (gone once its fix is done or no longer applies)."""
+        """After an edit: the current review item's preview as it is now.
+        Gone once its fix is done or it no longer applies; back, with Enter
+        working again, when an undo brings the place back."""
         issue = self.current_issue
-        if issue is None or issue.kind != "review" or self._issue_fixed:
+        if issue is None or issue.kind != "review":
             return
-        ts = self.ts
         now = next(
-            (x for x in ts.review_issues(1.0) if x.index == issue.index),
-            None,
+            (x for x in self.ts.review_issues(1.0) if x.index == issue.index), None
         )
-        marks = self._review_marks(now) if now is not None else None
-        self.scene.issue_marks = marks
-        if now is not None:
-            self._current_issue = now
+        if now is None:
+            if self.scene.issue_marks is not None:
+                self.scene.issue_marks = None
+                self.scene.touch()
+            return
+        if self._issue_fixed:
+            self._issue_fixed = False
+            self.issuetextw.setText(now.text)
+        self._current_issue = now
+        self.scene.issue_marks = self._review_marks(now)
         self.scene.touch()
 
     def accept_issue(self) -> None:

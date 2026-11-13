@@ -2691,6 +2691,12 @@ def test_g_visits_low_confidence_places_least_sure_first_and_enter_fixes(panel):
     assert len(ts.rows_of(5.0)) == 0
     assert panel.view_range() == view and panel.scene.issue_marks is None
     assert "G: the next place" in panel.issuetextw.text()
+    # Ctrl+Z brings the place back, preview and Enter included
+    panel.undo()
+    assert len(ts.rows_of(5.0)) and panel.scene.issue_marks is not None
+    assert panel.issuetextw.text() == panel.current_issue.text
+    panel.run_key("accept_issue")
+    assert committed(panel) == 1 and len(ts.rows_of(5.0)) == 0
     # G: the next least sure, the join in 6; Enter splits it off
     panel.goto_issue(+1)
     issue = panel.current_issue
@@ -2741,6 +2747,27 @@ def test_g_shows_a_low_confidence_place_with_its_span(panel):
     drops = panel.scene.issue_marks.drop_rows
     assert set(drops.tolist()) == set(ts._review_rows(0.0, t[0], t[0] + 2.0).tolist())
     assert len(drops) < len(zero)
+
+
+def test_g_shows_both_tracks_of_a_missed_join(panel):
+    """A fish away for longer than the item's span (here 1 s either side,
+    in a 20 s recording): the earlier track is brought into view too."""
+    ts = panel.ts
+    first9 = ts.rows_of(9.0)[0]
+    t9 = float(ts.times[ts.idx[first9]])
+    away = _review_item(
+        "missed_join", 0.3, [8, 9], t9, float(ts.fund[first9]), t0=t9 - 1, t1=t9 + 1
+    )
+    ts = _with_review(panel, [away])
+    rows8 = ts.rows_of(8.0)
+    t8 = ts.times[ts.idx[rows8]]
+    panel.controller.commit_plan(lambda: ts.plan_unassign(rows8[t8 > t9 - 10.5]))
+    end8 = float(ts.times[ts.idx[ts.rows_of(8.0)]].max())
+    assert end8 < t9 - 10.0, "id 8 ends before the item's own span"
+    panel.goto_issue(+1)
+    pump(0.2)
+    x0, x1, _y0, _y1 = panel.view_range()
+    assert x0 <= end8 and t9 <= x1
 
 
 def test_g_says_when_the_tracks_have_no_review_json(panel):

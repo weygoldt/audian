@@ -37,9 +37,11 @@ SHOWN_HOME = "~/wavetracker-demo"
 FISH_RANGE = (350.0, 1000.0)
 BAND = (380.0, 960.0)
 #: what the tracker makes of the demo, which the text relies on
-TRACKS = {0, 1, 2, 3, 4, 5, 6, 7, 8}
-PIECES = (1, 6, 7, 8)
-CROSSING = (0, 2, 94.0)  # the two tracks and when their fish cross
+TRACKS = {0, 2, 3, 4, 5, 10, 36}
+CAME_BACK = (4, 36)  # the fish that swam away: the track before, the one after
+CROSSING = (2, 3, 94.0)  # the two tracks and when their fish cross
+RISING = 10  # the fish with rises, which the default pipeline follows
+HARMONIC_OF = 0  # the fish whose second harmonic is strong
 #: keys the quickstart names, and the audian actions they must trigger
 KEYS = {
     "toggle_spectrograms": "F3",
@@ -562,7 +564,7 @@ def quickstart(demo: Path, out: Path) -> None:
     p.cleanupw.click()
     w.until(lambda: p._job is None and asked, 120, "Clean up")
     print("Clean up says:", asked[-1], flush=True)
-    if not asked[-1].startswith("kept 6 ids") or len(ts.history.entries):
+    if not asked[-1].startswith("kept 5 ids") or len(ts.history.entries):
         raise SystemExit(f"Clean up: {asked}, history {ts.history.entries}")
 
     w.browser.set_ranges("f", *BAND)
@@ -579,75 +581,105 @@ def quickstart(demo: Path, out: Path) -> None:
     w.away()
     if len(ts.history.entries):
         raise SystemExit("the README's pictures left an edit behind")
-    w.save(
-        callouts(
-            w.grab(),
-            (1, w.on_window(25.6, 575.0), (44, -36)),
-            (2, w.on_window(94.0, 659.0), (-10, -56)),
-            (3, w.on_window(61.0, 652.0), (-30, 40)),
-            (4, w.on_window(60.0, 830.0), (0, -40)),
-            noted(5, p.editw),
-        ),
-        "quickstart/result",
-    )
-
-    # ------------------------------------------------ G and Enter
-    c = p.controller
-    w.hover(60.0, 480.0, 0.2)
-    print("issues:", [(i.kind, i.ids, round(i.t)) for i in p.issues()], flush=True)
-    w.key(Qt.Key.Key_G)
-    issue = p.current_issue
-    print("G:", p.issuetextw.text(), flush=True)
-    if issue is None or issue.kind != "gap":
-        raise SystemExit(f"G should go to a gap, it says {issue}")
-    w.key(Qt.Key.Key_Return)
-    print("Enter on a gap:", c.hint_text(), flush=True)
-    if c.tool.key != "F" or len(ts.history.entries):
-        raise SystemExit("Enter on a gap should choose Add and edit nothing")
-    w.key(Qt.Key.Key_Escape)
-    w.key(Qt.Key.Key_Escape)
-    p.current_issue = None
-    p.scene.span_outline = None
-    w.browser.set_ranges("f", *BAND)
-    w.browser.set_times(0.0, 120.0)
-    w.pump(1.0)
-
-    # ------------------------------------------------ 6a. merge the pieces
-    w.key(Qt.Key.Key_M)
-    assert c.tool.key == "M"
-    t_piece = {1: 12.0, 6: 50.0, 7: 85.0, 8: 110.0}
 
     def freq_of(track, t):
         rows = ts.rows_of(float(track))
         times = ts.times[ts.idx[rows]]
         return float(ts.fund[rows][np.argmin(np.abs(times - t))])
 
-    w.click(t_piece[1], freq_of(1, t_piece[1]))
-    assert c.tool.anchor == 1.0, c.tool.anchor
-    w.hover(t_piece[6], freq_of(6, t_piece[6]))
-    assert "merge 6 into 1" in c.hint_text(), c.hint_text()
-    anchor = w.on_window(t_piece[1], freq_of(1, t_piece[1]))
+    def ends(track):
+        times = ts.times[ts.idx[ts.rows_of(float(track))]]
+        return float(times.min()), float(times.max())
+
+    before, after = CAME_BACK
+    t_left, t_back = ends(before)[1], ends(after)[0]
+    print(f"track {before} ends {t_left:.1f} s, {after} starts {t_back:.1f} s")
+    w.save(
+        callouts(
+            w.grab(),
+            (1, w.on_window(t_left, freq_of(before, t_left)), (30, -40)),
+            (1, w.on_window(t_back, freq_of(after, t_back)), (-30, -40)),
+            (2, w.on_window(94.0, 659.0), (-10, -56)),
+            (3, w.on_window(72.0, freq_of(RISING, 72.0)), (0, 44)),
+            (4, w.on_window(60.0, 830.0), (0, -40)),
+            noted(5, p.editw),
+        ),
+        "quickstart/result",
+    )
+
+    # ------------------------------------------------ G: the least sure place
+    c = p.controller
     tools = w.rect_of(p.toolbtns["V"].parentWidget())
+    w.hover(60.0, 480.0, 0.2)
+    print("issues:", [(i.kind, i.ids, round(i.t)) for i in p.issues()], flush=True)
+    w.key(Qt.Key.Key_G)
+    issue = p.current_issue
+    print("G:", p.issuetextw.text(), flush=True)
+    if (
+        issue is None
+        or issue.kind != "review"
+        or tuple(int(i) for i in issue.ids) != CAME_BACK
+    ):
+        raise SystemExit(f"G should go to the missed join {CAME_BACK}: {issue}")
+    w.away()
+    w.save(
+        callouts(
+            w.grab(),
+            (1, w.on_window(t_left, freq_of(before, t_left)), (30, -44)),
+            (2, w.on_window(t_back + 6.0, freq_of(after, t_back + 6.0)), (30, -44)),
+            noted(3, p.hintw),
+        ),
+        "quickstart/review",
+    )
+    w.hover(t_back + 6.0, 480.0, 0.2)
+    w.key(Qt.Key.Key_Return)
+    print("Enter:", c.hint_text(), flush=True)
+    if len(ts.rows_of(float(after))) or len(ts.history.entries) != 1:
+        raise SystemExit(f"Enter should merge {after} into {before}")
+    # Ctrl+Z, and the same by hand
+    ctrl = Qt.KeyboardModifier.ControlModifier
+    w.key(Qt.Key.Key_Z, ctrl)
+    assert len(ts.rows_of(float(after))), "Ctrl+Z did not bring the track back"
+    assert p.scene.issue_marks is not None, "Ctrl+Z did not bring the place back"
+    w.browser.set_ranges("f", *BAND)
+    w.browser.set_times(0.0, 120.0)
+    w.pump(1.0)
+    w.key(Qt.Key.Key_M)
+    assert c.tool.key == "M"
+    ta, tb = t_left - 8.0, t_back + 8.0
+    w.click(ta, freq_of(before, ta))
+    assert c.tool.anchor == float(before), c.tool.anchor
+    w.hover(tb, freq_of(after, tb))
+    assert f"merge {after} into {before}" in c.hint_text(), c.hint_text()
+    anchor = w.on_window(ta, freq_of(before, ta))
     w.save(
         callouts(
             w.grab(),
             noted(1, p.toolbtns["V"].parentWidget()),
             (2, anchor, (0, -44)),
-            (3, w.on_window(t_piece[6], freq_of(6, t_piece[6])), (34, -44)),
+            (3, w.on_window(tb, freq_of(after, tb)), (34, -44)),
         ),
         "quickstart/merge",
         crop=QRect(0, anchor.y() - 90, WIDTH, tools.bottom() - anchor.y() + 130),
     )
-    for piece in PIECES[1:]:
-        w.click(t_piece[piece], freq_of(piece, t_piece[piece]))
-    assert not any(len(ts.rows_of(float(i))) for i in PIECES[1:]), "pieces left"
+    w.click(tb, freq_of(after, tb))
+    assert not len(ts.rows_of(float(after))), "the merge left the track"
     # undo and redo, as the text says
-    ctrl = Qt.KeyboardModifier.ControlModifier
     w.key(Qt.Key.Key_Z, ctrl)
-    assert len(ts.rows_of(float(PIECES[-1]))), "Ctrl+Z did not bring the piece back"
+    assert len(ts.rows_of(float(after))), "Ctrl+Z did not bring the track back"
     w.key(Qt.Key.Key_Z, ctrl | Qt.KeyboardModifier.ShiftModifier)
-    assert not len(ts.rows_of(float(PIECES[-1]))), "Ctrl+Shift+Z did not redo"
+    assert not len(ts.rows_of(float(after))), "Ctrl+Shift+Z did not redo"
     w.key(Qt.Key.Key_Escape)
+    # G goes on: nothing else is unsure enough, so the rules' places come
+    w.key(Qt.Key.Key_G)
+    print("G after the merge:", p.issuetextw.text(), flush=True)
+    if p.current_issue is None or p.current_issue.kind == "review":
+        raise SystemExit("G should go on to the rule-based places")
+    p.current_issue = None
+    p.scene.span_outline = None
+    w.browser.set_ranges("f", *BAND)
+    w.browser.set_times(0.0, 120.0)
+    w.pump(1.0)
 
     # ------------------------------------------------ 6b. swap at a crossing
     a, b, t_cross = CROSSING
@@ -678,18 +710,21 @@ def quickstart(demo: Path, out: Path) -> None:
     w.away()
     w.save(w.grab(), "quickstart/swap-after", crop=w.rect_of(w._view()))
 
-    # ------------------------------------------------ 6c. the gap in a track
+    # ------------------------------------------------ 6c. the hole at the crossing
     w.browser.set_ranges("f", 625.0, 695.0)
-    w.browser.set_times(40.0, 40.0)
+    w.browser.set_times(82.0, 24.0)
     w.pump(1.0)
     rows = ts.rows_of(float(a))
     times = ts.times[ts.idx[rows]]
-    jump = np.argmax(np.diff(times))
+    near = np.flatnonzero((times[:-1] > t_cross - 6.0) & (times[1:] < t_cross + 6.0))
+    jump = int(near[np.argmax(np.diff(times)[near])])
     g0, g1 = float(times[jump]), float(times[jump + 1])
-    print(f"the gap in track {a}: {g0:.1f} - {g1:.1f} s", flush=True)
+    print(f"the hole in track {a}: {g0:.1f} - {g1:.1f} s", flush=True)
+    if g1 - g0 < 0.8:
+        raise SystemExit(f"track {a} has no hole at the crossing to fill")
     f0, f1 = float(ts.fund[rows][jump]), float(ts.fund[rows][jump + 1])
     w.key(Qt.Key.Key_F)
-    before = len(rows)
+    n_before = len(rows)
     path = [
         (t, f0 + (f1 - f0) * (t - g0) / (g1 - g0))
         for t in np.linspace(g1 + 0.5, g0 - 0.5, 40)
@@ -706,8 +741,8 @@ def quickstart(demo: Path, out: Path) -> None:
         crop=QRect(0, middle.y() - 110, WIDTH, tools.bottom() - middle.y() + 150),
     )
     w.release()
-    w.until(lambda: len(ts.rows_of(float(a))) != before, 30, "the ridge")
-    print(f"track {a}: {before} -> {len(ts.rows_of(float(a)))} points", flush=True)
+    w.until(lambda: len(ts.rows_of(float(a))) != n_before, 30, "the ridge")
+    print(f"track {a}: {n_before} -> {len(ts.rows_of(float(a)))} points", flush=True)
     w.key(Qt.Key.Key_Escape)
 
     # ------------------------------------------------ 6d. a harmonic
@@ -715,7 +750,7 @@ def quickstart(demo: Path, out: Path) -> None:
     w.browser.set_times(0.0, 120.0)
     w.pump(1.0)
     w.key(Qt.Key.Key_F)
-    harmonic = 2 * float(np.median(ts.fund[ts.rows_of(4.0)]))
+    harmonic = 2 * float(np.median(ts.fund[ts.rows_of(float(HARMONIC_OF))]))
     w.drag([(t, harmonic) for t in np.linspace(40.0, 70.0, 40)])
     w.until(lambda: "harmonic" in c.hint_text(), 30, "the harmonic warning")
     w.hover(55.0, harmonic - 60.0, 1.0)
@@ -762,8 +797,13 @@ def quickstart(demo: Path, out: Path) -> None:
         ts.ids()
     ):
         raise SystemExit("Results.load does not see the corrected identities")
-    one = results.ident_v == 1
-    print("fish 1:", one.sum(), results.times[results.idx_v[one]][:2], flush=True)
+    one = results.ident_v == CAME_BACK[0]
+    print(
+        f"fish {CAME_BACK[0]}:",
+        one.sum(),
+        results.times[results.idx_v[one]][[0, -1]],
+        flush=True,
+    )
     sys.stdout.flush()
 
 
@@ -781,7 +821,7 @@ def readme(w: Walk, ts) -> None:
     w.browser.set_times(20.0, 60.0)
     w.pump(1.5)
     w.key(Qt.Key.Key_F)
-    harmonic = 2 * float(np.median(ts.fund[ts.rows_of(4.0)]))
+    harmonic = 2 * float(np.median(ts.fund[ts.rows_of(float(HARMONIC_OF))]))
     wavy = [(t, harmonic + 4 * np.sin(t / 3)) for t in np.linspace(30.0, 52.0, 60)]
     w.drag(wavy, release=False)
     w.save(w.grab(), "wavetracker-add")
