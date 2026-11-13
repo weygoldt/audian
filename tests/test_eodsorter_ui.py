@@ -2594,3 +2594,162 @@ def test_track_visible_with_the_default_pipeline_runs_with_context(panel):
     finally:
         panel.cancel_job(quiet=True)
         _pipeline(panel, "classic")
+
+
+# ------------------------------------------------------- low-confidence places
+
+
+def _with_review(p, items):
+    """Reopen the panel's results with a review.json holding `items`."""
+    doc = {"version": 1, "calibration": None, "items": items}
+    (p.folder / "review.json").write_text(json.dumps(doc))
+    assert p.open_results(p.folder, ask=False)
+    pump(0.2)
+    return p.ts
+
+
+def _review_item(kind, confidence, ids, t, f, **extra):
+    action = {"join": "split", "track": "delete", "missed_join": "merge"}[kind]
+    d = {
+        "kind": kind,
+        "source": "linker",
+        "confidence": confidence,
+        "t": t,
+        "f": f,
+        "t0": max(0.0, t - 10.0),
+        "t1": t + 10.0,
+        "ids": [float(i) for i in ids],
+        "action": action,
+        "impact": 50,
+        "why": f"why {confidence}",
+    }
+    d.update(extra)
+    return d
+
+
+def _fish_items(ts):
+    """A missed join between the two halves of fish 2 (ids 4, 5), a join in
+    the first half of fish 3 (id 6, a third of the way in), and the track of
+    fish 0's first half (id 0) at two confidences."""
+    first5 = ts.rows_of(5.0)[0]
+    six = ts.rows_of(6.0)
+    k6 = int(ts.idx[six[len(six) // 3]])
+    zero = ts.rows_of(0.0)
+    t_zero = ts.times[ts.idx[zero]]
+    return [
+        _review_item(
+            "missed_join",
+            0.2,
+            [4, 5],
+            float(ts.times[ts.idx[first5]]),
+            float(ts.fund[first5]),
+        ),
+        _review_item(
+            "join", 0.4, [6], float(ts.times[k6]), float(ts.fund[six[0]]), k=k6
+        ),
+        _review_item(
+            "track",
+            0.95,
+            [0],
+            float(t_zero[0]),
+            float(np.median(ts.fund[zero])),
+            t0=float(t_zero[0]),
+            t1=float(t_zero[-1]),
+        ),
+    ]
+
+
+def test_g_visits_low_confidence_places_least_sure_first_and_enter_fixes(panel):
+    ts = _with_review(panel, _fish_items(panel.ts))
+    assert panel.issuekindw["review"].isChecked()
+    assert panel.minconfw.value() == pytest.approx(0.9)
+    panel.goto_issue(+1)
+    issue = panel.current_issue
+    assert issue.kind == "review" and issue.item.confidence == 0.2
+    text = panel.issuetextw.text()
+    assert text.startswith("1/") and "confidence 0.20 · 4 and 5 why 0.2" in text
+    assert text.endswith("— Enter merges 5 into 4")
+    # what Enter would do is on the lanes: 5's rows in 4's colour, 4 outlined
+    marks = panel.scene.issue_marks
+    assert marks.outline_id == 4.0
+    rows, colour = marks.recolour[0]
+    assert colour == ("id", 4.0)
+    assert set(rows.tolist()) <= set(ts.rows_of(5.0).tolist())
+    assert len(rows) > 0.9 * len(ts.rows_of(5.0))
+    panel.redraw_now()
+    x = panel.overlays[0].recolour[0].xData
+    x = x[np.isfinite(x)]
+    t5 = ts.times[ts.idx[ts.rows_of(5.0)]]
+    assert len(x) > 0, "the preview is drawn"
+    assert t5.min() - 1e-6 <= x.min() and x.max() <= t5.max() + 1e-6
+    # Enter: one edit, labelled with the confidence; the view stays
+    view = panel.view_range()
+    assert panel.key_applies("accept_issue")
+    panel.run_key("accept_issue")
+    assert committed(panel) == 1
+    assert ts.history.entries[-1].label == ("Merge 5 into 4 (review, confidence 0.20)")
+    assert len(ts.rows_of(5.0)) == 0
+    assert panel.view_range() == view and panel.scene.issue_marks is None
+    assert "G: the next place" in panel.issuetextw.text()
+    # G: the next least sure, the join in 6; Enter splits it off
+    panel.goto_issue(+1)
+    issue = panel.current_issue
+    assert issue.item.confidence == 0.4 and issue.ids == (6.0,)
+    assert panel.scene.issue_marks.cut_marker is not None
+    n6 = len(ts.rows_of(6.0))
+    panel.run_key("accept_issue")
+    new = ts.history.entries[-1].label.split("→ ")[1].split(")")[0]
+    assert len(ts.rows_of(6.0)) + len(ts.rows_of(float(new))) == n6
+    assert panel.issuetextw.text().startswith(f"split off as {new}: ")
+    # the track at 0.95 is above the cutoff: G goes on to the other kinds
+    panel.goto_issue(+1)
+    assert panel.current_issue.kind != "review"
+    panel.minconfw.setValue(1.0)
+    panel.goto_issue(+1)
+    assert panel.current_issue.item.confidence == 0.95
+    # Ctrl+Z takes the split back, and its place is listed again
+    panel.undo()
+    assert len(ts.rows_of(6.0)) == n6
+    assert 0.4 in [i.item.confidence for i in panel.issues() if i.kind == "review"]
+
+
+def test_g_shows_a_low_confidence_place_with_its_span(panel):
+    ts = panel.ts
+    zero = ts.rows_of(0.0)
+    t = ts.times[ts.idx[zero]]
+    short = _review_item(
+        "track",
+        0.1,
+        [0],
+        float(t[0]),
+        float(np.median(ts.fund[zero])),
+        t0=float(t[0]),
+        t1=float(t[0]) + 2.0,
+    )
+    _with_review(panel, [short])
+    panel.browser.set_times(15.0, 3.0)
+    panel.browser.set_ranges("f", 880.0, 940.0)
+    pump(0.2)
+    panel.goto_issue(+1)
+    pump(0.2)
+    x0, x1, y0, y1 = panel.view_range()
+    # 2 s of track: the 10 s minimum and 5 % either side, from its start
+    assert x1 - x0 == pytest.approx(11.0, abs=0.05)
+    assert x0 <= t[0] <= t[0] + 2.0 <= x1
+    assert y0 <= panel.current_issue.f <= y1
+    # the delete would unassign those 2 s of id 0 only
+    drops = panel.scene.issue_marks.drop_rows
+    assert set(drops.tolist()) == set(ts._review_rows(0.0, t[0], t[0] + 2.0).tolist())
+    assert len(drops) < len(zero)
+
+
+def test_g_says_when_the_tracks_have_no_review_json(panel):
+    for kind, w in panel.issuekindw.items():
+        w.setChecked(kind == "review")
+    assert not (panel.folder / "review.json").exists()
+    panel.goto_issue(+1)
+    assert panel.current_issue is None
+    assert panel.issuetextw.text() == (
+        "no issues: these tracks have no low-confidence places "
+        "(review.json comes with the default pipeline)"
+    )

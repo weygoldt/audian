@@ -1273,6 +1273,45 @@ it, and put its text in the hint line ("possible join: 12 → 31, gap 2.1 s,
 choose which kinds `G` visits.  Issues are recomputed lazily after edits
 (only for the touched ids).
 
+**Low-confidence places** (kind `review`, "low confidence", on by default)
+come from wavetracker's `review.json` (format: wavetracker's
+`docs/review-flags.md`; reader: `eodsorter/review.py`).  Every join of
+fragments, every identity and every rejected candidate join has a calibrated
+`confidence`, the probability that the result is right there.
+`TrackSet.review_issues(below)` lists the items under the panel's
+**Confidence below** (default `REVIEW_BELOW` = 0.90; 1.00: all) that still
+apply, least sure first; `G` visits them before the other kinds, from the
+least sure on whatever the view (the others keep their time order).  On the
+dense benchmark this order recovers half of what such fixes can gain after a
+median of 4 places per 10 min, the rule-based kinds almost nothing.
+
+| item | `Enter` (one history entry, "… (review, confidence 0.31)") | no longer listed when |
+|---|---|---|
+| `join` | cut the id holding the junction at frame `k`; the later part gets a new id | that id has no points on one side of `k` |
+| `missed_join` | merge `ids[1]` into `ids[0]` | either id has no points, or they are one |
+| `track` | unassign the id's points between `t0` and `t1` | none of them is left |
+
+The id of a join is looked up at its junction (frame `k`, the point nearest
+`f`), so a split earlier in a track hands its later joins to the new id.
+`G` shows the item's span (a join 10 s either side, a track up to 300 s,
+at least 10 s) and draws what `Enter` would do as `SceneState.issue_marks`
+(the rows that change id in their new id's colour, the rows unassigned as ✕,
+a split's cut, a merge's target outlined) while the tool previews nothing of
+its own.  `Enter` applies the fix and stays: a split-off part may belong to
+another fish, which `M` merges; `G` goes on to the next place.
+
+The items live in the session (`TrackSet.review`) in session ids.  A
+snippet run's `review.json` comes with the snippet (`load_snippet`), in
+session frames and time; `crop_snippet` keeps the items inside the window
+(a join only when its id keeps points on both sides of the cut there).
+Accepting it (`plan_replace_span`) drops the session's joins and missed
+joins inside the span, gives the snippet's items the ids the snippet's
+tracks were given, and changes the list as part of the same history entry.
+`Clean up` (whole new ids) drops the list, undo brings it back.  The list is
+written to `eodsorter.json` (with the mtime of the `review.json` it was based
+on) only when it differs from `review.json`, or the session is saved into
+another directory; a newer `review.json` (the recording tracked again) wins.
+
 ### 5.12 Small things that make it pleasant
 
 * **Zoom to selection** (`Shift+Z`): time and frequency span of the selection

@@ -191,6 +191,7 @@ TOOLS = (
 )
 
 ISSUE_KINDS = (
+    ("review", "low confidence"),
     ("join", "possible joins"),
     ("gap", "gaps"),
     ("short", "short tracks"),
@@ -198,6 +199,17 @@ ISSUE_KINDS = (
     ("harmonic", "harmonics"),
 )
 
+#: G on a low-confidence place shows the item's span: a join's 20 s, a
+#: track's whole length up to this many seconds, at least the minimum
+REVIEW_MAX_SPAN_S = 300.0
+REVIEW_MIN_SPAN_S = 10.0
+#: G visits low-confidence places below this confidence.  Measured with the
+#: default pipeline on two 5-min night files of iriri01-grid01-dev03
+#: (2026-09-05 21:03 and 23:03; 15 and 14 ids): 10 and 11 of 48 and 54
+#: places lie below 0.90, 24 and 22 below 0.95, 5 and 4 below 0.80.  The
+#: dense benchmark's confidence order recovers 90 % of the reachable gain
+#: after a median of 9-10 places per 10 min.
+REVIEW_BELOW = 0.90
 #: a harmonic check of the ids an edit gave rows to (5.13) runs in the GUI
 #: thread when it covers at most this many rows (about 10 ms: iriri, 150,000
 #: rows in 18 ms), else in a worker thread
@@ -1318,7 +1330,12 @@ class WavetrackerPanel(QWidget):
         self.issuekindw = {}
         for i, (kind, text) in enumerate(ISSUE_KINDS):
             w = QCheckBox(text, kinds)
-            w.setToolTip(f"G visits {text}")
+            w.setToolTip(
+                "G visits the places wavetracker is least sure of, least sure "
+                "first, before the other kinds; Enter applies its suggestion"
+                if kind == "review"
+                else f"G visits {text}"
+            )
             w.setChecked(kind != "crossing")
             w.toggled.connect(self._issues_changed)
             grid.addWidget(w, i // 2, i % 2)
@@ -1336,6 +1353,18 @@ class WavetrackerPanel(QWidget):
         self.nextissuew.clicked.connect(lambda: self.goto_issue(+1))
         self.minptsw.setToolTip("A track with fewer points than this is a short track")
         group.add_row("Short below", "", self.minptsw)
+        self.minconfw = QDoubleSpinBox(self)
+        self.minconfw.setRange(0.05, 1.0)
+        self.minconfw.setSingleStep(0.05)
+        self.minconfw.setDecimals(2)
+        self.minconfw.setValue(REVIEW_BELOW)
+        self.minconfw.setToolTip(
+            "G visits the low-confidence places below this confidence, least "
+            "sure first (1.00: all of them). The confidence is wavetracker's "
+            "probability that the tracks are right there (review.json)."
+        )
+        self.minconfw.valueChanged.connect(self._issues_changed)
+        group.add_row("Confidence below", "", self.minconfw)
         group.add_span_row(self._row(self.previssuew, self.nextissuew))
         self.issuetextw = self._muted("")
         group.add_span_row(self.issuetextw)
@@ -1698,6 +1727,7 @@ class WavetrackerPanel(QWidget):
         self.controller.refresh()
         self._issues_key = None
         self._revalidate_harmonics()
+        self._refresh_issue_marks()
         self._refresh_all()
         self.schedule()
         if flash:
@@ -2231,6 +2261,13 @@ class WavetrackerPanel(QWidget):
         except Exception:  # noqa: BLE001 - internal API, fall back per lane
             for overlay in self.overlays:
                 overlay.ax.getViewBox().setXRange(t0, t0 + width, padding=0)
+        self._frequency_into_view(f, view)
+
+    def _frequency_into_view(self, f: float, view) -> None:
+        """Move the visible band onto `f` unless it is well inside (the
+        middle 80 %), keeping its height."""
+        x0, x1, y0, y1 = view
+        b = self.browser
         height = y1 - y0
         if not (np.isfinite(f) and height > 0):
             return
@@ -2255,54 +2292,118 @@ class WavetrackerPanel(QWidget):
         self.current_issue = None
         self.issuetextw.setText("")
 
+    @property
+    def current_issue(self):
+        """The issue G or a harmonic warning went to (Enter applies it)."""
+        return self._current_issue
+
+    @current_issue.setter
+    def current_issue(self, issue) -> None:
+        self._current_issue = issue
+        self._issue_fixed = False
+        scene = getattr(self, "scene", None)
+        if scene is not None and scene.issue_marks is not None:
+            scene.issue_marks = None
+            scene.touch()
+            self.schedule()
+
     def issues(self) -> list:
+        """What G visits: the low-confidence places, least sure first, then
+        the other checked kinds in time order."""
         ts = self.ts
         if ts is None:
             return []
         kinds = tuple(k for k, w in self.issuekindw.items() if w.isChecked())
-        key = (id(ts), ts.revision, kinds, self.minptsw.value(), self.scene.gap_break_s)
+        rules = tuple(k for k in kinds if k != "review")
+        below = round(float(self.minconfw.value()), 4)
+        key = (
+            id(ts),
+            ts.revision,
+            kinds,
+            self.minptsw.value(),
+            self.scene.gap_break_s,
+            below,
+        )
         if key != self._issues_key:
-            self._issues = (
+            review = ts.review_issues(below) if "review" in kinds else []
+            other = (
                 ts.issues(
-                    kinds,
+                    rules,
                     gap_break_s=self.scene.gap_break_s,
                     min_points=self.minptsw.value(),
                 )
-                if kinds
+                if rules
                 else []
             )
+            self._issues = review + other
             self._issues_key = key
         return self._issues
+
+    @staticmethod
+    def _issue_rank(issue) -> tuple:
+        """The order G visits issues in (the order of `issues`)."""
+        if issue.kind == "review":
+            return (0, issue.item.confidence, issue.index)
+        return (1, issue.t, issue.kind, issue.ids)
+
+    def _no_issues_text(self) -> str:
+        ts = self.ts
+        if self.issuekindw["review"].isChecked() and ts is not None:
+            if not ts.review:
+                return (
+                    "no issues: these tracks have no low-confidence places "
+                    "(review.json comes with the default pipeline)"
+                )
+            return (
+                f"no issues: no low-confidence place below "
+                f"{self.minconfw.value():.2f} still applies"
+            )
+        return "no issues of the chosen kinds"
 
     def goto_issue(self, step: int) -> None:
         issues = self.issues()
         if not issues:
-            self.controller.say("no issues of the chosen kinds")
+            text = self._no_issues_text()
+            self.controller.say(text)
             self.current_issue = None
-            self.issuetextw.setText("no issues")
+            self.issuetextw.setText(text)
             return
         view = self.view_range()
-        centre = 0.5 * (view[0] + view[1]) if view is not None else 0.0
-        times = np.array([i.t for i in issues])
         cur = self.current_issue
-        if step > 0:
-            later = np.flatnonzero(times > centre + 1e-6)
-            if cur is not None and cur in issues:
-                at = issues.index(cur)
-                k = at + 1 if at + 1 < len(issues) else 0
+        ranks = [self._issue_rank(i) for i in issues]
+        # a review item fixed by Enter is no longer listed: its rank still
+        # says where the walk was
+        known = cur is not None and (
+            cur.kind == "review" or self._issue_rank(cur) in ranks
+        )
+        if known:
+            r = self._issue_rank(cur)
+            if step > 0:
+                k = next((j for j, x in enumerate(ranks) if x > r), 0)
             else:
-                k = int(later[0]) if len(later) else 0
+                k = next(
+                    (j for j in range(len(ranks) - 1, -1, -1) if ranks[j] < r),
+                    len(issues) - 1,
+                )
+        elif issues[0].kind == "review":
+            # least sure first, wherever the view is
+            k = 0 if step > 0 else len(issues) - 1
         else:
-            earlier = np.flatnonzero(times < centre - 1e-6)
-            if cur is not None and cur in issues:
-                at = issues.index(cur)
-                k = at - 1 if at > 0 else len(issues) - 1
+            centre = 0.5 * (view[0] + view[1]) if view is not None else 0.0
+            times = np.array([i.t for i in issues])
+            if step > 0:
+                later = np.flatnonzero(times > centre + 1e-6)
+                k = int(later[0]) if len(later) else 0
             else:
+                earlier = np.flatnonzero(times < centre - 1e-6)
                 k = int(earlier[-1]) if len(earlier) else len(issues) - 1
         issue = issues[k]
         self.current_issue = issue
         if view is not None:
-            self.centre_on(issue.t, issue.f, view)
+            if issue.kind == "review":
+                self._show_review(issue, view)
+            else:
+                self.centre_on(issue.t, issue.f, view)
         df = 10.0
         ts = self.ts
         dt = 2 * float(np.median(np.diff(ts.times[:100]))) if len(ts.times) > 1 else 1.0
@@ -2312,11 +2413,76 @@ class WavetrackerPanel(QWidget):
             issue.f - df,
             issue.f + df,
         )
+        if issue.kind == "review":
+            self.scene.issue_marks = self._review_marks(issue)
         self.scene.touch()
         self.schedule()
         text = f"{k + 1}/{len(issues)} · {issue.text}"
         self.issuetextw.setText(text)
         self.controller.say(issue.text)
+
+    def _show_review(self, issue, view) -> None:
+        """The item's time span (a join: 10 s either side; a track: all of
+        it, up to `REVIEW_MAX_SPAN_S`), its frequency brought into view the
+        way `centre_on` does."""
+        it = issue.item
+        t0, t1 = it.t0, it.t1
+        if it.kind == "track":
+            t0, t1 = min(t0, issue.t), max(t1, issue.t)
+            if t1 - t0 > REVIEW_MAX_SPAN_S:
+                t1 = t0 + REVIEW_MAX_SPAN_S
+        width = max(t1 - t0, REVIEW_MIN_SPAN_S)
+        pad = 0.05 * width
+        start = max(0.0, 0.5 * (t0 + t1) - 0.5 * width - pad)
+        self._frequency_into_view(issue.f, view)
+        try:
+            self.browser.set_times(start, width + 2 * pad)
+        except Exception:  # noqa: BLE001 - internal API, fall back per lane
+            for overlay in self.overlays:
+                overlay.ax.getViewBox().setXRange(
+                    start, start + width + 2 * pad, padding=0
+                )
+
+    def _review_marks(self, issue):
+        """What Enter would do to `issue`, as preview marks: the rows that
+        change id in their new id's colour, the rows that are unassigned as
+        ✕, a split's cut and a merge's target outlined."""
+        ts = self.ts
+        try:
+            plan = issue.suggestion(ts)
+        except M.EditRejected:
+            return None
+        marks = G.Marks()
+        new = np.asarray(plan.new)
+        rows = np.asarray(plan.rows)
+        keep = np.isfinite(new)
+        for value in np.unique(new[keep])[:8]:
+            marks.recolour.append((rows[new == value], ("id", float(value))))
+        marks.drop_rows = np.concatenate([rows[~keep], np.asarray(plan.dropped)])
+        it = issue.item
+        if it.action == "split":
+            t = float(ts.times[it.k])
+            marks.cut_marker = (t, issue.f)
+        elif it.action == "merge":
+            marks.outline_id = float(it.ids[0])
+        return marks
+
+    def _refresh_issue_marks(self) -> None:
+        """After an edit: the current review item's preview as it is now
+        (gone once its fix is done or no longer applies)."""
+        issue = self.current_issue
+        if issue is None or issue.kind != "review" or self._issue_fixed:
+            return
+        ts = self.ts
+        now = next(
+            (x for x in ts.review_issues(1.0) if x.index == issue.index),
+            None,
+        )
+        marks = self._review_marks(now) if now is not None else None
+        self.scene.issue_marks = marks
+        if now is not None:
+            self._current_issue = now
+        self.scene.touch()
 
     def accept_issue(self) -> None:
         issue = self.current_issue
@@ -2329,6 +2495,9 @@ class WavetrackerPanel(QWidget):
             return
         if issue.suggestion is None:
             self.controller.say("no suggestion for this issue: zoom in and decide")
+            return
+        if issue.kind == "review":
+            self._accept_review(issue)
             return
         warned = issue is self._warned_issue
         if self.controller.commit_plan(lambda: issue.suggestion(ts)):
@@ -2343,6 +2512,38 @@ class WavetrackerPanel(QWidget):
                 )
                 return
             self.goto_issue(+1)
+
+    def _accept_review(self, issue) -> None:
+        """Apply a review item's fix and stay there: a split part may need
+        merging into its own fish, which is the reader's call (G goes on)."""
+        ts = self.ts
+        if self._issue_fixed:
+            self.controller.say("done here · G: the next place · Ctrl+Z undoes")
+            return
+        made = []
+
+        def make():
+            plan = issue.suggestion(ts)
+            made.append(plan)
+            return plan
+
+        if not self.controller.commit_plan(make):
+            return
+        plan = made[-1]
+        self._issue_fixed = True
+        self.scene.issue_marks = None
+        self.scene.touch()
+        self.schedule()
+        if issue.item.action == "split" and plan.created:
+            new = M._fid(plan.created[0])
+            text = (
+                f"split off as {new}: if it is another fish's, M merges it into "
+                f"that track · G: the next place · Ctrl+Z undoes"
+            )
+        else:
+            text = f"{plan.label} · G: the next place · Ctrl+Z undoes"
+        self.issuetextw.setText(text)
+        self.controller.say(text)
 
     # ============================================================ history
 
@@ -3703,7 +3904,9 @@ class WavetrackerPanel(QWidget):
         if self.ask("Cleanup finished", text, ("Apply", "Cancel")) == "Apply":
             n = job["n_fish"]
             self.controller.commit_plan(
-                lambda: ts.plan_apply_ident(ident, f"Clean up ({n} fish)")
+                lambda: ts.plan_apply_ident(
+                    ident, f"Clean up ({n} fish)", keep_review=False
+                )
             )
 
     # ---- Add's frequency source (5.5)

@@ -1591,6 +1591,8 @@ class TrackOverlay:
         scene = self.scene
         c = self.colours
         marks = scene.marks
+        if scene.issue_marks is not None and marks.idle():
+            marks = scene.issue_marks
         if ts is None or ts.n == 0:
             for item in (
                 self.selected,

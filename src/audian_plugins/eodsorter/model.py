@@ -32,13 +32,14 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 
 from . import harmonics as HM
+from . import review as RV
 from .model_io import (
     AUTOSAVE_FILE,
     IDENT_FILE,
@@ -88,6 +89,7 @@ __all__ = [
     "finish_interrupted_save",
     "ident_variants",
     "load_snippet",
+    "crop_snippet",
     "local_median_losers",
     "read_autosave",
     "step_size",
@@ -512,6 +514,11 @@ class Snippet:
     sign: np.ndarray
     cplx: np.ndarray | None
     meta: dict = field(default_factory=dict)
+    #: the run's review items (`review.ReviewItem`), in session frames and
+    #: time, still with the snippet's own ids
+    review: tuple = ()
+    #: session times of frames k0..k1-1 (None: not known)
+    times: np.ndarray | None = None
 
 
 def crop_snippet(snippet: Snippet, k0: int, k1: int) -> Snippet:
@@ -521,22 +528,34 @@ def crop_snippet(snippet: Snippet, k0: int, k1: int) -> Snippet:
     if (k0, k1) == (snippet.k0, snippet.k1):
         return snippet
     keep = (snippet.idx >= k0) & (snippet.idx < k1)
+    idx, ident = snippet.idx[keep], snippet.ident[keep]
+    times = snippet.times
+    review = ()
+    if times is not None:
+        k_first = snippet.k0
+        review = RV.crop(
+            snippet.review, k0, k1, idx, ident, lambda k: times[int(k) - k_first]
+        )
+        times = times[k0 - k_first : k1 - k_first]
     return Snippet(
         k0=k0,
         k1=k1,
         fund=snippet.fund[keep],
-        idx=snippet.idx[keep],
-        ident=snippet.ident[keep],
+        idx=idx,
+        ident=ident,
         sign=snippet.sign[keep],
         cplx=None if snippet.cplx is None else snippet.cplx[keep],
         meta=snippet.meta,
+        review=review,
+        times=times,
     )
 
 
 def load_snippet(run_dir, grid: FrameGrid, k0: int) -> Snippet:
     """Read a run's directory, add k0 to idx_v, and check that the run's
     times + offset equal grid.times()[k0:k0+len(times)] within 1e-6 s.
-    Raises ResultsError if not."""
+    Raises ResultsError if not.  The run's review.json, if any, comes
+    along in session frames and time (`Snippet.review`)."""
     d = read_results(run_dir)
     times = d["times"]
     m = len(times)
@@ -553,6 +572,7 @@ def load_snippet(run_dir, grid: FrameGrid, k0: int) -> Snippet:
             f"(off by up to {np.max(np.abs(times + offset - expect)):.3g} s); "
             "check the sampling rate and FFT settings"
         )
+    items, _complaints = RV.read_review(run_dir)
     return Snippet(
         k0=k0,
         k1=k0 + m,
@@ -562,6 +582,8 @@ def load_snippet(run_dir, grid: FrameGrid, k0: int) -> Snippet:
         sign=d["sign"],
         cplx=d["cplx"],
         meta=d["meta"],
+        review=RV.shift(items, k0, offset),
+        times=np.array(expect),
     )
 
 
@@ -573,6 +595,10 @@ class Issue:
     ids: tuple[float, ...]
     text: str
     suggestion: Callable[[TrackSet], Plan] | None
+    #: a review item (kind "review"): the item, its place in the session's
+    #: list, and the confidence it is visited by
+    item: RV.ReviewItem | None = None
+    index: int = -1
 
 
 def harmonic_text(x: HM.Harmonic, edited=()) -> str:
@@ -770,6 +796,12 @@ class TrackSet:
         self._dtypes: dict = {}
         self._snippet_meta: dict | None = None
         self._meta_dirty = False
+        #: wavetracker's review items (`review.ReviewItem`) in session ids;
+        #: `_review_base` is what review.json in the results directory
+        #: holds, written to eodsorter.json only once the two differ
+        self._review: tuple = ()
+        self._review_base: tuple = ()
+        self._review_cache = None
         # duplicates present in the input are left alone (8.5); remember them
         self._allowed: list[tuple[np.ndarray, np.ndarray]] = []
         for a in (self._ident, self._tracked):
@@ -1068,6 +1100,147 @@ class TrackSet:
             out.extend(harmonic_issue(x) for x in found)
         out.sort(key=lambda x: (x.t, x.kind))
         return out
+
+    # --------------------------------------------------------- review flags
+
+    @property
+    def review(self) -> tuple:
+        """wavetracker's review items for this session, in session ids."""
+        return self._review
+
+    def set_review(self, items) -> None:
+        """The review items as read from the results directory: the state
+        nothing has been done to (no history entry)."""
+        self._review = tuple(items)
+        self._review_base = self._review
+        self._review_cache = None
+
+    def review_changed(self) -> bool:
+        """Whether the items differ from review.json's (accepted snippets
+        brought their own): then eodsorter.json keeps them."""
+        return self._review != self._review_base
+
+    def review_issues(self, max_confidence: float = 1.0) -> list[Issue]:
+        """The review items that still apply and whose confidence is below
+        `max_confidence` (1: all of them), least sure first.  An item no longer applies when
+        an id it names has no points, or its fix is done: a split whose id
+        has no points on one side of the cut, a merge whose two ids are one,
+        a delete with no points of the id left in its span."""
+        key = (self.revision, float(max_confidence))
+        cached = self._review_cache
+        if cached is not None and cached[0] == key:
+            return list(cached[1])
+        out = []
+        every = max_confidence >= 1.0
+        for j, it in enumerate(self._review):
+            if every or it.confidence < max_confidence:
+                issue = self._review_issue(j, it)
+                if issue is not None:
+                    out.append(issue)
+        out.sort(key=lambda x: (x.item.confidence, x.index))
+        self._review_cache = (key, out)
+        return list(out)
+
+    def _review_rows(self, id: float, t0: float, t1: float) -> np.ndarray:
+        """Rows of `id` between t0 and t1 (review.json rounds to 1 ms: half a
+        frame of slack)."""
+        rows = self.rows_of(id)
+        if not len(rows):
+            return rows
+        slack = 0.5 * self._frame_step()
+        t = self._t(rows)
+        return rows[(t >= t0 - slack) & (t <= t1 + slack)]
+
+    def _junction_id(self, it: RV.ReviewItem) -> float | None:
+        """The id that holds a join's junction now: the item's own if it
+        still has a point in frame k, else the point there closest to the
+        junction's frequency (a split earlier in the track moved the rest,
+        later joins included, to a new id)."""
+        if it.k is None or not 0 <= it.k < len(self._times):
+            return None
+        rows = self.rows_in_frames(it.k, it.k + 1)
+        rows = rows[~np.isnan(self._ident[rows])]
+        if not len(rows):
+            return None
+        ids = self._ident[rows]
+        if (ids == it.ids[0]).any():
+            return float(it.ids[0])
+        df = np.abs(self._fund[rows] - it.f)
+        j = int(np.argmin(df))
+        if df[j] > max(2.0, 3 * self._freq_bin()):
+            return None
+        return float(ids[j])
+
+    def _review_issue(self, j: int, it: RV.ReviewItem) -> Issue | None:
+        head = f"confidence {it.confidence:.2f} · "
+        if it.action == "split":
+            i = self._junction_id(it)
+            if i is None:
+                return None
+            k = self._idx[self.rows_of(i)]
+            if not ((k < it.k).any() and (k >= it.k).any()):
+                return None
+            t = float(self._times[it.k])
+            text = (
+                f"{head}join in {_fid(i)} at {fmt_time(t)}: {it.why} "
+                f"— Enter splits {_fid(i)} there"
+            )
+
+            def make(ts, i=i, t=t):
+                return ts.plan_cut(i, t, "after")
+
+        elif it.action == "merge":
+            a, b = it.ids
+            if a == b or not len(self.rows_of(a)) or not len(self.rows_of(b)):
+                return None
+            t = it.t
+            text = (
+                f"{head}{_fid(a)} and {_fid(b)} {it.why} "
+                f"— Enter merges {_fid(b)} into {_fid(a)}"
+            )
+
+            def make(ts, a=a, b=b):
+                return ts.plan_merge([a, b], into=a)
+
+        else:
+            i = it.ids[0]
+            rows = self._review_rows(i, it.t0, it.t1)
+            if not len(rows):
+                return None
+            t = float(self._t(rows[:1])[0])
+            where = ""
+            if len(rows) < len(self.rows_of(i)):
+                where = f" from {fmt_time(it.t0)} to {fmt_time(it.t1)}"
+            text = (
+                f"{head}is {_fid(i)} a fish? {it.why} "
+                f"— Enter unassigns {_fid(i)}{where}"
+            )
+
+            def make(ts, i=i, t0=it.t0, t1=it.t1):
+                return ts.plan_review_delete(i, t0, t1)
+
+        def suggestion(ts, make=make, c=it.confidence):
+            plan = make(ts)
+            return replace(plan, label=f"{plan.label} (review, confidence {c:.2f})")
+
+        ids = (i,) if it.action == "split" else it.ids
+        return Issue("review", t, float(it.f), ids, text, suggestion, item=it, index=j)
+
+    def plan_review_delete(self, id: float, t0: float, t1: float) -> Plan:
+        """Unassign the points of `id` between t0 and t1: a review item's
+        delete, which for wavetracker's own items is the whole identity and
+        for an accepted snippet's the snippet's part of it."""
+        i = self._existing(id)
+        rows = self._review_rows(i, t0, t1)
+        if not len(rows):
+            raise EditRejected(
+                f"id {_fid(i)} has no points from {fmt_time(t0)} to {fmt_time(t1)}"
+            )
+        if len(rows) == len(self.rows_of(i)):
+            label = f"Delete id {_fid(i)}"
+        else:
+            label = f"Unassign {_fid(i)} from {fmt_time(t0)} to {fmt_time(t1)}"
+        return self._plan(label, rows, np.nan, kind="delete_ids")
 
     def _crossings(self, bin_hz: float) -> list[Issue]:
         n = self._n
@@ -1678,19 +1851,41 @@ class TrackSet:
                 f", {n_dups} duplicate detection{'s' if n_dups != 1 else ''} unassigned"
             )
         label += ")"
-        meta = None
+        meta = []
         if not self.meta and self._snippet_meta is None:
-            meta = ((("snippet_meta", 0), None, dict(snippet.meta)),)
+            meta.append((("snippet_meta", 0), None, dict(snippet.meta)))
+        review = self._review_after_span(snippet, final, relabel, k0, k1, t0, t1)
+        if review != self._review:
+            meta.append((("review", 0), self._review, review))
         return self._plan(
             label,
             rows,
             new,
             append=app,
             created=created,
-            meta=meta,
+            meta=tuple(meta) or None,
             nothing="the snippet has no detections and the span has no tracks",
             kind="replace_span",
         )
+
+    def _review_after_span(self, snippet, final, relabel, k0, k1, t0, t1) -> tuple:
+        """The session's review items once `snippet` replaces frames
+        [k0, k1): its own joins and missed joins inside the span go, those
+        of an id the snippet continues past k1 follow it to its new id, and
+        the snippet's items come in under the session ids it was given."""
+        if k1 <= k0:
+            return self._review
+        kept = []
+        for it in RV.outside_span(self._review, k0, k1, t0, t1):
+            if it.kind == "join" and it.k is not None and it.k >= k1:
+                it = replace(it, ids=(relabel.get(it.ids[0], it.ids[0]),))
+            elif it.kind == "missed_join" and it.t > t1:
+                ids = tuple(relabel.get(i, i) for i in it.ids)
+                if ids[0] == ids[1]:
+                    continue
+                it = replace(it, ids=ids)
+            kept.append(it)
+        return tuple(kept) + RV.relabel(snippet.review, final)
 
     def _edge_matches(self, tracks, s_f, s_k, w0, w1, near, tol, left):
         """Greedy one-to-one matches of snippet tracks to session ids with a
@@ -1728,7 +1923,9 @@ class TrackSet:
             out.append((s, i))
         return dict(out) if left else out
 
-    def plan_apply_ident(self, ident: np.ndarray, label: str) -> Plan:
+    def plan_apply_ident(
+        self, ident: np.ndarray, label: str, keep_review: bool = True
+    ) -> Plan:
         try:
             ident = check_ident(np.asarray(ident), self._n, "the identities")
         except ResultsError as exc:
@@ -1743,8 +1940,17 @@ class TrackSet:
         new_ids = np.unique(ident[~np.isnan(ident)])
         created = tuple(int(i) for i in new_ids[new_ids >= self.next_id])
         rows = np.arange(n)
+        # identities made anew (a cleanup) rename the ids the review items
+        # name: they go with this edit, and come back with its undo
+        drop = self._review and not keep_review
+        meta = ((("review", 0), self._review, ()),) if drop else None
         return self._plan(
-            label, rows, ident, dropped=np.flatnonzero(lose), created=created
+            label,
+            rows,
+            ident,
+            dropped=np.flatnonzero(lose),
+            created=created,
+            meta=meta,
         )
 
     def plan_revert(self, rows=None) -> Plan:
@@ -1835,6 +2041,10 @@ class TrackSet:
             for i in sorted(set(store) | set(saved)):
                 if store.get(i) != saved.get(i):
                     meta.append(((kind, i), store.get(i), saved.get(i)))
+        if autosave.review is not None:
+            review, _bad = RV.parse_items(autosave.review)
+            if review != self._review:
+                meta.append((("review", 0), self._review, review))
         return self._plan(
             "Recovered unsaved edits",
             np.arange(n),
@@ -1999,6 +2209,10 @@ class TrackSet:
         if kind == "snippet_meta":
             self._snippet_meta = value
             return
+        if kind == "review":
+            self._review = tuple(value or ())
+            self._review_cache = None
+            return
         store = self.labels if kind == "label" else self.notes
         if value is None:
             store.pop(int(i), None)
@@ -2140,6 +2354,10 @@ class TrackSet:
                     store[int(k)] = str(v)
                 except (TypeError, ValueError):
                     pass
+        if ident_file == IDENT_FILE:
+            # review.json names the tracker's ids; a variant (a cleanup's
+            # ident_v_cleaned_*.npy) renames them, so it gets no items
+            complaints += ts._load_review(folder, sorter.get("review"))
         if ts.grid is None:
             complaints.append(
                 "the frame times are not a regular wavetracker grid; "
@@ -2180,6 +2398,37 @@ class TrackSet:
             except EditRejected:
                 complaints.append(f"{ident_file} equals {IDENT_FILE}")
         return ts, complaints
+
+    def _load_review(self, folder, saved) -> list[str]:
+        """Read review.json; eodsorter.json's own list (accepted snippets
+        changed it) replaces it while review.json is the file that list was
+        saved against."""
+        items, complaints = RV.read_review(folder)
+        self.set_review(items)
+        if isinstance(saved, dict):
+            try:
+                base = float(saved.get("base_mtime") or 0.0)
+            except (TypeError, ValueError):
+                base = -1.0
+            if abs(base - RV.review_mtime(folder)) < 1e-3:
+                own, bad = RV.parse_items(saved.get("items"))
+                self._review = own
+                if bad:
+                    complaints.append(
+                        f"{bad} review item(s) in {SORTER_FILE} could not be read"
+                    )
+            else:
+                complaints.append(
+                    f"{RV.REVIEW_FILE} changed after the last save; the review "
+                    f"items accepted snippets brought were dropped"
+                )
+        return complaints
+
+    def _review_json(self, folder) -> dict:
+        return {
+            "base_mtime": RV.review_mtime(folder),
+            "items": [RV.item_json(it) for it in self._review],
+        }
 
     def _disk(self, name: str, arr: np.ndarray, default) -> np.ndarray:
         return np.ascontiguousarray(arr, dtype=self._dtypes.get(name, default))
@@ -2261,6 +2510,10 @@ class TrackSet:
                 for c in h.entries[: h.position]
             ],
         }
+        if self.review_changed() or not same_folder:
+            # in another directory a review.json may be anything: the list
+            # in eodsorter.json is the session's, even when empty
+            sorter["review"] = self._review_json(folder)
         items.append((SORTER_FILE, json_writer(sorter)))
         commit_files(folder, items)
         discard_autosave(folder)
@@ -2317,6 +2570,8 @@ class TrackSet:
             "base_mtime": self._base_mtime or ident_mtime(folder),
             "time": time.time(),
         }
+        if self.review_changed():
+            info["review"] = [RV.item_json(it) for it in self._review]
         payload = {"ident": np.array(self.ident), "info": np.array(json.dumps(info))}
         if n > nb:
             s = slice(nb, n)

@@ -741,6 +741,20 @@ class Marks:
     #: ``(t0, t1, f0, f1)``: a span to outline (history hover, an issue)
     span: Optional[tuple] = None
 
+    def idle(self) -> bool:
+        """Whether the tool previews nothing (an issue's preview may show)."""
+        return (
+            not self.recolour
+            and not len(self.drop_rows)
+            and not len(self.ring_rows)
+            and self.connector is None
+            and self.cut_marker is None
+            and not self.crosses
+            and not len(self.add_t)
+            and self.outline_id is None
+            and self.span is None
+        )
+
 
 @dataclass
 class SceneState:
@@ -778,6 +792,9 @@ class SceneState:
     #: ``(t0, t1, f0, f1)`` outlined independently of the tool's marks: the
     #: hovered history entry, the current issue
     span_outline: Optional[tuple] = None
+    #: what Enter would do to the current issue (a low-confidence place):
+    #: drawn while the tool's own marks are idle
+    issue_marks: Optional[Marks] = None
     flash_rows: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
     #: id of the tool whose preview colour applies to `stroke_rows`
     tool_colour: Optional[str] = None

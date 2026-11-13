@@ -92,6 +92,9 @@ class Autosave:
     meta: dict | None = None
     #: the recording the session belongs to (cache autosaves only)
     recording: str | None = None
+    #: the session's review items as review.json spells them, when accepted
+    #: snippets changed them (None: review.json's)
+    review: list | None = None
 
     def is_stale(self, folder) -> bool:
         """Whether ``ident_v.npy`` in `folder` changed after this autosave's
@@ -419,6 +422,7 @@ def read_autosave(folder) -> Autosave | None:
             grid=tuple(info["grid"]) if info.get("grid") else None,
             meta=info.get("meta") if isinstance(info.get("meta"), dict) else None,
             recording=info.get("recording"),
+            review=info.get("review") if isinstance(info.get("review"), list) else None,
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
